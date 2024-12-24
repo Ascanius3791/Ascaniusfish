@@ -1,0 +1,5 @@
+
+# Compile the C++ code with advanced optimizations and PGO
+g++ -fprofile-generate -O3 -Wall -Wno-unknown-pragmas -Wno-parentheses -Wno-unused-variable -S -o Ascaniusfish_demo.s Ascaniusfish_experiments.cpp
+g++ -fprofile-generate -O3 -o Ascaniusfish_demo.out Ascaniusfish_demo.s
+./Ascaniusfish_demo.out

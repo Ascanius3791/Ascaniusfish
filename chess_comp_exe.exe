@@ -1,0 +1,30 @@
+#!/bin/bash
+
+# Compile the C++ code to generate assembly with optimizations
+g++ -O3 -Wall -Wno-unknown-pragmas -Wno-parentheses -DNDEBUG -Wno-unused-variable -S -o Ascaniusfish_experiments.s Ascaniusfish_experiments.cpp
+
+# Check if the compilation was successful
+if [ $? -eq 0 ]; then
+    # Compile the assembly code to an executable
+    g++ -O3 -o a.out Ascaniusfish_experiments.s
+
+    # Check if the compilation was successful
+    if [ $? -eq 0 ]; then
+        # Check if an argument is given and if it's '1'
+        if [ "$1" == "1" ]; then
+            # Output the number of lines in the assembly file
+            num_lines=$(wc -l < Ascaniusfish_experiments.s)
+            echo "The assembly code has $num_lines lines."
+
+            # Wait for 1 second
+            sleep 1
+        fi
+
+        # Execute the compiled program
+        ./a.out
+    else
+        echo "Failed to compile the assembly code to an executable."
+    fi
+else
+    echo "Failed to compile the C++ code to assembly."
+fi
