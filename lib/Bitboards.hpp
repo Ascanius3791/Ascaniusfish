@@ -39,13 +39,15 @@ struct BB
     bool operator==(const BB& rhs) const;
 
 };
+
 void castling_right_rook_correction_for_col(BB* const original, int for_white);// corrects for presence of rooks
 
 void castling_rights(BB* const original);
 
 bool are_equal(const BB* const  BB_1,const BB* const BB_2);
 
-
+std::string get_coordinate_PGN(std::vector<BB> history);
+    
 
 
 

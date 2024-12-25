@@ -1,3 +1,5 @@
+#ifndef MAGICS_HPP
+#define MAGICS_HPP
 /**************************************\
  ======================================
         
@@ -11,11 +13,14 @@
  ======================================
 \**************************************/
 
+
 // system headers
 #include <stdio.h>
 #include <stdlib.h>
 #include <iostream>
 #include <string.h>
+//now my own headers
+#include "templates.cpp"
 
 // bits manipulations
 #define get_bit(bitboard, square) (bitboard & (1ULL << square))
@@ -617,6 +622,80 @@ uint64_t get_rook_attacks(int square, uint64_t occupancy) {
 }
 
 
+// attacks by color (from Ascanius)
+uint64_t attacks_by_col(const uint64_t Board[12], bool by_white_pieces)
+    {
+        uint64_t occupancy = Board[0] | Board[1] | Board[2] | Board[3] | Board[4] | Board[5] | Board[6] | Board[7] | Board[8] | Board[9] | Board[10] | Board[11];
+        uint64_t attacks=0;
+        for(int i=0;i<64;i++)
+        {
+            //the pawns stuff looks weird, but is correct, that is well tested! the BP/Wp Templates seem to have been mae with checks in mind, so they seem reversed
+            if(by_white_pieces)
+            if(Board[0] & (1Ull << i))
+            attacks |= BP_template[i];
+            if(!by_white_pieces)
+            if(Board[6] & (1Ull << i))
+            attacks |= WP_template[i];
+
+            if((Board[1+6*!by_white_pieces] | Board[4+6*!by_white_pieces]) & (1Ull << i))
+            attacks |= get_rook_attacks(i,occupancy);
+            if(Board[2+6*!by_white_pieces] & (1Ull << i))
+            attacks |= Kn_template[i];
+            if((Board[3+6*!by_white_pieces] | Board[4+6*!by_white_pieces]) & (1Ull << i))
+            attacks |= get_bishop_attacks(i,occupancy);
+            
+            if(Board[5+6*!by_white_pieces] & (1Ull << i))
+            attacks |= K_template[i];
+        }
+        return attacks;
+    }
+
+uint64_t attacked_squares(const uint64_t Board[12], bool for_white)
+{
+    uint64_t Attacked_squares=0;
+    uint64_t own_pawns=Board[0+!6*for_white];
+    uint64_t own_knights=Board[2+!6*for_white];
+    uint64_t own_bishops=Board[3+!6*for_white]|Board[4+!6*for_white];
+    uint64_t own_rooks=Board[1+!6*for_white]|Board[4+!6*for_white];
+    uint64_t own_king=Board[5+!6*for_white];
+    
+    uint64_t occupancy=Board[0]|Board[1]|Board[2]|Board[3]|Board[4]|Board[5]|Board[6]|Board[7]|Board[8]|Board[9]|Board[10]|Board[11];
+    while(own_pawns)
+    {
+        int i=find_and_delete_trailling_1(own_pawns);
+        if(for_white)
+        {
+            Attacked_squares |= BP_template[i];
+        }
+        else
+        {
+            Attacked_squares |= WP_template[i];
+        }
+    }
+    
+    while(own_knights)
+    {
+        int i=find_and_delete_trailling_1(own_knights);
+        Attacked_squares |= Kn_template[i];
+    }
+    
+    while(own_bishops)
+    {
+        int i=find_and_delete_trailling_1(own_bishops);
+        Attacked_squares |= get_bishop_attacks(i,occupancy);
+    }
+    
+    while(own_rooks)
+    {
+        int i=find_and_delete_trailling_1(own_rooks);
+        Attacked_squares |= get_rook_attacks(i,occupancy);
+    }
+    
+    int i=find_and_delete_trailling_1(own_king);
+    Attacked_squares |= K_template[i];
+    return Attacked_squares;
+
+}
 
 
 
@@ -626,8 +705,6 @@ uint64_t get_rook_attacks(int square, uint64_t occupancy) {
 
 
 
-
-
-
+#endif // MAGICS_HPP
 
 

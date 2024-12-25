@@ -1,7 +1,7 @@
 #ifndef CHECKS_HPP
 #define CHECKS_HPP
 
-#include"magics.hpp"
+#include"../src/magics.cpp"
 #include"../src/Bitboards.cpp"
 #include"../src/printing.cpp"
 #include"../src/templates.cpp"

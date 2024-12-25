@@ -29,6 +29,10 @@ constexpr bool knight=1;
 constexpr bool bishop=1;
 constexpr bool king=1;
 
+//==================================================================================================================================
+//special settings
+constexpr int max_mating_seq = 1000;
+
 
 
 

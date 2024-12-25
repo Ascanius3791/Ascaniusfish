@@ -1,6 +1,7 @@
 #ifndef BITBOARDS_CPP
 #define BITBOARDS_CPP
 #include "../lib/Bitboards.hpp"
+#include <string>
 
 //members
 // constructors
@@ -572,6 +573,20 @@ bool are_equal(const BB* const  BB_1,const BB* const BB_2)
         return 0;
         return 1;
     }
+
+    
+std::string get_coordinate_PGN(std::vector<BB> history)
+{
+    std::string PGN="";
+    for(int i=0;i<int(history.size()-1);i++)
+    {
+        if(i%2==0)
+        PGN+=std::to_string(i/2+1)+". ";
+        PGN+=get_UCI(&history[i],&history[i+1])+" ";
+    }
+    return PGN;
+}
+    
 
 
 

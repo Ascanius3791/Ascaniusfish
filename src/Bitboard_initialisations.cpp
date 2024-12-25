@@ -334,6 +334,6 @@ void initialize_FEN_to::caro_can(uint64_t Board[12])
 }
 
 
-
+const std::string Standart_FEN="rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 
 #endif // BITBOARD_INITIALISATIONS_CPP
