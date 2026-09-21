@@ -1,3 +1,4 @@
+// OWNERSHIP=Ascanius
 #ifndef Weights_CPP
 #define Weights_CPP
 
@@ -272,6 +273,14 @@ void WEIGHTS::clearFileExceptFirstLine(const std::string& filename)const {
 
 WEIGHTS::WEIGHTS()
 {
+    //initialize weights to zero
+    for(int piece=0;piece<7;piece++)
+    for(int k=0;k<64;k++)
+    {
+        piece_table_value_opening[piece][k]=0;
+        piece_table_value_endgame[piece][k]=0;
+    }
+    
     for(int piece=0;piece<7;piece++)
     for(int i=0;i<8;i++)
     for(int j=0;j<8;j++)
@@ -281,7 +290,7 @@ WEIGHTS::WEIGHTS()
             piece_table_value_opening[0][i*8+j] = i*30;              
             piece_table_value_opening[6][i*8+j] = (7-i)*30;
             piece_table_value_endgame[0][i*8+j] = i*i*5;
-            piece_table_value_endgame[6][i*8+j] = (7-i)/(7-i)*5;
+            piece_table_value_endgame[6][i*8+j] = (7-i)*(7-i)*5;
         }
         else
         {
@@ -385,6 +394,7 @@ WEIGHTS::WEIGHTS()
     for(int j=0;j<8;j++)
     {
         piece_table_value_opening[4][i*8+j] = (piece_table_value_opening[1][i*8+j]+piece_table_value_opening[3][i*8+j])/2;
+        piece_table_value_endgame[4][i*8+j] = (piece_table_value_endgame[1][i*8+j]+piece_table_value_endgame[3][i*8+j])/2;
     }
     skip_depth_decrease_threshold = 50;
     value_of_attacked_square = 2;//number of moves avaliable

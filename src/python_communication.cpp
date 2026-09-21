@@ -1,3 +1,4 @@
+// OWNERSHIP=Ascanius
 #ifndef PYTHON_COMMUNICATION_CPP
 #define PYTHON_COMMUNICATION_CPP
 #include"../lib/python_communication.hpp"

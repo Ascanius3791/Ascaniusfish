@@ -1,3 +1,4 @@
+// OWNERSHIP=Ascanius
 #ifndef BITBOARDS_CPP
 #define BITBOARDS_CPP
 #include "../lib/Bitboards.hpp"
@@ -8,6 +9,7 @@
 
 BB::BB()
 {
+    zobrist_hash=0;
     for(int i=0;i<12;i++)
     {
         Board[i]=0;
@@ -22,197 +24,197 @@ BB::BB()
     }
     en_passant=0;
     number_of_repetitions=0;
-    is_evaluated=0;
     move=1;
     halfmoves_since_last_capture_or_pawn_move=0;
-    eval=1000;
-    depth_of_eval=0;
-    //parent=NULL;
-    //alpha=INT_MIN;
-    //beta=INT_MAX;
+
 }
 
-void FEN_to_BB(const std::string FEN, BB* const original)
-{
-    for(int i=0;i<12;i++)
-    original->Board[i]=0;
-    original->castle[0][0]=0;//these used to be set to 1, but i belive 0 is the correct initilisation, as we set it to 1, if K,Q,k,q is in the FEN
-    original->castle[0][1]=0;
-    original->castle[1][0]=0;
-    original->castle[1][1]=0;
-    original->en_passant=0;
+void FEN_to_BB(const std::string FEN, BB* const original);
+// void FEN_to_BB(const std::string FEN, BB* const original)
+// {
+//     for(int i=0;i<12;i++)
+//     original->Board[i]=0;
+//     original->castle[0][0]=0;//these used to be set to 1, but i belive 0 is the correct initilisation, as we set it to 1, if K,Q,k,q is in the FEN
+//     original->castle[0][1]=0;
+//     original->castle[1][0]=0;
+//     original->castle[1][1]=0;
+//     original->en_passant=0;
     
-    int i=0;
-    int j=0;
-    int i_on_previous_iteration;
-    while(FEN[i]!=' ')
-    {
-        i_on_previous_iteration=i;
-        if(FEN[i]=='/')
-        {
-            i++;
-        }
-        if(FEN[i]>='1' && FEN[i]<='8')
-        {
-            j+=FEN[i]-'0';
-            i++;
-        }
+//     int i=0;
+//     int j=0;
+//     int i_on_previous_iteration;
+//     while(FEN[i]!=' ')
+//     {
+//         i_on_previous_iteration=i;
+//         if(FEN[i]=='/')
+//         {
+//             i++;
+//         }
+//         if(FEN[i]>='1' && FEN[i]<='8')
+//         {
+//             j+=FEN[i]-'0';
+//             i++;
+//         }
              
-        int virtual_file=j%8;
-        int virtual_rank=7-j/8;
+//         int virtual_file=j%8;
+//         int virtual_rank=7-j/8;
         
-        if(FEN[i]=='P')
-        {
-            original->Board[0] |= 1ULL<<(virtual_file+8*virtual_rank);
-            i++;
-            virtual_file=++j%8;
-            virtual_rank=7-j/8;
+//         if(FEN[i]=='P')
+//         {
+//             original->Board[0] |= 1ULL<<(virtual_file+8*virtual_rank);
+//             i++;
+//             virtual_file=++j%8;
+//             virtual_rank=7-j/8;
             
-        }
-        if(FEN[i]=='R')
-        {
-            original->Board[1] |= 1ULL<<(virtual_file+8*virtual_rank);
-            i++;
-            virtual_file=++j%8;
-            virtual_rank=7-j/8;
-        }
-        if(FEN[i]=='N')
-        {
-            original->Board[2] |= 1ULL<<(virtual_file+8*virtual_rank);
-            i++;
-            virtual_file=++j%8;
-            virtual_rank=7-j/8;
-        }
-        if(FEN[i]=='B')
-        {
-            original->Board[3] |= 1ULL<<(virtual_file+8*virtual_rank);
-            i++;
-            virtual_file=++j%8;
-            virtual_rank=7-j/8;
-        }
-        if(FEN[i]=='Q')
-        {
-            original->Board[4] |= 1ULL<<(virtual_file+8*virtual_rank);
-            i++;
-            virtual_file=++j%8;
-            virtual_rank=7-j/8;
-        }
-        if(FEN[i]=='K')
-        {
-            original->Board[5] |= 1ULL<<(virtual_file+8*virtual_rank);
-            i++;
-            virtual_file=++j%8;
-            virtual_rank=7-j/8;
-        }
-        if(FEN[i]=='p')
-        {
-            original->Board[6] |= 1ULL<<(virtual_file+8*virtual_rank);
-            i++;
-            virtual_file=++j%8;
-            virtual_rank=7-j/8;
-        }
-        if(FEN[i]=='r')
-        {
-            original->Board[7] |= 1ULL<<(virtual_file+8*virtual_rank);
-            i++;
-            virtual_file=++j%8;
-            virtual_rank=7-j/8;
-        }
-        if(FEN[i]=='n')
-        {
-            original->Board[8] |= 1ULL<<(virtual_file+8*virtual_rank);
-            i++;
-            virtual_file=++j%8;
-            virtual_rank=7-j/8;
-        }
-        if(FEN[i]=='b')
-        {
-            original->Board[9] |= 1ULL<<(virtual_file+8*virtual_rank);
-            i++;
-            virtual_file=++j%8;
-            virtual_rank=7-j/8;
-        }
-        if(FEN[i]=='q')
-        {
-            original->Board[10] |= 1ULL<<(virtual_file+8*virtual_rank);;
-            i++;
-            virtual_file=++j%8;
-            virtual_rank=7-j/8;
-        }
-        if(FEN[i]=='k')
-        {
-            original->Board[11] |= 1ULL<<(virtual_file+8*virtual_rank);;
-            i++;
-            virtual_file=++j%8;
-            virtual_rank=7-j/8;
-        }
-        if(i_on_previous_iteration==i)
-        {
-            i++;
-            virtual_file=++j%8;
-            virtual_rank=7-j/8;
-        }
-    }
+//         }
+//         if(FEN[i]=='R')
+//         {
+//             original->Board[1] |= 1ULL<<(virtual_file+8*virtual_rank);
+//             i++;
+//             virtual_file=++j%8;
+//             virtual_rank=7-j/8;
+//         }
+//         if(FEN[i]=='N')
+//         {
+//             original->Board[2] |= 1ULL<<(virtual_file+8*virtual_rank);
+//             i++;
+//             virtual_file=++j%8;
+//             virtual_rank=7-j/8;
+//         }
+//         if(FEN[i]=='B')
+//         {
+//             original->Board[3] |= 1ULL<<(virtual_file+8*virtual_rank);
+//             i++;
+//             virtual_file=++j%8;
+//             virtual_rank=7-j/8;
+//         }
+//         if(FEN[i]=='Q')
+//         {
+//             original->Board[4] |= 1ULL<<(virtual_file+8*virtual_rank);
+//             i++;
+//             virtual_file=++j%8;
+//             virtual_rank=7-j/8;
+//         }
+//         if(FEN[i]=='K')
+//         {
+//             original->Board[5] |= 1ULL<<(virtual_file+8*virtual_rank);
+//             i++;
+//             virtual_file=++j%8;
+//             virtual_rank=7-j/8;
+//         }
+//         if(FEN[i]=='p')
+//         {
+//             original->Board[6] |= 1ULL<<(virtual_file+8*virtual_rank);
+//             i++;
+//             virtual_file=++j%8;
+//             virtual_rank=7-j/8;
+//         }
+//         if(FEN[i]=='r')
+//         {
+//             original->Board[7] |= 1ULL<<(virtual_file+8*virtual_rank);
+//             i++;
+//             virtual_file=++j%8;
+//             virtual_rank=7-j/8;
+//         }
+//         if(FEN[i]=='n')
+//         {
+//             original->Board[8] |= 1ULL<<(virtual_file+8*virtual_rank);
+//             i++;
+//             virtual_file=++j%8;
+//             virtual_rank=7-j/8;
+//         }
+//         if(FEN[i]=='b')
+//         {
+//             original->Board[9] |= 1ULL<<(virtual_file+8*virtual_rank);
+//             i++;
+//             virtual_file=++j%8;
+//             virtual_rank=7-j/8;
+//         }
+//         if(FEN[i]=='q')
+//         {
+//             original->Board[10] |= 1ULL<<(virtual_file+8*virtual_rank);;
+//             i++;
+//             virtual_file=++j%8;
+//             virtual_rank=7-j/8;
+//         }
+//         if(FEN[i]=='k')
+//         {
+//             original->Board[11] |= 1ULL<<(virtual_file+8*virtual_rank);;
+//             i++;
+//             virtual_file=++j%8;
+//             virtual_rank=7-j/8;
+//         }
+//         if(i_on_previous_iteration==i)
+//         {
+//             i++;
+//             virtual_file=++j%8;
+//             virtual_rank=7-j/8;
+//         }
+//     }
     
-    i++;
-    if(FEN[i]=='w')
-    original->white_move=1;
-    else
-    original->white_move=0;
-    i+=2;
-    if(FEN[i]=='K')
-    {
-        original->castle[1][1]=1;
-        i++;
-    }
-    if(FEN[i]=='Q')
-    {
-        original->castle[1][0]=1;
-        i++;
-    }
-    if(FEN[i]=='k')
-    {
-        original->castle[0][1]=1;
-        i++;
-    }
-    if(FEN[i]=='q')
-    {
-        original->castle[0][0]=1;
-        i++;
-    }
-    if(FEN[i]=='-')
-    {
-        original->castle[0][1]=0;
-        original->castle[0][0]=0;
-        original->castle[1][1]=0;
-        original->castle[1][0]=0;
-        i=i+2;
-    }
-    else i++;
-    if(FEN[i]=='-')
-    original->en_passant=0;
-    else
-    {
-        original->en_passant=1ULL << (FEN[i]-'a')+(8*(FEN[i+1]-'1'));
-        i++;
-    }
-    i+=2;
-    original->halfmoves_since_last_capture_or_pawn_move=FEN[i]-'0';
-    i+=2;
-    original->move=FEN[i]-'0';
-}
+//     i++;
+//     if(FEN[i]=='w')
+//     original->white_move=1;
+//     else
+//     original->white_move=0;
+//     i+=2;
+//     if(FEN[i]=='K')
+//     {
+//         original->castle[1][1]=1;
+//         i++;
+//     }
+//     if(FEN[i]=='Q')
+//     {
+//         original->castle[1][0]=1;
+//         i++;
+//     }
+//     if(FEN[i]=='k')
+//     {
+//         original->castle[0][1]=1;
+//         i++;
+//     }
+//     if(FEN[i]=='q')
+//     {
+//         original->castle[0][0]=1;
+//         i++;
+//     }
+//     if(FEN[i]=='-')
+//     {
+//         original->castle[0][1]=0;
+//         original->castle[0][0]=0;
+//         original->castle[1][1]=0;
+//         original->castle[1][0]=0;
+//         i=i+2;
+//     }
+//     else i++;
+//     if(FEN[i]=='-')
+//     original->en_passant=0;
+//     else
+//     {
+//         original->en_passant=1ULL << (FEN[i]-'a')+(8*(FEN[i+1]-'1'));
+//         i++;
+//     }
+//     i+=2;
+//     original->halfmoves_since_last_capture_or_pawn_move=FEN[i]-'0';
+//     i+=2;
+//     original->move=FEN[i]-'0';
+
+//     //compure zobrist hash would be nice but is not allowed-
+//     // zobrist is declared much later and needs BITBOARDS to be complete
+//     // it is much less pain to add the zobrist call later where it is actually needed
+//     original->zobrist_hash=Zobrist::compute_Zobrist_Hash(*original);
+// }
 
 BB::BB(const std::string FEN)
 {
     FEN_to_BB(FEN,this);//this is maybe ineficcent, but it is called rarely
-    eval=1000;
-    depth_of_eval=0;
 }
 
 void copy_BB(const BB* const original ,BB* const goal)
     {
         for(int piece=0;piece<12;piece++)
         goal->Board[piece]=original->Board[piece];
+        goal->zobrist_hash=original->zobrist_hash;
         
         goal->castle[0][0]=original->castle[0][0];
         goal->castle[0][1]=original->castle[0][1];
@@ -223,9 +225,7 @@ void copy_BB(const BB* const original ,BB* const goal)
         goal->white_move=original->white_move;
         goal->number_of_repetitions=original->number_of_repetitions;
         goal->move=original->move;
-        goal->is_evaluated=original->is_evaluated;
-        goal->eval=original->eval;
-        goal->depth_of_eval=original->depth_of_eval;
+        goal->halfmoves_since_last_capture_or_pawn_move=original->halfmoves_since_last_capture_or_pawn_move;
        // goal->parent=original->parent;
     }
 
@@ -233,7 +233,8 @@ void Base_BB(const BB* const original, BB* const goal)
     {
         for(int i=0;i<12;i++)
         goal->Board[i]=original->Board[i];
-        
+        goal->zobrist_hash=original->zobrist_hash;
+
         goal->white_move=!original->white_move;
         goal->castle[0][0]=original->castle[0][0];
         goal->castle[0][1]=original->castle[0][1];
@@ -242,7 +243,7 @@ void Base_BB(const BB* const original, BB* const goal)
         goal->en_passant=0;
         goal->number_of_repetitions=original->number_of_repetitions;
         goal->move=original->move+1;
-        goal->is_evaluated=0;
+        goal->halfmoves_since_last_capture_or_pawn_move=original->halfmoves_since_last_capture_or_pawn_move+1;
         //goal->parent=original; //no parents so far-> many things can be const
     // goal->alpha=INT_MIN;
         //goal->beta=INT_MAX; 
@@ -259,11 +260,8 @@ BB::BB(const BB* const original,std::string mode)
     if(mode=="base")
     Base_BB(original,this);
     //remaining initialisations
-    is_evaluated=0;
     move=1;
     halfmoves_since_last_capture_or_pawn_move=0;
-    eval=1000;
-    depth_of_eval=0;
     
 }
 
@@ -553,6 +551,7 @@ void BB::check_castling_rights()
 
 bool are_equal(const BB* const  BB_1,const BB* const BB_2)
     {
+        //once zobrist is bugfree we should first compare zobrist hashes
         for(int piece=0;piece<12;piece++)
         {
             if(BB_1->Board[piece]!=BB_2->Board[piece])

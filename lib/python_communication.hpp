@@ -1,3 +1,4 @@
+// OWNERSHIP=Ascanius
 #ifndef PYTHON_COMMUNICATION_HPP
 #define PYTHON_COMMUNICATION_HPP
 #include<iostream>

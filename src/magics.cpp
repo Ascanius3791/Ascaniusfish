@@ -1,3 +1,4 @@
+// OWNERSHIP=Ascanius
 #ifndef MAGICS_HPP
 #define MAGICS_HPP
 /**************************************\
@@ -653,11 +654,11 @@ uint64_t attacks_by_col(const uint64_t Board[12], bool by_white_pieces)
 uint64_t attacked_squares(const uint64_t Board[12], bool for_white)
 {
     uint64_t Attacked_squares=0;
-    uint64_t own_pawns=Board[0+!6*for_white];
-    uint64_t own_knights=Board[2+!6*for_white];
-    uint64_t own_bishops=Board[3+!6*for_white]|Board[4+!6*for_white];
-    uint64_t own_rooks=Board[1+!6*for_white]|Board[4+!6*for_white];
-    uint64_t own_king=Board[5+!6*for_white];
+    uint64_t own_pawns=Board[0+6*!for_white];
+    uint64_t own_knights=Board[2+6*!for_white];
+    uint64_t own_bishops=Board[3+6*!for_white]|Board[4+6*!for_white];
+    uint64_t own_rooks=Board[1+6*!for_white]|Board[4+6*!for_white];
+    uint64_t own_king=Board[5+6*!for_white];
     
     uint64_t occupancy=Board[0]|Board[1]|Board[2]|Board[3]|Board[4]|Board[5]|Board[6]|Board[7]|Board[8]|Board[9]|Board[10]|Board[11];
     while(own_pawns)
@@ -706,5 +707,3 @@ uint64_t attacked_squares(const uint64_t Board[12], bool for_white)
 
 
 #endif // MAGICS_HPP
-
-

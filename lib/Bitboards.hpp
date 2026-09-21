@@ -1,3 +1,4 @@
+// OWNERSHIP=Ascanius
 #ifndef BITBOARDS_HPP
 #define BITBOARDS_HPP
 
@@ -11,14 +12,13 @@ struct BB
     bool white_move;
     bool castle[2][2]; //first index is color, second index is side 0=black 1=white, 0=queen side, 1=king side
     uint64_t en_passant;
-    mutable int number_of_repetitions;
-    mutable int is_evaluated;
+    
+    uint64_t zobrist_hash;
     int move;
     int halfmoves_since_last_capture_or_pawn_move;
-    mutable int eval;//for the lookup table
-    mutable int depth_of_eval;
-   //mutable BB* parent=NULL;
-    //int alpha=INT_MIN, beta=INT_MAX;
+
+    mutable int number_of_repetitions;
+   
 
     //constructors
     BB();
@@ -30,6 +30,8 @@ struct BB
     std::string get_UCI(const BB* const goal);
 
     std::string get_FEN();
+
+    bool * to_bool_board();//for the neural network
 
 
     void check_castling_rights();

@@ -1,10 +1,12 @@
+// OWNERSHIP=Ascanius
 #ifndef MOVE_GENERATION_CPP
 #define MOVE_GENERATION_CPP
 
 #include "../lib/move_generation.hpp"
 
-int all_moves(const BB* const original, BB* const wfh , int len_wfh)// returns number of moves
+std::tuple<int,std::vector<Move>> all_moves(const BB* const original, BB* const wfh , int len_wfh)// returns number of moves
 {
+    std::vector<Move> moves;
     uint64_t Own_Pawns=original->Board[0+6*!original->white_move];
     uint64_t Own_Knights=original->Board[2+6*!original->white_move];
     uint64_t Own_Bishops=original->Board[3+6*!original->white_move]|original->Board[4+6*!original->white_move];//careful, there are to unify queen and bishop moves
@@ -29,6 +31,7 @@ int all_moves(const BB* const original, BB* const wfh , int len_wfh)// returns n
     if(extensive_time_display && knight_moves && (*original).Board[2+6*!WM])
     AM_KNIGHT.start_time();
 
+    auto is_full_return_value = std::make_tuple(INT_MAX,std::vector<Move>()); //indicates that the array is full//also necessiates, that the array is one longer, that it actually needs to be.
     
     if(knight_moves)
     while(Own_Knights)
@@ -45,9 +48,15 @@ int all_moves(const BB* const original, BB* const wfh , int len_wfh)// returns n
             if(!in_check(wfh[GI].Board,WM))   
             {
                 castling_right_rook_correction_for_col(wfh+GI,!WM);
+
+                bool is_capture = (Enemy_P & 1ULL << j) != 0;
+                int OWN_PICE_INDEX = 2 + 6 * !WM;
+                int from = i, to = j;
+                Zobrist::update_zobrist_hash(*original, wfh[GI], OWN_PICE_INDEX, from, to, is_capture);
                 GI++;
+                moves.push_back(Move(i,j));
                 if(GI>len_wfh)
-                return INT_MAX;//indicates that the array is full//also necessiates, that the array is one longer, that it actually needs to be.
+                return is_full_return_value;//indicates that the array is full//also necessiates, that the array is one longer, that it actually needs to be.
             }
 
         }
@@ -72,11 +81,16 @@ int all_moves(const BB* const original, BB* const wfh , int len_wfh)// returns n
             if(!in_check(wfh[GI].Board,WM))   
             {
                 castling_right_rook_correction_for_col(wfh+GI,!WM);
+                bool is_capture = (Enemy_P & 1ULL << j) != 0;
+                int OWN_PICE_INDEX = 5 + 6 * !WM;
+                int from = i, to = j;
                 wfh[GI].castle[WM][0]=0;
                 wfh[GI].castle[WM][1]=0;
+                Zobrist::update_zobrist_hash(*original, wfh[GI], OWN_PICE_INDEX, from, to, is_capture);
                 GI++;
+                moves.push_back(Move(i,j));
                 if(GI>len_wfh)
-                return INT_MAX;//indicates that the array is full//also necessiates, that the array is one longer, that it actually needs to be.
+                return is_full_return_value;//indicates that the array is full//also necessiates, that the array is one longer, that it actually needs to be.
                 
             }
             
@@ -103,7 +117,13 @@ int all_moves(const BB* const original, BB* const wfh , int len_wfh)// returns n
                 //wfh[GI].Board[6] &= ~(*original).en_passant;//this was an error i think
                 clear_sq_of_enemy(wfh[GI].Board,j,WM);
                 wfh[GI].Board[6] &= ~((original->en_passant & 1ULL << j) >> 8);
+                bool is_en_passant_capture=(original->en_passant & 1ULL << j) !=0;
                 wfh[GI].Board[0] |= 1Ull << j;
+
+                int from = i, to = j;
+                bool is_capture = true; // Pawn captures are always captures
+
+                int OWN_PICE_INDEX = 0; // Pawn index
                 if(!in_check(wfh[GI].Board,WM))   
                 {
                     castling_right_rook_correction_for_col(wfh+GI,!WM);
@@ -113,18 +133,36 @@ int all_moves(const BB* const original, BB* const wfh , int len_wfh)// returns n
                                 // original case =rook
                         copy_BB(wfh+GI,wfh+GI+1);
                         wfh[GI+1].Board[2] |= 1Ull << j; //  =knight
+                        Zobrist::update_zobrist_hash(*original, wfh[GI+1], OWN_PICE_INDEX, from, to, is_capture, 2+6*!WM); // Update hash for knight promotion
                         copy_BB(wfh+GI,wfh+GI+2);
                         wfh[GI+2].Board[3] |= 1Ull << j; //  =bishop
+                        Zobrist::update_zobrist_hash(*original, wfh[GI+2], OWN_PICE_INDEX, from, to, is_capture, 3+6*!WM); // Update hash for bishop promotion
                         copy_BB(wfh+GI,wfh+GI+3);
                         wfh[GI+3].Board[4] |= 1Ull << j; //  =queen
+                        Zobrist::update_zobrist_hash(*original, wfh[GI+3], OWN_PICE_INDEX, from, to, is_capture, 4+6*!WM); // Update hash for queen promotion
 
                         wfh[GI].Board[1] |= 1Ull << j; //rook last piece, so it is not overwritten
+                        Zobrist::update_zobrist_hash(*original, wfh[GI], OWN_PICE_INDEX, from, to, is_capture, 1+6*!WM); // Update hash for rook promotion
                         GI=GI+3;
+                        moves.push_back(Move(i,j,2,0,0));//2=knight
+                        moves.push_back(Move(i,j,3,0,0));//3=bishop
+                        moves.push_back(Move(i,j,4,0,0));//4=queen
+                        moves.push_back(Move(i,j,1,0,0));//1=rook
+                    }
+                    else if(is_en_passant_capture) 
+                    {
+                        moves.push_back(Move(i,j,0,0,1));//en passant
+                        Zobrist::update_zobrist_hash(*original, wfh[GI], OWN_PICE_INDEX, from, to, is_capture, 0, true);
+                    }
+                    else 
+                    {
+                        moves.push_back(Move(i,j));
+                        Zobrist::update_zobrist_hash(*original, wfh[GI], OWN_PICE_INDEX, from, to, is_capture);
                     }
                 
                     GI++;
                     if(GI>len_wfh)
-                    return INT_MAX;//indicates that the array is full//also necessiates, that the array is one longer, that it actually needs to be.
+                    return is_full_return_value;//indicates that the array is full//also necessiates, that the array is one longer, that it actually needs to be.
                 }            
             }       
         }
@@ -139,8 +177,11 @@ int all_moves(const BB* const original, BB* const wfh , int len_wfh)// returns n
                 //wfh[GI].Board[0] &= ~(*original).en_passant;
                 wfh[GI].Board[0] &= ~((original->en_passant & 1ULL << j) << 8);
                 clear_sq_of_enemy(wfh[GI].Board,j,WM);
+                bool is_en_passant_capture=(original->en_passant & 1ULL << j) !=0;
                 wfh[GI].Board[6] |= 1Ull << j;
-                
+                int from = i, to = j;
+                bool is_capture = true; // Pawn captures are always captures
+                int OWN_PICE_INDEX = 6; // Pawn index
                 if(!in_check(wfh[GI].Board,WM))   //  oooooooooooooooooo
                 {
                     castling_right_rook_correction_for_col(wfh+GI,!WM);
@@ -152,17 +193,34 @@ int all_moves(const BB* const original, BB* const wfh , int len_wfh)// returns n
                                 // original case =rook
                         copy_BB(wfh+GI,wfh+GI+1);
                         wfh[GI+1].Board[2+6] |= 1Ull << j; //  =knight
+                        Zobrist::update_zobrist_hash(*original, wfh[GI+1], OWN_PICE_INDEX, from, to, is_capture, 2+6*!WM); // Update hash for knight promotion
                         copy_BB(wfh+GI,wfh+GI+2);
                         wfh[GI+2].Board[3+6] |= 1Ull << j; //  =bishop
+                        Zobrist::update_zobrist_hash(*original, wfh[GI+2], OWN_PICE_INDEX, from, to, is_capture, 3+6*!WM); // Update hash for bishop promotion
                         copy_BB(wfh+GI,wfh+GI+3);
                         wfh[GI+3].Board[4+6] |= 1Ull << j; //  =queen
+                        Zobrist::update_zobrist_hash(*original, wfh[GI+3], OWN_PICE_INDEX, from, to, is_capture, 4+6*!WM); // Update hash for queen promotion
 
                         wfh[GI].Board[1+6] |= 1Ull << j; //rook last piece, so it is not overwritten
+                        Zobrist::update_zobrist_hash(*original, wfh[GI], OWN_PICE_INDEX, from, to, is_capture, 1+6*!WM); // Update hash for rook promotion
                         GI=GI+3;
+                        moves.push_back(Move(i,j,2,0,0));//2=knight
+                        moves.push_back(Move(i,j,3,0,0));//3=bishop
+                        moves.push_back(Move(i,j,4,0,0));//4=queen
+                        moves.push_back(Move(i,j,1,0,0));//1=rook
+                    }
+                    else if(is_en_passant_capture)
+                    {
+                        moves.push_back(Move(i,j,0,0,1));//en passant
+                        Zobrist::update_zobrist_hash(*original, wfh[GI], OWN_PICE_INDEX, from, to, is_capture, 0, true);
+                    }
+                    else {
+                        moves.push_back(Move(i,j));
+                        Zobrist::update_zobrist_hash(*original, wfh[GI], OWN_PICE_INDEX, from, to, is_capture);
                     }
                     GI++;
                     if(GI>len_wfh)
-                    return INT_MAX;//indicates that the array is full//also necessiates, that the array is one longer, that it actually needs to be.
+                    return is_full_return_value;//indicates that the array is full//also necessiates, that the array is one longer, that it actually needs to be.
                     
                 }
 
@@ -182,7 +240,6 @@ int all_moves(const BB* const original, BB* const wfh , int len_wfh)// returns n
     while(Own_Pawns)
     {
         int i=find_and_delete_trailling_1(Own_Pawns);
-
         if(WM) 
         if(!((Own_P | Enemy_P) & 1Ull << (i+8) ))
         {
@@ -191,23 +248,39 @@ int all_moves(const BB* const original, BB* const wfh , int len_wfh)// returns n
             wfh[GI].Board[0] |= 1Ull << (i+8);
             if (!in_check(wfh[GI].Board,WM))
             {
+                int from = i, to = i + 8;
+                bool is_capture = false; // Pawn pushes are not captures
+                int OWN_PICE_INDEX = 0; // Pawn index
                 if(i+8>=8*7)
                 {
                     wfh[GI].Board[0] &= ~(1Ull << (i+8));
                             // original case =rook
                     copy_BB(wfh+GI,wfh+GI+1);
                     wfh[GI+1].Board[2] |= 1Ull << (i+8); //  =knight
+                    Zobrist::update_zobrist_hash(*original, wfh[GI+1], OWN_PICE_INDEX, from, to, is_capture, 2+6*!WM); // Update hash for knight promotion
                     copy_BB(wfh+GI,wfh+GI+2);
                     wfh[GI+2].Board[3] |= 1Ull << (i+8); //  =bishop
+                    Zobrist::update_zobrist_hash(*original, wfh[GI+2], OWN_PICE_INDEX, from, to, is_capture, 3+6*!WM); // Update hash for bishop promotion
                     copy_BB(wfh+GI,wfh+GI+3);
                     wfh[GI+3].Board[4] |= 1Ull << (i+8); //  =queen
+                    Zobrist::update_zobrist_hash(*original, wfh[GI+3], OWN_PICE_INDEX, from, to, is_capture, 4+6*!WM); // Update hash for queen promotion
 
                     wfh[GI].Board[1] |= 1Ull << (i+8); //rook last piece, so it is not overwritten
+                    Zobrist::update_zobrist_hash(*original, wfh[GI], OWN_PICE_INDEX, from, to, is_capture, 1+6*!WM); // Update hash for rook promotion
+                    moves.push_back(Move(i,i+8,2,0,0));//2=knight
+                    moves.push_back(Move(i,i+8,3,0,0));//3=bishop
+                    moves.push_back(Move(i,i+8,4,0,0));//4=queen
+                    moves.push_back(Move(i,i+8,1,0,0));//1=rook
                     GI=GI+3;         
+                }
+                else
+                {   
+                    moves.push_back(Move(i,i+8));
+                    Zobrist::update_zobrist_hash(*original, wfh[GI], OWN_PICE_INDEX, from, to, is_capture);
                 }
                 GI++;
                 if(GI>len_wfh)
-                return INT_MAX;//indicates that the array is full//also necessiates, that the array is one longer, that it actually needs to be.    
+                return is_full_return_value;//indicates that the array is full//also necessiates, that the array is one longer, that it actually needs to be.    
             }
             if(i<16 && !((Own_P | Enemy_P) & 1Ull << (i+16) ))
             {
@@ -216,10 +289,15 @@ int all_moves(const BB* const original, BB* const wfh , int len_wfh)// returns n
                 wfh[GI].Board[0] |= 1Ull << (i+16);
                 if (!in_check(wfh[GI].Board,WM))
                 {
+                    int from = i, to = i + 16;
+                    bool is_capture = false; // Pawn pushes are not captures
+                    int OWN_PICE_INDEX = 0; // Pawn index
                     wfh[GI].en_passant = 1Ull << (i+8);
+                    Zobrist::update_zobrist_hash(*original, wfh[GI], OWN_PICE_INDEX, from, to, is_capture);
                     GI++;
+                    moves.push_back(Move(i,i+16));
                     if(GI>len_wfh)
-                    return INT_MAX;//indicates that the array is full//also necessiates, that the array is one longer, that it actually needs to be.
+                    return is_full_return_value;//indicates that the array is full//also necessiates, that the array is one longer, that it actually needs to be.
                     
                 }
             }
@@ -235,26 +313,41 @@ int all_moves(const BB* const original, BB* const wfh , int len_wfh)// returns n
             wfh[GI].Board[6] &= ~(1Ull << i);
             wfh[GI].Board[6] |= 1Ull << (i-8);
             if(!in_check(wfh[GI].Board,WM))   //  oooooooooooooooooo
-        {
-            if(i<16)
             {
-                wfh[GI].Board[0+6] &= ~(1Ull << (i-8));
-                         // original case =rook
-                copy_BB(wfh+GI,wfh+GI+1);
-                wfh[GI+1].Board[2+6] |= 1Ull << (i-8); //  =knight
-                copy_BB(wfh+GI,wfh+GI+2);
-                wfh[GI+2].Board[3+6] |= 1Ull << (i-8); //  =bishop
-                copy_BB(wfh+GI,wfh+GI+3);
-                wfh[GI+3].Board[4+6] |= 1Ull << (i-8); //  =queen
+                int from = i, to = i - 8;
+                bool is_capture = false; // Pawn pushes are not captures
+                int OWN_PICE_INDEX = 6; // Pawn index
+                if(i<16)
+                {
+                    wfh[GI].Board[0+6] &= ~(1Ull << (i-8));
+                            // original case =rook
+                    copy_BB(wfh+GI,wfh+GI+1);
+                    wfh[GI+1].Board[2+6] |= 1Ull << (i-8); //  =knight
+                    Zobrist::update_zobrist_hash(*original, wfh[GI+1], OWN_PICE_INDEX, from, to, is_capture, 2+6*!WM); // Update hash for knight promotion                    
+                    copy_BB(wfh+GI,wfh+GI+2);
+                    wfh[GI+2].Board[3+6] |= 1Ull << (i-8); //  =bishop
+                    Zobrist::update_zobrist_hash(*original, wfh[GI+2], OWN_PICE_INDEX, from, to, is_capture, 3+6*!WM); // Update hash for bishop promotion
+                    copy_BB(wfh+GI,wfh+GI+3);
+                    wfh[GI+3].Board[4+6] |= 1Ull << (i-8); //  =queen
+                    Zobrist::update_zobrist_hash(*original, wfh[GI+3], OWN_PICE_INDEX, from, to, is_capture, 4+6*!WM); // Update hash for queen promotion
 
-                wfh[GI].Board[1+6] |= 1Ull << (i-8); //rook last piece, so it is not overwritten
-                GI=GI+3;
+                    wfh[GI].Board[1+6] |= 1Ull << (i-8); //rook last piece, so it is not overwritten
+                    Zobrist::update_zobrist_hash(*original, wfh[GI], OWN_PICE_INDEX, from, to, is_capture, 1+6*!WM); // Update hash for rook promotion
+                    GI=GI+3;
+                    moves.push_back(Move(i,i-8,2,0,0));//2=knight
+                    moves.push_back(Move(i,i-8,3,0,0));//3=bishop
+                    moves.push_back(Move(i,i-8,4,0,0));//4=queen
+                    moves.push_back(Move(i,i-8,1,0,0));//1=rook
+                }
+                else {
+                    moves.push_back(Move(i,i-8));
+                    Zobrist::update_zobrist_hash(*original, wfh[GI], OWN_PICE_INDEX, from, to, is_capture);
+                }
+                GI++;
+                if(GI>len_wfh)
+                return is_full_return_value;//indicates that the array is full//also necessiates, that the array is one longer, that it actually needs to be.
+                
             }
-            GI++;
-            if(GI>len_wfh)
-            return INT_MAX;//indicates that the array is full//also necessiates, that the array is one longer, that it actually needs to be.
-            
-        }
         if(i>=8*6 && !((Own_P | Enemy_P) & 1Ull << (i-16) ))
         {
             Base_BB(original,wfh+GI);
@@ -262,10 +355,15 @@ int all_moves(const BB* const original, BB* const wfh , int len_wfh)// returns n
             wfh[GI].Board[6] |= 1Ull << (i-16);
             if (!in_check(wfh[GI].Board,WM))
             {
+                int from = i, to = i - 16;
+                bool is_capture = false; // Pawn pushes are not captures
+                int OWN_PICE_INDEX = 6; // Pawn index
                 wfh[GI].en_passant = 1Ull << (i-8);
+                Zobrist::update_zobrist_hash(*original, wfh[GI], OWN_PICE_INDEX, from, to, is_capture);
                 GI++;
+                moves.push_back(Move(i,i-16));
                 if(GI>len_wfh)
-                return INT_MAX;//indicates that the array is full//also necessiates, that the array is one longer, that it actually needs to be.
+                return is_full_return_value;//indicates that the array is full//also necessiates, that the array is one longer, that it actually needs to be.
                 
             }
         }
@@ -297,15 +395,20 @@ int all_moves(const BB* const original, BB* const wfh , int len_wfh)// returns n
             wfh[GI].Board[R_or_Q] |= 1Ull <<j;
             if(!in_check(wfh[GI].Board,WM))   
             {
-
+                int is_capture = (Enemy_P & 1ULL << j) != 0;
+                int OWN_PICE_INDEX = R_or_Q; // Rook or Queen index
+                int from = i, to = j;
                 castling_right_rook_correction_for_col(wfh+GI,!WM);
+                
                 if(i==0+!WM*7*8)
                 wfh[GI].castle[WM][0]=0;
                 if(i==7+!WM*7*8)
                 wfh[GI].castle[WM][1]=0;
+                Zobrist::update_zobrist_hash(*original, wfh[GI], OWN_PICE_INDEX, from, to, is_capture);
+                moves.push_back(Move(i,j));
                 GI++;
                 if(GI>len_wfh)
-                return INT_MAX;//indicates that the array is full//also necessiates, that the array is one longer, that it actually needs to be.
+                return is_full_return_value;//indicates that the array is full//also necessiates, that the array is one longer, that it actually needs to be.
                 
             }
         }
@@ -334,10 +437,15 @@ int all_moves(const BB* const original, BB* const wfh , int len_wfh)// returns n
                 wfh[GI].Board[B_or_Q] |= 1Ull <<j;
                 if(!in_check(wfh[GI].Board,WM))   
                 {
+                    bool is_capture = (Enemy_P & 1ULL << j) != 0;
+                    int OWN_PICE_INDEX = B_or_Q; // Bishop or Queen index
+                    int from = i, to = j;
                     castling_right_rook_correction_for_col(wfh+GI,!WM);
+                    Zobrist::update_zobrist_hash(*original, wfh[GI], OWN_PICE_INDEX, from, to, is_capture);
                     GI++;
+                    moves.push_back(Move(i,j));
                     if(GI>len_wfh)
-                    return INT_MAX;//indicates that the array is full//also necessiates, that the array is one longer, that it actually needs to be.
+                    return is_full_return_value;//indicates that the array is full//also necessiates, that the array is one longer, that it actually needs to be.
                     
                 }
             }
@@ -366,10 +474,16 @@ int all_moves(const BB* const original, BB* const wfh , int len_wfh)// returns n
                 wfh[GI].castle[WM][0]=0;
                 wfh[GI].castle[WM][1]=0;
                 if(!in_check(wfh[GI].Board,WM))   
-                {
+                { 
+                    bool Kingside_castle = false; // Queenside castle
+                    Zobrist::update_zobrist_hash_castling_piece_position(*original, wfh[GI],Kingside_castle);
+                    //track kings position
+                    int from = 3+!WM*7*8;
+                    int to = 2+!WM*7*8;
+                    moves.push_back(Move(from,to));
                     GI++;
                     if(GI>len_wfh)
-                    return INT_MAX;//indicates that the array is full//also necessiates, that the array is one longer, that it actually needs to be.
+                    return is_full_return_value;//indicates that the array is full//also necessiates, that the array is one longer, that it actually needs to be.
                     
                 }
             }  
@@ -394,9 +508,15 @@ int all_moves(const BB* const original, BB* const wfh , int len_wfh)// returns n
                 wfh[GI].castle[WM][1]=0;
                 if(!in_check(wfh[GI].Board,WM))   
                 {
+                    bool Kingside_castle = true; // Kingside castle
+                    Zobrist::update_zobrist_hash_castling_piece_position(*original, wfh[GI],Kingside_castle);
+                    //track kings position
+                    int from = 5+!WM*7*8;
+                    int to = 6+!WM*7*8;
+                    moves.push_back(Move(from,to));
                     GI++;
                     if(GI>len_wfh)
-                    return INT_MAX;//indicates that the array is full//also necessiates, that the array is one longer, that it actually needs to be.
+                    return is_full_return_value;//indicates that the array is full//also necessiates, that the array is one longer, that it actually needs to be.
                     
                 }
             }  
@@ -410,7 +530,93 @@ int all_moves(const BB* const original, BB* const wfh , int len_wfh)// returns n
     AM_OUTRO.start_time();
     //no outtro needed
     AM_OUTRO.end_time();
-    return GI; //number of new moves
+    auto result = std::make_tuple(GI,moves);
+    //now check if all the moves have the correct zobrist hash, if not, then there is a bug in the move generation
+    int original_GI = GI-moves.size();
+    for(int k=0;k<GI;k++)
+    {   
+        //std::cout << "Move " << k << " of " << GI-1 << ": ";
+        int from = moves[k].from;
+        int to = moves[k].to;
+        int from_row = from / 8;
+        char from_col = 'a' + (from % 8);
+        int to_row = to / 8;
+        char to_col = 'a' + (to % 8);
+        //std::cout << "Checking Zobrist hash for move " << from_col << from_row+1 << "-" << to_col << to_row+1 << " in position:\n";
+        if(wfh[k].zobrist_hash == Zobrist::compute_Zobrist_Hash(wfh[k]))
+        {
+            continue;
+        }
+        else
+        {
+            std::cout << "Move " << k << " of " << GI-1 << ": ";
+            std::cout << "Zobrist hash mismatch for move " << from_col << from_row+1 << "-" << to_col << to_row+1 << " in position:\n";
+            std::cout << "Expected Zobrist hash: " << wfh[k].zobrist_hash << "\n";
+            std::cout << "Actual Zobrist hash: " << Zobrist::compute_Zobrist_Hash(wfh[k]) << "\n";
+            print(wfh[k].Board);
+            std::cin.get();
+        }
+    }
+    //std::cin.get();
+
+    return result; //number of new moves
+}
+
+std::string moves_to_PGN(const BB& initial_position, const std::vector<Move>& moves)
+{
+    BB position = initial_position;
+    BB* legal_positions = new BB[256];
+    std::string pgn;
+    int fullmove_number = 1;
+
+    for(size_t ply=0; ply<moves.size(); ++ply)
+    {
+        const Move& move = moves[ply];
+        auto generated = all_moves(&position, legal_positions, 256);
+        const int number_of_moves = std::get<0>(generated);
+        const std::vector<Move>& legal_moves = std::get<1>(generated);
+        int matching_index = -1;
+
+        for(int index=0; index<number_of_moves; ++index)
+        {
+            if(legal_moves[index] == move)
+            {
+                matching_index = index;
+                break;
+            }
+
+            if(legal_moves[index].from == move.from &&
+               legal_moves[index].to == move.to &&
+               legal_moves[index].promotion_piece_type == 0 &&
+               move.promotion_piece_type <= 0)
+            {
+                matching_index = index;
+                break;
+            }
+        }
+
+        if(matching_index == -1)
+        {
+            pgn += "[invalid PV at ply " + std::to_string(ply) +
+                   " move=" + std::to_string(move.from) + "-" +
+                   std::to_string(move.to) + " promotion=" +
+                   std::to_string(move.promotion_piece_type) + "] ";
+            break;
+        }
+
+        if(position.white_move)
+            pgn += std::to_string(fullmove_number) + ". ";
+        else if(pgn.empty())
+            pgn += std::to_string(fullmove_number) + "... ";
+
+        pgn += get_move(&position, legal_positions + matching_index) + " ";
+        position = legal_positions[matching_index];
+        if(position.white_move)
+            ++fullmove_number;
+    }
+
+    delete[] legal_positions;
+    return pgn;
 }
      
 bool one_move(const BB* const original)
@@ -794,7 +1000,59 @@ bool one_move(const BB* const original)
 }
 
 
+Move::Move()
+{
+    from=0;
+    to=0;
+    promotion_piece_type=-1;
+    is_castling=false;
+    is_en_passant=false;
+}
 
+Move::Move(int from, int to, int promotion_piece_type, bool is_castling, bool is_en_passant)
+{
+    this->from=from;
+    this->to=to;
+    this->promotion_piece_type=promotion_piece_type;
+    this->is_castling=is_castling;
+    this->is_en_passant=is_en_passant;
+}
+
+//define == operator for Move
+bool Move::operator==(const Move& other) const
+{
+    return from == other.from && to == other.to && promotion_piece_type == other.promotion_piece_type;
+}
+
+void PV_Line::append(const Move move,int eval)
+{
+    current_lenght++;
+    if(current_lenght>=MAX_PV_Lenght)
+    {
+        std::cout<<"PV_Line::append: current_lenght>=MAX_PV_Lenght"<<std::endl;
+        exit(1);
+    }
+    moves[current_lenght]=move;
+    this->eval=eval;
+}
+
+//now create by a PV_Line from a move and a PV_Line
+PV_Line::PV_Line(const Move move,int depth, const PV_Line* const pv_line)//move is the forst move then comes the pv_lin
+{
+    this->depth=depth;
+    moves[0]=move;
+    for(int i=0;i<pv_line->current_lenght;i++)
+    {
+        moves[i+1]=pv_line->moves[i];
+    }
+    current_lenght=pv_line->current_lenght+1;
+    this->eval=pv_line->eval;
+}
+PV_Line::PV_Line(){};
+PV_Line::PV_Line(int eval)
+{
+    this->eval=eval;
+}
 
 
 

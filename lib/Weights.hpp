@@ -1,3 +1,4 @@
+// OWNERSHIP=Ascanius
 #ifndef WEIGHTS_HPP
 #define WEIGHTS_HPP
 #include <iostream>

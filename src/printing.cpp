@@ -1,6 +1,8 @@
+// OWNERSHIP=Ascanius
 #ifndef PRINTING_CPP
 #define PRINTING_CPP
 #include "../lib/printing.hpp"
+#include "../lib/lookup_table.hpp"
 
 
 void print(int piece, int piece_table_value_opening[7][64], float weight_on_opening, int piece_table_value_endgame[7][64])//last piece is the black pawn
@@ -392,6 +394,82 @@ void print(const BB* const Base, int start, int end)
     for(int i=start;i<end;i++)
     print(Base[i].Board);
 }
+
+void print_history_to_file(std::vector<TT_entry> history, std::string filename)
+{
+    std::ofstream file;
+    file.open(filename);
+    for(int m=0;m<int(history.size());m++)
+    {
+
+        for(int i=0;i<12;i++)
+        {
+            file << history[m].board.Board[i] << "\n";
+        }
+        file << history[m].board.white_move << "\n";
+        file << history[m].board.castle[0][0] << "\n";
+        file << history[m].board.castle[0][1] << "\n";
+        file << history[m].board.castle[1][0] << "\n";
+        file << history[m].board.castle[1][1] << "\n";
+        file << history[m].board.en_passant << "\n";
+        file << history[m].board.number_of_repetitions << "\n";
+        file << history[m].board.move << "\n";
+        file << history[m].board.halfmoves_since_last_capture_or_pawn_move << "\n";
+        file << history[m].pv_line.depth << "\n";
+        file << history[m].pv_line.eval << "\n";
+        for(int i=0;i<MAX_PV_Lenght;i++)
+        {
+            file << history[m].pv_line.moves[i].from << "\n";
+            file << history[m].pv_line.moves[i].to << "\n";
+            file << history[m].pv_line.moves[i].promotion_piece_type << "\n";
+            file << history[m].pv_line.moves[i].is_castling << "\n";
+            file << history[m].pv_line.moves[i].is_en_passant << "\n";
+        }
+        file << history[m].pv_line.bound_type << "\n";
+    }
+    file.close();
+}
+
+void get_history_from_file(std::vector<TT_entry> &history, std::string filename)
+{
+    std::ifstream file;
+    file.open(filename);
+    TT_entry temp;
+    while(file)
+    {
+        for(int i=0;i<12;i++)
+        {
+            if(!(file >> temp.board.Board[i]))
+            return;
+        }
+        file >> temp.board.white_move;
+        file >> temp.board.castle[0][0];
+        file >> temp.board.castle[0][1];
+        file >> temp.board.castle[1][0];
+        file >> temp.board.castle[1][1];
+        file >> temp.board.en_passant;
+        file >> temp.board.number_of_repetitions;
+        file >> temp.board.move;
+        file >> temp.board.halfmoves_since_last_capture_or_pawn_move;
+        file >> temp.pv_line.depth;
+        file >> temp.pv_line.eval;
+        for(int i=0;i<MAX_PV_Lenght;i++)
+        {
+            file >> temp.pv_line.moves[i].from;
+            file >> temp.pv_line.moves[i].to;
+            file >> temp.pv_line.moves[i].promotion_piece_type;
+            file >> temp.pv_line.moves[i].is_castling;
+            file >> temp.pv_line.moves[i].is_en_passant;
+        }
+        file >> temp.pv_line.bound_type;
+        if(!file)
+        return;
+        history.push_back(temp);
+    }
+    file.close();
+}
+
+
 
 
 

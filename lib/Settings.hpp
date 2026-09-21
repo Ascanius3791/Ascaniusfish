@@ -1,3 +1,4 @@
+// OWNERSHIP=Ascanius
 #ifndef SETTINGS_HPP
 #define SETTINGS_HPP
 
@@ -16,7 +17,7 @@ constexpr bool surpress_print_globally    =0;
 
 constexpr bool extensive_time_display = 0;
 constexpr bool take_history = 1;
-constexpr bool take_precautions = 1;//this activates checks for consistency, like a debug mode
+constexpr bool DEBUG_MODE = 0;//this activates checks for consistency, like a debug mode
 
 
 //==================================================================================================================================
@@ -32,6 +33,18 @@ constexpr bool king=1;
 //==================================================================================================================================
 //special settings
 constexpr int max_mating_seq = 1000;
+constexpr int MAX_PV_Lenght = 128; //maximum principlad variation lenght(cheap)
+
+//==================================================================================================================================
+//lookup table sizes (see lib/lookup_table.hpp) - exponent_for_size is log2(number
+//of buckets), bucket_size is entries per bucket. TT_entry is ~2.2KB (dominated by
+//PV_Line's Move[MAX_PV_Lenght] array), so total size is roughly
+//(1<<exponent_for_size) * bucket_size * 2.2KB - keep that in mind before raising
+//either exponent.
+constexpr int TT_EXPONENT_FOR_SIZE = 15;   //regular per-game transposition table: ~580MB
+constexpr int TT_BUCKET_SIZE = 8;
+constexpr int PTT_EXPONENT_FOR_SIZE = 16;  //persistent transposition table: ~1.16GB
+constexpr int PTT_BUCKET_SIZE = 8;
 
 
 

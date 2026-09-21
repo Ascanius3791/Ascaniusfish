@@ -1,3 +1,4 @@
+// OWNERSHIP=Ascanius
 #ifndef BASIC_EVAL_CPP
 #define BASIC_EVAL_CPP
 #include "../lib/basic_eval.hpp"
@@ -23,19 +24,21 @@ int piecetable(const BB* const original , const WEIGHTS W)
     EW[0]=1-OW[0];
     EW[1]=1-OW[1];
     uint64_t all_pieces= original->Board[0]|original->Board[1]|original->Board[2]|original->Board[3]|original->Board[4]|original->Board[5]|original->Board[6]|original->Board[7]|original->Board[8]|original->Board[9]|original->Board[10]|original->Board[11];
+    
     while(all_pieces)
     {
         int i=find_and_delete_trailling_1(all_pieces);
         //pawns
-        
-
-        
         if(original->Board[0] & 1Ull << i)
-        score += W.piece_table_value_opening[0][i]*OW[1]+W.piece_table_value_endgame[0][i]*EW[1];
+        {
+            score += W.piece_table_value_opening[0][i]*OW[1]+W.piece_table_value_endgame[0][i]*EW[1];
+        }
         if(original->Board[6] & 1Ull << i)
-        score -= W.piece_table_value_opening[6][i]*OW[0]+W.piece_table_value_endgame[6][i]*EW[0];
+        {
+            score -= W.piece_table_value_opening[6][i]*OW[0]+W.piece_table_value_endgame[6][i]*EW[0];
+        }
+        
         //other pieces
-        continue;
         for(int col =0;col<2;col++)
         for(int piec=1;piec<6;piec++)
         {
@@ -92,8 +95,8 @@ int piece_activity_eval(const BB* const original, const WEIGHTS W)
         {
             int i=find_and_delete_trailling_1(own_bishops);
             uint64_t bishop_attacks = get_bishop_attacks(i,all_pieces);
-            score+=count(own_pieces & bishop_attacks*(1-2*!col))*10;//*W.piece_activity_value[3];
-            score+=count(enemy_pieces & bishop_attacks*(1-2*!col))*40;//*W.piece_activity_value[3];
+            score+=count(own_pieces & bishop_attacks)*10*(1-2*!col);//*W.piece_activity_value[3];
+            score+=count(enemy_pieces & bishop_attacks)*40*(1-2*!col);//*W.piece_activity_value[3];
             score+=count(bishop_attacks)*(1-2*!col)*5;
         }
         uint64_t own_rooks = original->Board[1+6*!col]|original->Board[4+6*!col];
@@ -122,7 +125,7 @@ int piece_activity_eval(const BB* const original, const WEIGHTS W)
         }
 
     }
-    return score/2;//influece was to hard
+    return score/2;//influece was too hard
 
 }
 
@@ -201,7 +204,7 @@ int king_safety_of_colour(const uint64_t Board[12],bool white, const WEIGHTS W )
     ;//std::cout << "king is in danger: " << score << std::endl;
     if(score>0)//king is safe
     return W.king_safety_value*sqrt(score);
-    return W.king_safety_value*score;
+    return W.king_safety_value*score*100;
     
     return score;
     
@@ -232,7 +235,7 @@ int central_pawn_presence(const BB* const original, bool white, const WEIGHTS W)
         while(attacks)
         {
             int j=find_and_delete_trailling_1(attacks);
-            score+=W.piece_table_value_opening[0][j];
+            score+=W.piece_table_value_opening[0+6*!white][j];
         }
     }
     return score;
@@ -317,13 +320,14 @@ int basic_eval(const BB*const original , const WEIGHTS W)// return the evaluatio
     int score=0;
     
     score += material_eval(original,W);
+    score += piecetable(original,W);
+    
     score += king_safety_of_colour(original->Board,true,W);
     score -= king_safety_of_colour(original->Board,false,W);
+    //return score;
     //score=score*0.1; //games get fun, when they DO NOT CARE ABOUT MATERIAL
     
-    score += piecetable(original,W);//current testing
-    //uint64_t occ = original->Board[0]|original->Board[1]|original->Board[2]|original->Board[3]|original->Board[4]|original->Board[5]|original->Board[6]|original->Board[7]|original->Board[8]|original->Board[9]|original->Board[10]|original->Board[11];
-    //score+=occ%1000;//so test, if the board has changed
+
 
     score += positional_eval(original,W);
     
@@ -479,4 +483,3 @@ int sorting_eval(const BB* const original, const WEIGHTS W )// accelerates pruni
 
 
 #endif // BASIC_EVAL_CPP
-

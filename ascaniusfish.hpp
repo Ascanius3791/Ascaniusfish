@@ -1,3 +1,4 @@
+// OWNERSHIP=Ascanius
 #ifndef ascaniusfish
 #define ascaniusfish
 #include<iostream>
@@ -22,6 +23,8 @@
 #include "src/lookup_table.cpp"
 #include "src/move_generation.cpp"
 #include "src/basic_eval.cpp"
+#include "src/saefty_checks.cpp"
+#include "src/eval.cpp"
 
 
 using namespace std;
@@ -81,47 +84,6 @@ class CBE //combines eval, and position,and key(for later hash funktion)
         }
     };
    
-int exception_eval(const BB* const original)//0=no exception, 1=stalemate, 2=checkmate
-{
-    
-    if(one_move(original))
-    return 0;
-    if(!in_check(original->Board,original->white_move))
-    {
-        original->eval=0;
-        original->is_evaluated=true;
-        return 1;
-        
-    }
-    else
-    {
-        original->eval=original->white_move ? INT_MIN : INT_MAX;
-        original->is_evaluated=true;
-        return 2;
-    }
-}
-
-int eval(const BB* const original, WEIGHTS W =WEIGHTS_OG, int exception_state=-1/*the can halp reduce redundant stuff later on*/)// exception eval has duplicate functionality, but is used maby in other contexts as well (both change original.eval in the case of an exception)
-{
-    original->is_evaluated=1;
-    if(exception_state==-1)
-    exception_state = exception_eval(original);//in case of exceptions, this handels the assignment of the eval to original
-    if(exception_state==0)
-    {
-        original->eval=basic_eval(original,W);
-        return original->eval;
-    }
-    if(exception_state==1)
-    {
-        return 0;
-    }
-    if(exception_state==2)
-    {
-        return original->white_move ? INT_MIN: INT_MAX;
-    }
-    return 50;
-}
-
 bool is_a_capture_avalable(const uint64_t Board[12], bool white_move)
 {
     uint64_t white_pieces = Board[0]|Board[1]|Board[2]|Board[3]|Board[4]|Board[5];
@@ -143,7 +105,34 @@ bool is_a_capture_avalable(const uint64_t Board[12], bool white_move)
     return black_captures;
 }
 
-vector<int> assign_depth(const BB* const original, const BB* const wfh, int number_of_new_moves, const int free_depth)
+inline bool captures_more_valuable_piece(const BB* const parent, const BB* const child, const WEIGHTS& W = WEIGHTS_OG)
+{
+    const int own_offset = 6*!parent->white_move;
+    const int enemy_offset = 6*parent->white_move;
+    int moving_piece = -1;
+    int captured_piece = -1;
+
+    for(int piece=0;piece<6;piece++)
+    {
+        if(parent->Board[piece+own_offset] & ~child->Board[piece+own_offset])
+        moving_piece=piece;
+
+        if(parent->Board[piece+enemy_offset] & ~child->Board[piece+enemy_offset])
+        captured_piece=piece;
+    }
+
+    if(moving_piece==-1 || captured_piece==-1)
+    return false;
+
+    return W.piece_value[captured_piece] > W.piece_value[moving_piece];
+}
+
+inline int resolved_assigned_depth(const int assigned_depth, const int parent_depth)
+{
+    return assigned_depth==INT_MAX ? parent_depth : assigned_depth;
+}
+
+vector<int> assign_depth(const BB* const original, const BB* const wfh, int number_of_new_moves, const int free_depth, const WEIGHTS& W = WEIGHTS_OG)
 {
     uint64_t original_own_P = original->Board[0+6*!original->white_move]|original->Board[1+6*!original->white_move]|original->Board[2+6*!original->white_move]|original->Board[3+6*!original->white_move]|original->Board[4+6*!original->white_move]|original->Board[5+6*!original->white_move];
     uint64_t original_enemy_P = original->Board[0+6*original->white_move]|original->Board[1+6*original->white_move]|original->Board[2+6*original->white_move]|original->Board[3+6*original->white_move]|original->Board[4+6*original->white_move]|original->Board[5+6*original->white_move];
@@ -159,6 +148,13 @@ vector<int> assign_depth(const BB* const original, const BB* const wfh, int numb
     }
     for(int i=0;i<number_of_new_moves;i++)
     {
+        if(captures_more_valuable_piece(original,wfh+i,W))
+        {
+            depth[i]=INT_MAX;
+            depth_measure[i]=0;
+            continue;
+        }
+
         uint64_t own_P = wfh[i].Board[0+6*!original->white_move]|wfh[i].Board[1+6*!original->white_move]|wfh[i].Board[2+6*!original->white_move]|wfh[i].Board[3+6*!original->white_move]|wfh[i].Board[4+6*!original->white_move]|wfh[i].Board[5+6*!original->white_move];
         uint64_t enemy_P = wfh[i].Board[0+6*original->white_move]|wfh[i].Board[1+6*original->white_move]|wfh[i].Board[2+6*original->white_move]|wfh[i].Board[3+6*original->white_move]|wfh[i].Board[4+6*original->white_move]|wfh[i].Board[5+6*original->white_move];
         
@@ -174,6 +170,9 @@ vector<int> assign_depth(const BB* const original, const BB* const wfh, int numb
 
     for(int i=0;i<number_of_new_moves;i++)
     {
+        if(depth[i]==INT_MAX)
+        continue;
+
         //if(depth_measure[i]!=-1)
         depth[i]=free_depth*(depth_measure[i]/total_depth_measure);
         //else 
@@ -355,7 +354,8 @@ string get_move(const BB* const original, const BB* const goal )
             }
         }
         BB* wfh=new BB[300];
-        int number_of_new_moves = all_moves(original,wfh);
+        auto result = all_moves(original,wfh);
+        int number_of_new_moves = std::get<0>(result);
         int moved_piece=-1;
         for(int i=0;i<6;i++)
         {
@@ -493,57 +493,5 @@ string get_PGN(vector<BB> history,string FEN="")
         return PGN;
     }
 
-void print_history_to_file(vector<BB> history, string filename)
-{
-    ofstream file;
-    file.open(filename);
-    for(int m=0;m<int(history.size());m++)
-    {
-
-        for(int i=0;i<12;i++)
-        {
-            file << history[m].Board[i] << "\n";
-        }
-        file << history[m].white_move << "\n";
-        file << history[m].castle[0][0] << "\n";
-        file << history[m].castle[0][1] << "\n";
-        file << history[m].castle[1][0] << "\n";
-        file << history[m].castle[1][1] << "\n";
-        file << history[m].en_passant << "\n";
-        file << history[m].eval << "\n";
-        file << history[m].number_of_repetitions << "\n";
-        file << history[m].halfmoves_since_last_capture_or_pawn_move << "\n";
-    }
-    file.close();
-}
-
-void get_history_from_file(vector<BB> &history, string filename)
-{
-    ifstream file;
-    file.open(filename);
-    BB temp;
-    do
-    {
-        
-        for(int i=0;i<12;i++)
-        {
-            file >> temp.Board[i];
-        }
-        file >> temp.white_move;
-        file >> temp.castle[0][0];
-        file >> temp.castle[0][1];
-        file >> temp.castle[1][0];
-        file >> temp.castle[1][1];
-        file >> temp.en_passant;
-        file >> temp.eval;
-        file >> temp.number_of_repetitions;
-        file >> temp.halfmoves_since_last_capture_or_pawn_move;
-        history.push_back(temp);
-    }
-    while(!file.eof());
-    file.close();
-}
-
 
 #endif
-

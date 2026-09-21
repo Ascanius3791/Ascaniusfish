@@ -1,3 +1,4 @@
+// OWNERSHIP=Ascanius
 #ifndef BIT_OPERATIONS_HPP
 #define BIT_OPERATIONS_HPP
 

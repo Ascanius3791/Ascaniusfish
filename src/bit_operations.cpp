@@ -1,3 +1,4 @@
+// OWNERSHIP=Ascanius
 #ifndef BIT_OPERATIONS_CPP
 #define BIT_OPERATIONS_CPP
 
@@ -33,6 +34,16 @@ inline void clear_sq_of_enemy(uint64_t to_be_cleard[12] , int square , bool whit
 {
     for(int i=0;i<6;i++)
     to_be_cleard[i+6*white_move] &= ~(1Ull << square);
+}
+
+inline int find_enemy_piece_type_on_sq(const uint64_t Board[12],int square,bool white_move)
+{
+    for(int i=0;i<6;i++)
+    {
+        if(Board[i+6*white_move] & (1Ull << square))
+        return i+6*white_move;
+    }
+    return -1;
 }
 
 inline int find_and_delete_trailling_1(uint64_t &n)

@@ -1,3 +1,4 @@
+// OWNERSHIP=Ascanius
 #include"ascaniusfish.hpp"
 #include <algorithm>
 #include <cstdlib>//for communication with python
@@ -14,15 +15,11 @@ using namespace std;
 int prunable_moves_total=0;
 int pruned_moves=0;
 //==================================================================================================================================
-int temp_counter=0;
-constexpr bool print_mode=0;
-constexpr int max_depth=4;
 constexpr int max_number_of_threads=4;
 int number_of_threads=1;
-int count_a=0;
 int number_of_mimimax_calls=0;
 int number_of_half_moves=0;
-BB best_move;
+
 
 class tournament
 {
@@ -55,34 +52,6 @@ class pruning
 };
 //==================================================================================================================================
 
-void check_for_symmetrical_evaluation(const BB* const original)
-{
-    BB* temp = new BB;
-    copy_BB(original,temp);
-    temp->white_move=!temp->white_move;
-    if(basic_eval(original)!=basic_eval(temp))
-    {
-        cout << "The evaluation is not symmetrical" << endl;
-        cout << "The evaluation of the original is: " << basic_eval(original) << endl;
-        cout << "The evaluation of the temp is: " << basic_eval(temp) << endl;
-        cout << "The board is: " << endl;
-        print(original->Board);
-        cout << "The temp board is: " << endl;
-        print(temp->Board);
-        exit(0);
-    }
-    delete temp;
-}
-
-void saefty_checks(const BB* const original=0)
-{
-    if(original)
-    {
-        check_for_symmetrical_evaluation(original);
-    }
-
-}
-
 void initialize_rand()
 {
     unsigned int my_int=0;
@@ -91,381 +60,196 @@ void initialize_rand()
     srand(address);
 }
 
-vector<int> sorting_moves(const BB* const Base, int num, bool WM, WEIGHTS W = WEIGHTS_OG)//returns 0, till end-start-1 ,ordered!
+vector<int> sorting_moves(const BB* const Base, vector<Move> moves, int num, bool WM, const PV_Line* const pv_line =0, int index_of_pv_line_to_compare_against=0, WEIGHTS W = WEIGHTS_OG)//returns 0, till end-start-1 ,ordered!
 {
     // Create an array of indices [start, end)
     vector<int> indices(num);
+    vector<int> sorting_scores(num);
     for (int i = 0; i < num; ++i) {
         indices[i] = i;
+        sorting_scores[i] = sorting_eval(Base + i, W);
     }
 
-    // Sort the indices Based on sorting_eval function
-    if (WM) 
+    sort(indices.begin(), indices.end(), [&sorting_scores, WM](int a, int b)
     {
-        sort(indices.begin(), indices.end(), [&Base, &W](int a, int b) 
+        return WM
+            ? sorting_scores[a] > sorting_scores[b]
+            : sorting_scores[a] < sorting_scores[b];
+    });
+    if (pv_line && pv_line->current_lenght !=0)
+    {
+        Move pv_move = pv_line->moves[index_of_pv_line_to_compare_against];
+
+        for (int i = 0; i < num; ++i)
         {
-            return sorting_eval(Base+a, W) > sorting_eval(Base+b, W);
-        });
-    } 
-    else 
-    {
-        sort(indices.begin(), indices.end(), [&Base, &W](int a, int b) {
-            return sorting_eval(Base+a, W) < sorting_eval(Base+b, W);
-        });
+            if (moves[indices[i]] == pv_move)
+            {
+                rotate(indices.begin(), indices.begin() + i, indices.begin() + i + 1);
+                break;
+            }
+        }
     }
+    //if pv_line is provided set that move on top
     return indices;
 }
 
-int minimax_saefty_copy(const BB*const original ,BB* const wfh ,int depth, WEIGHTS W= WEIGHTS_OG,int alpha = INT_MIN, int beta = INT_MAX,lookup_table* const table=NULL)
+PV_Line minimax(const BB*const original ,BB* const wfh ,int depth = 0, WEIGHTS W= WEIGHTS_OG,int alpha = INT_MIN, int beta = INT_MAX,lookup_table* const table=NULL)
 {
-    //this checks for exceptions it is faster, than to combine them together, since if there is an exception we dont need to call the eval func(which ofc calls exception eval a second time)
-    if(tactical_potential(original->Board)>1000)
-    {
-       // depth++;
-        //cout << "The depth was increased to: " << depth << endl;
-    }
-
-    
-    //depth++;
-    if(table)
-    if(table->is_retrivable_eval(original,depth))
-    return original->eval;
-    if(depth==0)
-    {   int evaluation=eval(original,W);
-        //if(table)//include this in the table, only if it turns out, that looking up if faster than evaluating
-        //table->insert(*original,0);
-        return evaluation;
-    }
-    int exception_state=exception_eval(original);
-    if(exception_state==1)
-    {
-        if(table)
-        table->insert(*original,depth);
-        return 0;
-    }
-    if(exception_state==2)
-    {
-        original->eval=original->white_move ? INT_MIN : INT_MAX;
-        if(table)
-        table->insert(*original,depth);
-        return original->eval;
-    }
-    vector<int> indices;
-    int number_of_new_moves = all_moves(original,wfh);
-    indices = sorting_moves(wfh,number_of_new_moves,original->white_move,W);// why on earth would this be slower? its pruning ration is better, by a lot!
-    for(int i=0;i<number_of_new_moves;i++)
-    {
-        //indices.push_back(i);
-    }
-    prunable_moves_total+=number_of_new_moves-1;//analizing how efficient pruning is.
-   
-    int best_eval= original->white_move ? INT_MIN : INT_MAX;
-    uint64_t enemy_pieces_original=original->Board[6*original->white_move] | original->Board[6*original->white_move+1] | original->Board[6*original->white_move+2] | original->Board[6*original->white_move+3] | original->Board[6*original->white_move+4] | original->Board[6*original->white_move+5];
-
-    for(int i=0;i<number_of_new_moves;i++)
-    {
-        uint64_t enemy_pieces_wfh=wfh[indices[i]].Board[6*original->white_move] | wfh[indices[i]].Board[6*original->white_move+1] | wfh[indices[i]].Board[6*original->white_move+2] | wfh[indices[i]].Board[6*original->white_move+3] | wfh[indices[i]].Board[6*original->white_move+4] | wfh[indices[i]].Board[6*original->white_move+5];
-//        print(enemy_pieces_original);
-//        print(enemy_pieces_wfh);
-
-        int local_depth=depth;
-        if(enemy_pieces_original!=enemy_pieces_wfh)
-        {
-            local_depth++;
-            cout << "The depth was increased to: " << local_depth << endl;
-            exit(0);
-        }
-        int eval=minimax_saefty_copy(wfh+indices[i],wfh+number_of_new_moves,local_depth-1,W,alpha,beta,table);
-        if(eval<INT_MIN+max_mating_seq)//this assures the quickest mate
-        eval++;
-        if(eval>INT_MAX-max_mating_seq)//this assures the quickest mate
-        eval--;
-        if(original->white_move)
-        {
-            best_eval=max(best_eval,eval);
-            alpha=max(alpha,eval);
-        }
-        else 
-        {
-            best_eval=min(best_eval,eval);
-            beta=min(beta,eval);
-        }
-        if(beta<=alpha)
-        {
-            pruned_moves+=number_of_new_moves-i-1;
-            break;
-        }
-    }
-    //if(!table)
-    //cout << "The table is not included?" << endl;
-    if(table)
-    table->insert(*original,depth);
-    return best_eval;
-
-   return 0;
-}
-
-int minimax(const BB*const original ,BB* const wfh ,int remaining_calls,int depth = 0, WEIGHTS W= WEIGHTS_OG,int alpha = INT_MIN, int beta = INT_MAX,lookup_table* const table=NULL)
-{
-    if(take_precautions)
+    if(DEBUG_MODE)
     saefty_checks(original);
     number_of_mimimax_calls++;
-    if(remaining_calls<0)
-    {
-        cout << "The remaining_calls in minimax is: " << remaining_calls << endl;
-        print(original->Board);
-        exit(0);
-    }
-    
+
+    PV_Line tt_hint;
+    bool is_tt_hint_found=0;
     if(table)
-    if(table->is_retrivable_eval(original,remaining_calls))
-    return original->eval;
-    if(remaining_calls==0)
-    
+        {
+            TT_readout readout = table->is_retrivable_eval(original, depth);
+
+            if(readout.is_found)
+            {
+                if(depth<=readout.pv_line.depth && readout.pv_line.current_lenght>0)
+                {
+                    if(readout.pv_line.bound_type==0)//exact
+                    return readout.pv_line;
+                    else if(depth==readout.pv_line.depth)//only on exact depth alpha and beta can be updated
+                    {
+                        //update alpha and beta based on the bound type
+                        if(readout.pv_line.bound_type == -1) // lower bound
+                        alpha = max(alpha, readout.pv_line.eval);
+                        else if(readout.pv_line.bound_type == 1) // upper bound
+                        beta = min(beta, readout.pv_line.eval);
+                        if(alpha >= beta)
+                        {
+                            // Prune the search
+                            return readout.pv_line;
+                        }
+                    }
+                }
+                tt_hint=readout.pv_line;
+                is_tt_hint_found=1;
+            }
+        }
+        
+    if(depth==0)
     {   
-        //cout << "The remaining_calls is 0, so the rest can be skipped" << endl;
-        int evaluation=eval(original,W);
-        //if(table)//include this in the table, only if it turns out, that looking up is faster than evaluating
-        //table->insert(*original,0);
-        return evaluation;
+        int tactical_pot = tactical_potential(original->Board,W);
+        
+        const int tactical_potential_threshold = INT_MAX;//effectivly deactivates this
+        if(tactical_pot<tactical_potential_threshold)
+        {
+            int evaluation=eval(original,W);
+            //if(table)//include this in the table, only if it turns out, that looking up is faster than evaluating
+            //table->insert(*original,0);
+            PV_Line returned_line = PV_Line(evaluation);
+            returned_line.depth=depth;
+            returned_line.current_lenght=0;
+            returned_line.bound_type = 0; // exact evaluation
+            return returned_line;
+        }
+        else
+        {
+            cout << "Tactical potential is high: " << tactical_pot << ", proceeding with deeper search." << endl;
+            //print if its a white or black move
+            if(original->white_move)
+            printf("White to move\n");
+            else
+            printf("Black to move\n");
+            print(original->Board);
+            depth++;
+        }
     }
     int exception_state=exception_eval(original);
-    if(exception_state==1)
-    {
-        if(table)
-        table->insert(*original,remaining_calls);
-        return 0;
-    }
-    if(exception_state==2)
-    {
-        original->eval=original->white_move ? INT_MIN : INT_MAX;
-        if(table)
-        table->insert(*original,remaining_calls);
-        return original->eval;
-    }
-    int number_of_new_moves = all_moves(original,wfh);
-    vector<int> indices = sorting_moves(wfh,number_of_new_moves,original->white_move,W);// why on earth would this be slower? its pruning ration is better, by a lot!
-    prunable_moves_total+=number_of_new_moves-1;//analizing how efficient pruning is.
-   
-    int best_eval= original->white_move ? INT_MIN : INT_MAX;
-    vector<int> local_remaining_calls = assign_depth(original,wfh,number_of_new_moves,remaining_calls);//beware, this assigns to the unordered values, ofc it then has to be accessed using indices[i]
+    if(exception_state==1||exception_state==2)
+        {
+            int best_eval;
+            if(exception_state==1)
+            best_eval=0;
+            else if(exception_state==2)
+            {
+                best_eval=original->white_move ? INT_MIN : INT_MAX;
+            }
+            PV_Line exception_pv_line = PV_Line(best_eval);
+            exception_pv_line.depth=depth;
+            exception_pv_line.current_lenght=0;
+            exception_pv_line.bound_type = 0; // exact evaluation
+            if(table)
+            {
+                TT_entry entry;
+                entry.zobrist_hash=original->zobrist_hash;
+                entry.board = *original;
+                entry.initialized = true;
+                entry.pv_line = exception_pv_line;
+                entry.pv_line.bound_type = 0;
+                table->insert(entry);
+            }
+            return exception_pv_line;
+        }
     
+    auto result = all_moves(original,wfh);
+    int number_of_new_moves = std::get<0>(result);
+    vector<Move> moves = std::get<1>(result);
+    vector<int> indices = sorting_moves(wfh,moves,number_of_new_moves,original->white_move,&tt_hint,0,W);// why on earth would this be slower? its pruning ration is better, by a lot!
+    prunable_moves_total+=number_of_new_moves-1;//analizing how efficient pruning is.
+    Move best_move;
+    const int alpha_0 = alpha, beta_0 = beta;
+    PV_Line pv_line =PV_Line(original->white_move ? INT_MIN : INT_MAX);//initialize with worst possible value for the player to move
+    pv_line.depth=depth;
     for(int i=0;i<number_of_new_moves;i++)
-    {        
-        int eval= minimax(wfh+indices[i],wfh+number_of_new_moves,local_remaining_calls[indices[i]],depth+1,W,alpha,beta,table);
-        /*
-        print(wfh[indices[i]].Board); cout << "The eval is: " << eval << endl;
-        cout << "positional_eval: " << positional_eval(wfh+indices[i],W) << endl;
-        cout << "King_safety W: " << king_safety_of_colour(wfh[indices[i]].Board,1,W) << endl;
-        cout << "King_safety B: " << king_safety_of_colour(wfh[indices[i]].Board,0,W) << endl;
-        cout << "remaining_calls/avaliable_remaining_calls: " << local_remaining_calls[indices[i]]/float(remaining_calls) << endl;
-        cin.get();
-        */
+    {    
+        int depth_to_use=depth-1;
+        if(captures_more_valuable_piece(original,wfh+indices[i],W))
+        depth_to_use++;   
+        Move move =moves[indices[i]];
+        PV_Line candidate_pv_line = minimax(wfh+indices[i],wfh+number_of_new_moves,depth_to_use,W,alpha,beta,table);
+        int eval = candidate_pv_line.eval;
         if(eval<INT_MIN+max_mating_seq)//this assures the quickest mate
         eval++;
         if(eval>INT_MAX-max_mating_seq)//this assures the quickest mate
         eval--;
+        candidate_pv_line.eval=eval;
+        bool improves_pv;
         if(original->white_move)
         {
-            best_eval=max(best_eval,eval);
+            improves_pv = eval>pv_line.eval;
+            pv_line.eval=max(pv_line.eval,eval);
             alpha=max(alpha,eval);
-           // if(eval==best_eval)
-            //best_move_index=indices[i];
         }
-        else 
+        else
         {
-            best_eval=min(best_eval,eval);
+            improves_pv = eval<pv_line.eval;
+            pv_line.eval=min(pv_line.eval,eval);
             beta=min(beta,eval);
-          //  if(eval==best_eval)
-            //best_move_index=indices[i];
         }
+        if(improves_pv)
+        {
+            pv_line = PV_Line(move,depth,&candidate_pv_line);
+        }
+        
         if(beta<=alpha)
         {
             pruned_moves+=number_of_new_moves-i-1;
             break;
-        }
-        if(0)
-        if(original->white_move && eval+depth==INT_MAX || !original->white_move && eval-depth==INT_MIN)
-        {
-            //-- or ++ might be necessary
-            cout << "Evaluation stopped, because of quickes possible mate is already found" << endl;
-            print(original->Board);
-            interpret_eval(eval);
-            exit(0);
-            break;
-        }
-        
+        }        
     }
-   // cout << "The best move is: " << get_move(original,wfh+best_move_index) << " with eval: " << best_eval << endl;
-   // cin.get();
-    //if(!table)
-    //cout << "The table is not included?" << endl;
+    //now correct for fail low
+        if(pv_line.eval <= alpha_0)
+            pv_line.bound_type = 1;   // upper bound (fail-low)
+        else if(pv_line.eval >= beta_0)
+            pv_line.bound_type = -1;  // lower bound (fail-high)
+        else
+            pv_line.bound_type = 0;   // exact
     if(table)
-    table->insert(*original,remaining_calls);
-    return best_eval;
-
-   return 0;
-}
-
-/*
-void line_saefty_copy(BB* original ,BB* wfh ,int depth , WEIGHTS W= WEIGHTS_OG, int alpha = INT_MIN, int beta = INT_MAX)
-{ 
-    castling_rights(original);
-    do
     {
-        alpha=INT_MIN;//those are just a quick fixes, i do not understand why they are needed, since in theory alpha= beta, also, adjusting for the mate being now one more eralier, that teh alpha and beta from the last iteration, changed nothing
-        beta=INT_MAX;
-        int best_move_index=0;
-        int number_of_new_moves = all_moves(original,wfh);
-        vector<int> indices = sorting_moves(wfh,number_of_new_moves,original->white_move,W);
-        
-        prunable_moves_total+=number_of_new_moves-1;//analizing how efficient pruning is.
-        
-        int best_eval= original->white_move ? INT_MIN : INT_MAX;
-        for(int i=0;i<number_of_new_moves;i++)
-        {
-            int eval=minimax(wfh+indices[i],wfh+number_of_new_moves,depth-1,W,alpha,beta);
-            if(eval<INT_MIN+max_mating_seq)//this assures the quickest mate
-            eval++;
-            if(eval>INT_MAX-max_mating_seq)//this assures the quickest mate
-            eval--;
-            if(original->white_move)
-            {
-                if(eval>best_eval)
-                best_move_index=indices[i];
-                best_eval=max(best_eval,eval);
-                alpha=max(alpha,eval);
-            }
-            else 
-            {
-                if(eval<best_eval)
-                best_move_index=indices[i];
-                best_eval=min(best_eval,eval);
-                beta=min(beta,eval);
-            }
-            if(beta<=alpha)
-            {
-                pruned_moves+=number_of_new_moves-i-1;
-                break;
-            }
-        }
-            print((*original).Board);
-            if(take_history)
-            history.push_back(*original);
-            interpret_eval(best_eval);
-            copy_BB(wfh+best_move_index,original);
-            depth--;
-                
-
-            if(depth==0 || exception_eval(original))
-            {
-                print((*original).Board);
-                if(exception_eval(original))
-                {
-                    if(original->white_move)
-                    cout << "\nCheckmate, Black wins!" << endl;
-                    else
-                    cout << "\nCheckmate, White wins!" << endl;
-                    return;
-                }
-                interpret_eval(best_eval);
-                return;
-            }
-    } while (1);
-    
-
-}
-*/
-void line(const BB* original ,BB* wfh ,int remaning_calls ,int depth = 0, WEIGHTS W= WEIGHTS_OG, int alpha = INT_MIN, int beta = INT_MAX)
-{ 
-    BB temp = *original;
-    BB* original_temp=&temp;
-    castling_rights(original_temp);
-    do
-    {
-        alpha=INT_MIN;//those are just a quick fixes, i do not understand why they are needed, since in theory alpha= beta, also, adjusting for the mate being now one more eralier, that teh alpha and beta from the last iteration, changed nothing
-        beta=INT_MAX;
-        int best_move_index=0;
-        int number_of_new_moves = all_moves(original_temp,wfh);
-        vector<int> indices = sorting_moves(wfh,number_of_new_moves,original_temp->white_move,W);
-        
-        prunable_moves_total+=number_of_new_moves-1;//analizing how efficient pruning is.
-
-        int best_eval= original_temp->white_move ? INT_MIN : INT_MAX;
-
-        vector<int> local_depth = assign_depth(original_temp,wfh,number_of_new_moves,remaning_calls);
-        //print((*original_temp).Board);
-        //cout << "The remaning_calls is: " << remaning_calls << "and splits a folows" << endl;
-        for(int i=0;i<number_of_new_moves;i++)
-        {
-            int eval=minimax(wfh+indices[i],wfh+number_of_new_moves,local_depth[indices[i]],depth,W,alpha,beta);
-            
-           // cout << "For move: " << get_move(original_temp,wfh+indices[i]) << " local_remaning_calls: " << local_remaning_calls << "the eval ist" << eval << endl;
-            if(eval<INT_MIN+max_mating_seq)//this assures the quickest mate
-            eval++;
-            if(eval>INT_MAX-max_mating_seq)//this assures the quickest mate
-            eval--;
-            if(original_temp->white_move)
-            {
-                if(eval>best_eval)
-                best_move_index=indices[i];
-                best_eval=max(best_eval,eval);
-                alpha=max(alpha,eval);
-            }
-            else 
-            {
-                if(eval<best_eval)
-                best_move_index=indices[i];
-                best_eval=min(best_eval,eval);
-                beta=min(beta,eval);
-            }
-            if(beta<=alpha)
-            {
-                pruned_moves+=number_of_new_moves-i-1;
-                break;
-            }
-        }
-            
-            
-            print((*original_temp).Board);
-            interpret_eval(best_eval);
-            copy_BB(wfh+best_move_index,original_temp);
-            remaning_calls=local_depth[best_move_index];
-            //remaning_calls--;
-                
-            if(remaning_calls==0 || exception_eval(original_temp))
-            {
-                print((*original_temp).Board);
-                if(exception_eval(original_temp))
-                {
-                    if(original_temp->white_move)
-                    cout << "\nCheckmate, Black wins!" << endl;
-                    else
-                    cout << "\nCheckmate, White wins!" << endl;
-                    return;
-                }
-                interpret_eval(best_eval);
-                return;
-            }
-    } while (1);
-    
-
-}
-
-
-void checkmating_line(BB* original, bool mate_for_white, BB* wfh, int remaining_calls,int depth, WEIGHTS W=WEIGHTS_OG)
-
-{
-    castling_rights(original);
-    if(mate_for_white)
-    {
-        line(original,wfh,remaining_calls,depth,W,INT_MAX-max_mating_seq,INT_MAX);
+        TT_entry entry;
+        entry.board = *original;
+        entry.zobrist_hash=original->zobrist_hash;
+        entry.pv_line = pv_line;
+        entry.initialized = true;
+        table->insert(entry);
     }
-    else
-    {
-        line(original,wfh,remaining_calls,depth,W,INT_MIN,INT_MIN+max_mating_seq);
-    }
+    return pv_line;
 }
+
 
 bool is_legit_input(char file, char rank)
 {
@@ -482,7 +266,7 @@ int result(const BB* const original)//0=game on 1=white wins -1=black wins 2=dra
     
     if(exception_state==0)
     return 0;//game on
-    cout << "Thee war wa result: " << exception_state << endl;
+    cout << "Thee war was result: " << exception_state << endl;
     if(exception_state==1)
     return 2;//draw
 
@@ -769,8 +553,8 @@ class Play  : public initialize_FEN_to
             
             
             
-        
-            int number_of_new_moves = all_moves(original,wfh);
+            auto result = all_moves(original,wfh);
+            int number_of_new_moves = std::get<0>(result);
             bool aligns_with_goal=0;
             int index_of_alignment=0;
             while (!aligns_with_goal)
@@ -894,53 +678,116 @@ class Play  : public initialize_FEN_to
             cout << "The move was: " << get_UCI(original,wfh+index_of_alignment) << "aka." << get_move(original,wfh+index_of_alignment) << endl;
             copy_BB(wfh+index_of_alignment,original);
     }
-    
-    int engine_move(BB* original, BB* wfh, bool pretty_print=0,int depth=1, WEIGHTS W=WEIGHTS_OG,lookup_table* table=0)
-    {
 
-        //cin.get();
-        cout << "The central pawn presence is for white: " << central_pawn_presence(original,1) << " and for black: " << central_pawn_presence(original,0) << endl;
-        cout << "The positional eval is: " << positional_eval(original,W) << endl;
-        //cout << "The line is: \n";
-        //line(original,wfh,depth,W,INT_MIN,INT_MAX);
-        //cout << "The line is over" << endl;
-        //cin.get();
-        int number_of_new_moves = all_moves(original,wfh);
+    int engine_move_old(BB* original, BB* wfh, bool pretty_print=0,int depth=1, WEIGHTS W=WEIGHTS_OG,lookup_table* table=0,FILE* pipe=0)
+    {
+        int alpha=INT_MIN,beta=INT_MAX;
+        int best_move_index=0;
+        
+        bool table_provides_eval=0;
+        Move tabulated_move;
+
+        PV_Line pv_line =PV_Line(original->white_move ? INT_MIN : INT_MAX);//initialize with worst possible value for the player to movey
+        PV_Line tt_hint;
+        bool is_tt_hint_found=0;
+        if(table)
+        {
+            TT_readout readout = table->is_retrivable_eval(original,depth);
+            if(readout.is_found)
+            {
+                if(depth<=readout.pv_line.depth)
+                {
+                    if(readout.pv_line.bound_type==0 && readout.pv_line.current_lenght>0)//exact
+                    {
+                        table_provides_eval=1;
+                        pv_line=readout.pv_line;
+                        pv_line.depth=readout.pv_line.depth;
+                        tabulated_move=readout.pv_line.moves[0];
+                    }
+                    
+                    else if(depth==readout.pv_line.depth)//only on exact depth alpha and beta can be updated
+                    {
+                        //update alpha and beta based on the bound type
+                        if(readout.pv_line.bound_type == -1) // lower bound
+                        alpha = max(alpha, readout.pv_line.eval);
+                        else if(readout.pv_line.bound_type == 1) // upper bound
+                        beta = min(beta, readout.pv_line.eval);
+                    }
+                }
+                tt_hint=readout.pv_line;
+                is_tt_hint_found=1;
+            }
+        }
+        auto result = all_moves(original,wfh);
+        int number_of_new_moves = std::get<0>(result);
+        vector<Move> moves = std::get<1>(result);
         if(number_of_new_moves==1)
         {
             copy_BB(wfh,original);
             return INT_MAX/2;
         }
-        vector<int> indices = sorting_moves(wfh,number_of_new_moves,original->white_move,W);//descending
+        vector<int> indices = sorting_moves(wfh,moves,number_of_new_moves,original->white_move,&tt_hint,0,W);//descending
+        
+        if(table_provides_eval)//may need rework
+            {
+                int i=indices[0];
+                if(pipe)
+                {
+                    const int displayed_length = pv_line.current_lenght;
+                    //min(pv_line.depth,pv_line.current_lenght);
+                    vector<Move> pv_moves(pv_line.moves,
+                                          pv_line.moves + displayed_length);
+                    write_to_python_script(pipe, "PV depth=" + to_string(depth) +
+                                                " eval=" + to_string(pv_line.eval) +
+                                                " " + moves_to_PGN(*original, pv_moves));
+                }
+                copy_BB(wfh+i,original);
+                return pv_line.eval;
+            }
         prunable_moves_total+=number_of_new_moves-1;//analizing how efficient pruning is.
-        int alpha=INT_MIN,beta=INT_MAX;
-        int best_eval= original->white_move ? INT_MIN : INT_MAX;
-        int best_move_index=0;
         //cout << "Engine move calls assign_depth" << endl;
-        vector<int> local_depth = assign_depth(original,wfh,number_of_new_moves,depth);
+        const int alpha_0 = alpha, beta_0 = beta;
+        PV_Line best_candidate_PV_line;
+        bool best_candidate_PV_line_initialized=0;
         for(int i=indices[0],k=0;k<number_of_new_moves;k++,i=indices[k])
         {
-            int eval=minimax(wfh+i,wfh+number_of_new_moves,local_depth[i],0,W,alpha,beta,table);
-           // cout << "The move is: " << get_move(original,wfh+i) << endl;
-            //cout << "The eval is: " << eval << endl;
+            Move move = moves[indices[k]];
+            int depth_to_use=depth-1;
+            if(captures_more_valuable_piece(original,wfh+i,W))
+            depth_to_use++;
+            PV_Line candidate_PV_line;
+            for(int j=0;j<=depth_to_use;j++)
+            {
+                candidate_PV_line = minimax(wfh+i,wfh+number_of_new_moves,j,W,alpha,beta,table);
+            }
+            int eval = candidate_PV_line.eval;
             if(eval<INT_MIN+max_mating_seq)//this assures the quickest mate
             eval++;
             if(eval>INT_MAX-max_mating_seq)//this assures the quickest mate
             eval--;
             if(original->white_move)
             {
-                if(eval>best_eval)
-                best_move_index=i;
-
-                best_eval=max(best_eval,eval);
+                if(eval>pv_line.eval)
+                {
+                    best_move_index=i;
+                    pv_line = PV_Line(move,depth,&candidate_PV_line);
+                    best_candidate_PV_line = candidate_PV_line;
+                    best_candidate_PV_line_initialized=1;
+                }
+                pv_line.eval=max(pv_line.eval,eval);
                 alpha=max(alpha,eval);
             }
             else 
             {
-                if(eval<best_eval)
-                best_move_index=i;
+                if(eval<pv_line.eval)
+                {
+                    best_move_index=i;
+                    pv_line = PV_Line(move,depth,&candidate_PV_line);
+                    best_candidate_PV_line = candidate_PV_line;
+                    best_candidate_PV_line_initialized=1;
+                }
 
-                best_eval=min(best_eval,eval);
+                pv_line.eval=min(pv_line.eval,eval);
                 beta=min(beta,eval);
             }
             if(beta<=alpha)
@@ -949,13 +796,342 @@ class Play  : public initialize_FEN_to
                 break;
             }
         }
-        original->eval=best_eval;
-        //cout << "local_depth: " << local_depth[best_move_index] << endl;
-        //cout << "The best move is: " << get_move(original,wfh+best_move_index) << endl;
-        //cout << "The best eval is: " << best_eval << endl;
-        copy_BB(wfh+best_move_index,original);
+        //now correct for fail low
+        if(pv_line.eval <= alpha_0)
+            pv_line.bound_type = 1;   // upper bound (fail-low)
+        else if(pv_line.eval >= beta_0)
+            pv_line.bound_type = -1;  // lower bound (fail-high)
+        else
+            pv_line.bound_type = 0;   // exact
+        if(table)
+        {
+            TT_entry entry;
+            entry.board = *original;
+            entry.zobrist_hash=original->zobrist_hash;
+            entry.pv_line = pv_line;
+            entry.initialized=1;
+            table->insert(entry);
+        }
+        if(pipe)
+        {
+            const int displayed_length = min(pv_line.depth,
+                                              pv_line.current_lenght);
+            vector<Move> pv_moves(pv_line.moves,
+                                  pv_line.moves + displayed_length);
+            write_to_python_script(pipe, "PV depth=" + to_string(depth) +
+                                        " eval=" + to_string(pv_line.eval) +
+                                        " " + moves_to_PGN(*original, pv_moves));
+        }
+        //now print the engine line
+        if(best_candidate_PV_line_initialized)
+        cout << "The best candidate PV line was initialized!" << endl;
+        else
+        cout << "The best candidate PV line was NOT initialized!" << endl;
+        cout << "The best candidate PV line is: " << endl;
+        for(int i=0;i<best_candidate_PV_line.current_lenght;i++)
+        {
+            cout << "best_candidate_PV_line.depth: " << best_candidate_PV_line.depth << endl;
+            Move move = best_candidate_PV_line.moves[i];
+            int starting_rank = move.from/8;
+            char starting_file = 'a' + (move.from % 8);
+            int ending_rank = move.to/8;
+            char ending_file = 'a' + (move.to % 8);
+            cout << starting_file << starting_rank+1 << " " << ending_file << ending_rank+1 << std::endl;
+        }
+        cout << "The engine line is: " << endl;
         
-        return best_eval;
+        for(int i=0;i<pv_line.current_lenght;i++)
+        {
+            cout << "pv_line.depth: " << pv_line.depth << endl;
+            Move move = pv_line.moves[i];
+            int starting_rank = move.from/8;
+            char starting_file = 'a' + (move.from % 8);
+            int ending_rank = move.to/8;
+            char ending_file = 'a' + (move.to % 8);
+            cout << starting_file << starting_rank+1 << " " << ending_file << ending_rank+1 << std::endl;
+            
+        }
+        const int displayed_length = min(pv_line.depth,
+                          pv_line.current_lenght);
+        vector<Move> pv_moves(pv_line.moves,
+                      pv_line.moves + displayed_length);
+        cout << "Pretty engine line: " << moves_to_PGN(*original, pv_moves) << std::endl;
+        cout << "Evaluation after this move: " << pv_line.eval << std::endl;
+        copy_BB(wfh+best_move_index,original);
+        return pv_line.eval;
+    }
+
+    // Thin wrapper around minimax(): minimax already returns the root PV, so the only
+    // thing kept here is the outer iterative-deepening loop, which feeds the lookup
+    // table forward from shallow to deep so sorting_moves gets a good PV-move hint at
+    // every depth. Everything minimax already does internally (root TT short-circuit,
+    // alpha-beta, TT insertion) is not duplicated here.
+    int engine_move(BB* original, BB* wfh, bool pretty_print=0,int depth=1, WEIGHTS W=WEIGHTS_OG,lookup_table* table=0,FILE* pipe=0)
+    {
+        auto result = all_moves(original,wfh);
+        int number_of_new_moves = std::get<0>(result);
+        vector<Move> moves = std::get<1>(result);
+        if(number_of_new_moves==1)
+        {
+            copy_BB(wfh,original);
+            return INT_MAX/2;
+        }
+
+        PV_Line pv_line;
+        for(int d=1;d<=depth;d++)
+        {
+            pv_line = minimax(original,wfh+number_of_new_moves,d,W,INT_MIN,INT_MAX,table);
+            if(pipe)
+            {
+                const int displayed_length = min(pv_line.depth,pv_line.current_lenght);
+                vector<Move> pv_moves(pv_line.moves,pv_line.moves+displayed_length);
+                write_to_python_script(pipe, "PV depth=" + to_string(d) +
+                                            " eval=" + to_string(pv_line.eval) +
+                                            " " + moves_to_PGN(*original, pv_moves));
+            }
+        }
+
+        int best_move_index=0;
+        for(int i=0;i<number_of_new_moves;i++)
+        {
+            if(moves[i]==pv_line.moves[0])
+            {
+                best_move_index=i;
+                break;
+            }
+        }
+
+        if(pretty_print)
+        {
+            const int displayed_length = min(pv_line.depth,pv_line.current_lenght);
+            vector<Move> pv_moves(pv_line.moves,pv_line.moves+displayed_length);
+            cout << "Engine line: " << moves_to_PGN(*original, pv_moves) << std::endl;
+            cout << "Evaluation after this move: " << pv_line.eval << std::endl;
+        }
+
+        copy_BB(wfh+best_move_index,original);
+        return pv_line.eval;
+    }
+
+    int engine_move_for_time_testing(BB* original, BB* wfh, bool pretty_print=0,int depth=1, WEIGHTS W=WEIGHTS_OG,lookup_table* table=0,FILE* pipe=0)
+    {
+        int alpha=INT_MIN,beta=INT_MAX;
+        int best_move_index=0;
+        
+        bool table_provides_eval=0;
+        Move tabulated_move;
+
+        PV_Line pv_line =PV_Line(original->white_move ? INT_MIN : INT_MAX);//initialize with worst possible value for the player to movey
+        PV_Line tt_hint;
+        bool is_tt_hint_found=0;
+        if(table)
+        {
+            TT_readout readout = table->is_retrivable_eval(original,depth);
+            if(readout.is_found)
+            {
+                if(depth<=readout.pv_line.depth)
+                {
+                    if(readout.pv_line.bound_type==0 && readout.pv_line.current_lenght>0)//exact
+                    {
+                        table_provides_eval=1;
+                        pv_line=readout.pv_line;
+                        pv_line.depth=readout.pv_line.depth;
+                        tabulated_move=readout.pv_line.moves[0];
+                    }
+                    
+                    else if(depth==readout.pv_line.depth)//only on exact depth alpha and beta can be updated
+                    {
+                        //update alpha and beta based on the bound type
+                        if(readout.pv_line.bound_type == -1) // lower bound
+                        alpha = max(alpha, readout.pv_line.eval);
+                        else if(readout.pv_line.bound_type == 1) // upper bound
+                        beta = min(beta, readout.pv_line.eval);
+                    }
+                }
+                tt_hint=readout.pv_line;
+                is_tt_hint_found=1;
+            }
+        }
+        auto result = all_moves(original,wfh);
+        int number_of_new_moves = std::get<0>(result);
+        vector<Move> moves = std::get<1>(result);
+        if(number_of_new_moves==1)
+        {
+            copy_BB(wfh,original);
+            return INT_MAX/2;
+        }
+        vector<int> indices = sorting_moves(wfh,moves,number_of_new_moves,original->white_move,&tt_hint,0,W);//descending
+        
+        if(table_provides_eval)
+            {
+                int i=indices[0];
+                if(pipe)
+                {
+                    const int displayed_length = pv_line.current_lenght;
+                    //min(pv_line.depth,pv_line.current_lenght);
+                    vector<Move> pv_moves(pv_line.moves,
+                                          pv_line.moves + displayed_length);
+                    write_to_python_script(pipe, "PV depth=" + to_string(depth) +
+                                                " eval=" + to_string(pv_line.eval) +
+                                                " " + moves_to_PGN(*original, pv_moves));
+                }
+                copy_BB(wfh+i,original);
+                return pv_line.eval;
+            }
+        prunable_moves_total+=number_of_new_moves-1;//analizing how efficient pruning is.
+        //cout << "Engine move calls assign_depth" << endl;
+        const int alpha_0 = alpha, beta_0 = beta;
+        PV_Line best_candidate_PV_line;
+        bool best_candidate_PV_line_initialized=0;
+        for(int i=indices[0],k=0;k<number_of_new_moves;k++,i=indices[k])
+        {
+            Move move = moves[indices[k]];
+            int depth_to_use=depth-1;
+            if(captures_more_valuable_piece(original,wfh+i,W))
+            depth_to_use++;
+            PV_Line candidate_PV_line;
+            // for(int j=depth_to_use;j<=depth_to_use;j++)
+            // candidate_PV_line = minimax(wfh+i,wfh+number_of_new_moves,j,W,alpha,beta,table);
+            printf("Evaluating move %d/%d: %s\n", k + 1, number_of_new_moves, get_UCI(original, wfh + i).c_str());
+            print(wfh[i].Board);
+            //time the minimax calls with and without lookup table
+            auto start_time = chrono::high_resolution_clock::now();
+            PV_Line pv_line_without_lookup_table = minimax(wfh+i,wfh+number_of_new_moves,depth_to_use,W,alpha,beta,NULL);
+            auto end_time = chrono::high_resolution_clock::now();
+            auto duration_without_lookup = chrono::duration_cast<chrono::milliseconds>(end_time - start_time).count();
+            auto start_time_with_lookup = chrono::high_resolution_clock::now();
+            PV_Line pv_line_with_lookup_table = minimax(wfh+i,wfh+number_of_new_moves,depth_to_use,W,alpha,beta,table);
+            auto end_time_with_lookup = chrono::high_resolution_clock::now();
+            auto duration_with_lookup = chrono::duration_cast<chrono::milliseconds>(end_time_with_lookup - start_time_with_lookup).count();
+            
+            //now delte the contents of the lookup table to see the difference
+            table->reset();
+            auto start_time_with_lookup_v2 = chrono::high_resolution_clock::now();
+            PV_Line pv_line_with_lookup_table_v2 = minimax(wfh+i,wfh+number_of_new_moves,depth_to_use,W,alpha,beta,table);
+            auto end_time_with_lookup_v2 = chrono::high_resolution_clock::now();
+            auto duration_with_lookup_v2 = chrono::duration_cast<chrono::milliseconds>(end_time_with_lookup_v2 - start_time_with_lookup_v2).count();
+            
+            //now a third time first delete the tables contents, then call minimax with iterativly increasing depth
+            table->reset();
+            auto start_time_with_lookup_v3 = chrono::high_resolution_clock::now();
+            PV_Line pv_line_with_lookup_table_v3;
+            for(int j=0;j<=depth_to_use;j++)
+            {
+                pv_line_with_lookup_table_v3 = minimax(wfh+i,wfh+number_of_new_moves,j,W,alpha,beta,table);
+            }
+            auto end_time_with_lookup_v3 = chrono::high_resolution_clock::now();
+            auto duration_with_lookup_v3 = chrono::duration_cast<chrono::milliseconds>(end_time_with_lookup_v3 - start_time_with_lookup_v3).count();
+            cout << "Time taken without lookup table: " << duration_without_lookup << " ms" << endl;
+            cout << "Time taken with lookup table (with lookup table filled from previous moves): " << duration_with_lookup << " ms" << endl;
+            cout << "Time taken with lookup table v2 (no precomputed table): " << duration_with_lookup_v2 << " ms" << endl;
+            cout << "Time taken with lookup table v3 (iterative deepening): " << duration_with_lookup_v3 << " ms" << endl;
+
+
+            cout << "Eval and bound type without lookup table: " << pv_line_without_lookup_table.eval << ", bound type: " << pv_line_without_lookup_table.bound_type << endl;
+            cout << "Eval and bound type with lookup table: " << pv_line_with_lookup_table.eval << ", bound type: " << pv_line_with_lookup_table.bound_type << endl;
+            cout << "Eval and bound type with lookup table v2: " << pv_line_with_lookup_table_v2.eval << ", bound type: " << pv_line_with_lookup_table_v2.bound_type << endl;
+            cout << "Eval and bound type with lookup table v3: " << pv_line_with_lookup_table_v3.eval << ", bound type: " << pv_line_with_lookup_table_v3.bound_type << endl;
+            cin.get(); // Wait for user input before proceeding
+            candidate_PV_line = pv_line_with_lookup_table;
+            int eval = candidate_PV_line.eval;
+            if(eval<INT_MIN+max_mating_seq)//this assures the quickest mate
+            eval++;
+            if(eval>INT_MAX-max_mating_seq)//this assures the quickest mate
+            eval--;
+            if(original->white_move)
+            {
+                if(eval>pv_line.eval)
+                {
+                    best_move_index=i;
+                    pv_line = PV_Line(move,depth,&candidate_PV_line);
+                    best_candidate_PV_line = candidate_PV_line;
+                    best_candidate_PV_line_initialized=1;
+                }
+                pv_line.eval=max(pv_line.eval,eval);
+                alpha=max(alpha,eval);
+            }
+            else 
+            {
+                if(eval<pv_line.eval)
+                {
+                    best_move_index=i;
+                    pv_line = PV_Line(move,depth,&candidate_PV_line);
+                    best_candidate_PV_line = candidate_PV_line;
+                    best_candidate_PV_line_initialized=1;
+                }
+
+                pv_line.eval=min(pv_line.eval,eval);
+                beta=min(beta,eval);
+            }
+            if(beta<=alpha)
+            {
+                pruned_moves+=number_of_new_moves-k-1;
+                break;
+            }
+        }
+        //now correct for fail low
+        if(pv_line.eval <= alpha_0)
+            pv_line.bound_type = 1;   // upper bound (fail-low)
+        else if(pv_line.eval >= beta_0)
+            pv_line.bound_type = -1;  // lower bound (fail-high)
+        else
+            pv_line.bound_type = 0;   // exact
+        if(table)
+        {
+            TT_entry entry;
+            entry.board = *original;
+            entry.zobrist_hash=original->zobrist_hash;
+            entry.initialized = true;
+            entry.pv_line = pv_line;
+            table->insert(entry);
+        }
+        if(pipe)
+        {
+            const int displayed_length = min(pv_line.depth,
+                                              pv_line.current_lenght);
+            vector<Move> pv_moves(pv_line.moves,
+                                  pv_line.moves + displayed_length);
+            write_to_python_script(pipe, "PV depth=" + to_string(depth) +
+                                        " eval=" + to_string(pv_line.eval) +
+                                        " " + moves_to_PGN(*original, pv_moves));
+        }
+        //now print the engine line
+        if(best_candidate_PV_line_initialized)
+        cout << "The best candidate PV line was initialized!" << endl;
+        else
+        cout << "The best candidate PV line was NOT initialized!" << endl;
+        cout << "The best candidate PV line is: " << endl;
+        for(int i=0;i<best_candidate_PV_line.current_lenght;i++)
+        {
+            cout << "best_candidate_PV_line.depth: " << best_candidate_PV_line.depth << endl;
+            Move move = best_candidate_PV_line.moves[i];
+            int starting_rank = move.from/8;
+            char starting_file = 'a' + (move.from % 8);
+            int ending_rank = move.to/8;
+            char ending_file = 'a' + (move.to % 8);
+            cout << starting_file << starting_rank+1 << " " << ending_file << ending_rank+1 << std::endl;
+        }
+        cout << "The engine line is: " << endl;
+        
+        for(int i=0;i<pv_line.current_lenght;i++)
+        {
+            cout << "pv_line.depth: " << pv_line.depth << endl;
+            Move move = pv_line.moves[i];
+            int starting_rank = move.from/8;
+            char starting_file = 'a' + (move.from % 8);
+            int ending_rank = move.to/8;
+            char ending_file = 'a' + (move.to % 8);
+            cout << starting_file << starting_rank+1 << " " << ending_file << ending_rank+1 << std::endl;
+            
+        }
+        const int displayed_length = min(pv_line.depth,
+                          pv_line.current_lenght);
+        vector<Move> pv_moves(pv_line.moves,
+                      pv_line.moves + displayed_length);
+        cout << "Pretty engine line: " << moves_to_PGN(*original, pv_moves) << std::endl;
+        cout << "Evaluation after this move: " << pv_line.eval << std::endl;
+        copy_BB(wfh+best_move_index,original);
+        return pv_line.eval;
     }
 
     int nicely_written_play() // 1 means white wins, -1 means black wins, 2 means stalemate /draw, 3 means terminated game
@@ -981,28 +1157,28 @@ class Play  : public initialize_FEN_to
         while(game_lenght++<p.max_game_lengh || p.is_human_play)
         {
             number_of_half_moves++;
-            int number_of_new_moves = all_moves(original,p.wfh+200);
+            auto temp = all_moves(original,p.wfh+200);
+            int number_of_new_moves = std::get<0>(temp);
+            Move* moves = std::get<1>(temp).data();
             print(original->Board);
             cout << endl << get_FEN(*original) << endl;
-            //print(attacks_by_col(original->Board,original->white_move));
-            //print_history_to_file(history,"game.txt");
-            //cout << "Tactiacl potential: " << tactical_potential(original->Board) << endl;
-            //cin.get();
-            //cout << "The line is: \n";
-            //cout <<"The depth is: " << p.depth << endl;
-            //cout << "The line at depth " << p.depth << " is: \n";
-            //line(original,p.wfh,p.depth,p.W,INT_MIN,INT_MAX);
-            //cout << "The line is over" << endl;
-            //cin.get();
-            //cout << "Piece activity_eval: " << piece_activity_eval(original) << endl;
             bool WM=original->white_move;
             if(!(p.colour==WM && p.is_human_play)&& p.show_eval)//if its an engine move
             interpret_eval(current_eval);
             
             
             store_original=*original;
-            
-            
+
+            int tt_insertions_before=0, tt_succ_before=0, tt_attempted_before=0;
+            if(p.table)
+            {
+                tt_insertions_before = p.table->number_of_inserions;
+                tt_succ_before = p.table->number_of_succ_readouts;
+                tt_attempted_before = p.table->number_of_attemted_readouts;
+            }
+
+            //time the engine move
+            auto start_time = chrono::high_resolution_clock::now();
             if(p.colour==WM && p.is_human_play)
             {
                 if(!p.is_pretty_print)
@@ -1012,29 +1188,56 @@ class Play  : public initialize_FEN_to
             }
             else if(p.colour!=WM && p.is_human_play)
             {
-                current_eval = engine_move(original,p.wfh,p.show_eval,p.depth,p.W,p.table);
+                current_eval = engine_move(original,p.wfh,p.show_eval,p.depth,p.W,p.table,p.pipe);
             }
             else if(WM)
             {
-                current_eval = engine_move(original,p.wfh,p.show_eval,p.depth,p.W_white,p.table);
+                current_eval = engine_move(original,p.wfh,p.show_eval,p.depth,p.W_white,p.table,p.pipe);
             }
             else if(!WM)
             {
-                current_eval = engine_move(original,p.wfh,p.show_eval,p.depth,p.W_black,p.table);
+                current_eval = engine_move(original,p.wfh,p.show_eval,p.depth,p.W_black,p.table,p.pipe);
             }
+            auto end_time = chrono::high_resolution_clock::now();
+            auto duration = chrono::duration_cast<chrono::milliseconds>(end_time - start_time).count();
+            
             if(p.is_supposed_to_give_out_move)
             cout << game_lenght  << ". "<< get_move(&store_original,original) << endl;
+
             if(!p.is_pretty_print&&p.print_Board)
             print(original->Board);
             else if(p.print_Board)
             write_to_python_script(p.pipe,get_UCI(&store_original,original));
+            if(!p.is_human_play || p.colour!=WM)
+            {
+                cout << "Time taken for this move by the engine: " << duration << " ms" << endl;
+            }
+            //print infor about the lookup table
+            if(p.table)
+            {
+                p.table->get_number_of_entrys();
+                int number_of_full_collosion = p.table->get_number_of_full_collisions();
+                bool there_are_doubles = p.table->there_are_doubles();
+                cout << "Number of full collisions in the lookup table: " << number_of_full_collosion << endl;
+                if(there_are_doubles)
+                cout << "There are doubles in the lookup table!" << endl;
+                else
+                cout << "There are no doubles in the lookup table!" << endl;
+                p.table->print_readout_delta(tt_insertions_before, tt_succ_before, tt_attempted_before);
+                p.table->print_depth_bound_type_histogram();
+            }
             
-            //print(original->Board);
             if(take_history)
             history.push_back(*original);
             game_result=result(original);
             if(game_result)
-            break;
+            {
+                print(original->Board);
+                cout << endl << get_FEN(*original) << endl;
+                break;
+            
+            }
+            
         }
 
         
@@ -1281,8 +1484,6 @@ double win_chance(int eval)
     return 50 + 50 * (2 / (1 + exp(-0.00368208 * eval)) - 1);
 }
 
-
-
 double accuracy(int eval_bevore, int eval_after)
 {
 
@@ -1292,7 +1493,7 @@ double accuracy(int eval_bevore, int eval_after)
     return max(0.0,round_to_percentage(return_value));
 }
 
-double* evaluate_game(vector<BB> history, const int remaining_calls, WEIGHTS W=WEIGHTS_OG)
+double* evaluate_game(vector<BB> history, const int depth, WEIGHTS W=WEIGHTS_OG)
 {
     double accuracy_per_move[history.size()-1];
     double score=0;
@@ -1303,14 +1504,16 @@ double* evaluate_game(vector<BB> history, const int remaining_calls, WEIGHTS W=W
     {   
         int corr_f=1-2*!history[i].white_move;
         
-        eval_bevore[i]=minimax(&history[i],wfh,remaining_calls,0,W)*corr_f;
-        int number_of_new_moves = all_moves(&history[i],wfh);
-        if(remaining_calls==0)
+        eval_bevore[i]=minimax(&history[i],wfh,depth,W).eval*corr_f;
+        auto temp = all_moves(&history[i],wfh);
+
+        int number_of_new_moves = std::get<0>(temp);
+        if(depth==0)
         {
             cout << "Error: The game is not over" << endl;
             exit(1);
         }
-        vector<int> assigned_depth = assign_depth(&history[i],wfh,number_of_new_moves,remaining_calls);
+        
         int index_of_alignment=-1;
         for(int j=0;j<number_of_new_moves;j++)
         {
@@ -1327,8 +1530,10 @@ double* evaluate_game(vector<BB> history, const int remaining_calls, WEIGHTS W=W
         }
         
         
-        //eval_after[i]=minimax(&history[i+1],wfh,assigned_depth[index_of_alignment],0,W);
-        eval_after[i]=minimax(&history[i+1],wfh,assigned_depth[i],0,W)*corr_f;
+        int depth_to_use=depth;
+        if(captures_more_valuable_piece(&history[i],&wfh[index_of_alignment],W))
+        depth_to_use++;
+        eval_after[i]=minimax(&history[i+1],wfh,depth_to_use,W).eval*corr_f;
         
         if(eval_after[i]<INT_MIN+max_mating_seq)
         eval_after[i]++;

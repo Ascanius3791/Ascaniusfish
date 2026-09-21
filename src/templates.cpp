@@ -1,3 +1,4 @@
+// OWNERSHIP=Ascanius
 #ifndef TEMPLATES_CPP
 #define TEMPLATES_CPP
 

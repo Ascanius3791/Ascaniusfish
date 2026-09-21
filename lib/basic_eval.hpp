@@ -1,5 +1,6 @@
-#ifndef EVAL_HPP
-#define EVAL_HPP
+// OWNERSHIP=Ascanius
+#ifndef BASIC_EVAL_HPP
+#define BASIC_EVAL_HPP
 #include "Bitboards.hpp"
 #include "Weights.hpp"
 #include "../src/templates.cpp"

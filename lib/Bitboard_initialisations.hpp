@@ -1,3 +1,4 @@
+// OWNERSHIP=Ascanius
 #ifndef BITBOARD_INITIALISATIONS_HPP
 #define BITBOARD_INITIALISATIONS_HPP
 #include"../src/Bitboards.cpp"

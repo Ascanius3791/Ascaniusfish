@@ -1,0 +1,27 @@
+# OWNERSHIP=Claude
+
+# Build artifacts (single-TU build produces these; see Makefile)
+a.out
+ascaniusfish
+ascaniusfish_test
+hash_table_test
+hash_game_test
+pv_first_move_diagnostic
+benchmarks/minimax_speed_test
+benchmarks/profile_startpos
+diagnostics/attack_invariants_probe
+diagnostics/cuckoo_cycle_table_probe
+diagnostics/debug_assign_depth
+diagnostics/engine_move_diag
+diagnostics/engine_move_diag_dbg
+diagnostics/lookup_consistency_test
+diagnostics/pawn_shift_probe
+diagnostics/ptt_probe
+*.gcda
+*.gcno
+
+# Ephemeral IPC state with the Python GUI, not meaningful to version
+last_move.txt
+
+# Python
+__pycache__/

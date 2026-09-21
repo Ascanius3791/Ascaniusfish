@@ -1,3 +1,4 @@
+// OWNERSHIP=Ascanius
 #ifndef SETTINGS_CPP
 #define SETTINGS_CPP
 
