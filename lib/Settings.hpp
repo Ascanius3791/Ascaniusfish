@@ -46,6 +46,15 @@ constexpr int TT_BUCKET_SIZE = 8;
 constexpr int PTT_EXPONENT_FOR_SIZE = 16;  //persistent transposition table: ~1.16GB
 constexpr int PTT_BUCKET_SIZE = 8;
 
+//==================================================================================================================================
+//repetition/cycle detection (see minimax()'s path_history/ply parameters in
+//ascaniusfish_2.hpp). Bounds the fixed-size BB path array threaded through the
+//search: large enough to cover the 50-move-rule's 100-ply reversible window
+//plus generous headroom for deep capture-extended lines (assign_depth can push
+//capture sequences well past the nominal search depth). Ply indices at or past
+//this bound simply skip repetition checking for that node rather than overflow.
+constexpr int MAX_SEARCH_PLY = 512;
+
 
 
 

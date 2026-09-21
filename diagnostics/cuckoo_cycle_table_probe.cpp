@@ -208,6 +208,144 @@ int main()
         }
     }
 
+    // --- verify_move_is_legal_now / detect_upcoming_cycle ---
+    // These need real board occupancy, so squares are found by SEARCHING with
+    // the same attack-table queries the code under test uses, rather than
+    // hardcoded algebraic squares (this file doesn't assume any particular
+    // square-index<->algebraic mapping).
+    {
+        // Reuse the same knight pair as before: board_a (knight on knight_from)
+        // and board_b (knight on knight_to, one ply later) are a genuine
+        // one-move-apart pair with identical castling/en-passant.
+        BB board_a = BB();
+        int knight_from = 10;
+        uint64_t reachable = Kn_template[knight_from];
+        int knight_to = find_and_delete_trailling_1(reachable);
+        board_a.Board[2] = 1ULL << knight_from;
+        board_a.zobrist_hash = Zobrist::compute_Zobrist_Hash(board_a);
+
+        BB board_b = board_a;
+        board_b.Board[2] = 1ULL << knight_to;
+        board_b.white_move = !board_a.white_move;
+        board_b.zobrist_hash = Zobrist::compute_Zobrist_Hash(board_b);
+
+        // detect_upcoming_cycle from board_b's perspective: it's one move away
+        // from recreating board_a (moving the knight back). Nothing else is on
+        // the board, so this move is trivially legal (empty destination, no
+        // blockers, no king anywhere to put in check... but verify_move_is_legal_now
+        // still needs a king to exist for in_check() to behave sensibly, so add
+        // kings for both sides, far from the knight's path).
+        int white_king_sq = 0;
+        while((Kn_template[knight_from] | Kn_template[knight_to] | (1ULL<<knight_from) | (1ULL<<knight_to)) & (1ULL<<white_king_sq))
+        white_king_sq++;
+        int black_king_sq = 63;
+        while(((Kn_template[knight_from] | Kn_template[knight_to] | (1ULL<<knight_from) | (1ULL<<knight_to) | (1ULL<<white_king_sq))) & (1ULL<<black_king_sq))
+        black_king_sq--;
+
+        board_a.Board[5] = 1ULL << white_king_sq;   // white king
+        board_a.Board[11] = 1ULL << black_king_sq;  // black king
+        board_a.zobrist_hash = Zobrist::compute_Zobrist_Hash(board_a);
+        board_b.Board[5] = 1ULL << white_king_sq;
+        board_b.Board[11] = 1ULL << black_king_sq;
+        board_b.zobrist_hash = Zobrist::compute_Zobrist_Hash(board_b);
+
+        {
+            int found_piece_type;
+            Move found_move;
+            bool found = table.detect_upcoming_cycle(board_b, board_a, 1, found_piece_type, found_move);
+            expect(found, "detect_upcoming_cycle: a genuinely legal reversible move back to an ancestor should be found");
+            expect(found_move==Move(knight_to, knight_from), "detect_upcoming_cycle: move should be oriented from board_b's own piece placement");
+        }
+
+        // Occupied destination: put an unrelated piece (a pawn - irrelevant to
+        // the move being tested) on knight_from, so board_b's knight "moving
+        // back" would land on an occupied square.
+        {
+            BB board_b_blocked = board_b;
+            board_b_blocked.Board[0] |= (1ULL << knight_from); // white pawn, occupies the destination
+            int found_piece_type;
+            Move found_move;
+            bool found = table.detect_upcoming_cycle(board_b_blocked, board_a, 1, found_piece_type, found_move);
+            expect(!found, "detect_upcoming_cycle: must reject when the destination square is occupied");
+        }
+    }
+
+    // Blocked sliding path: find a rook move that only works on an empty
+    // board, then confirm a real blocker on the ray makes verify_move_is_legal_now
+    // reject it (even though probe()/probe_full() still "match" the delta,
+    // since they don't know about real occupancy).
+    {
+        int rook_from = 0;
+        int rook_to = -1, blocker_square = -1;
+        uint64_t empty_board_targets = get_rook_attacks(rook_from, 0ULL);
+        uint64_t targets_copy = empty_board_targets;
+        while(targets_copy && rook_to==-1)
+        {
+            int candidate_to = find_and_delete_trailling_1(targets_copy);
+            for(int blocker=0; blocker<64 && rook_to==-1; blocker++)
+            {
+                if(blocker==rook_from || blocker==candidate_to) continue;
+                uint64_t occ = (1ULL<<rook_from) | (1ULL<<blocker);
+                if(!(get_rook_attacks(rook_from, occ) & (1ULL<<candidate_to)))
+                {
+                    rook_to = candidate_to;
+                    blocker_square = blocker;
+                }
+            }
+        }
+        expect(rook_to!=-1, "test setup: should find a rook move on an empty board that a real blocker can interrupt");
+
+        BB board = BB();
+        board.Board[1] = 1ULL << rook_from;   // white rook
+        board.Board[0] = 1ULL << blocker_square; // white pawn as the blocker
+        int wk = 0; while((board.Board[1]|board.Board[0]|(1ULL<<rook_to)) & (1ULL<<wk)) wk++;
+        int bk = 63; while((board.Board[1]|board.Board[0]|(1ULL<<rook_to)|(1ULL<<wk)) & (1ULL<<bk)) bk--;
+        board.Board[5] = 1ULL << wk;
+        board.Board[11] = 1ULL << bk;
+
+        bool legal = table.verify_move_is_legal_now(board, 1, Move(rook_from, rook_to));
+        expect(!legal, "verify_move_is_legal_now: must reject a slide blocked by a real piece, even though the empty-board table says it's reachable");
+    }
+
+    // Moving into check: find a king step + an enemy rook placement such that
+    // the destination square is attacked only AFTER the king arrives there
+    // (king isn't currently in check - isolates the "moving into check" case).
+    {
+        int wk=-1, king_to=-1, enemy_rook_sq=-1;
+        for(int candidate_wk=0; candidate_wk<64 && wk==-1; candidate_wk++)
+        {
+            uint64_t dests = K_template[candidate_wk];
+            uint64_t dests_copy = dests;
+            while(dests_copy && wk==-1)
+            {
+                int to = find_and_delete_trailling_1(dests_copy);
+                for(int f=0; f<64; f++)
+                {
+                    if(f==candidate_wk || f==to) continue;
+                    uint64_t occ_after  = (1ULL<<to) | (1ULL<<f);
+                    uint64_t occ_before = (1ULL<<candidate_wk) | (1ULL<<f);
+                    bool attacks_to_after = (get_rook_attacks(f, occ_after) & (1ULL<<to)) != 0;
+                    bool attacks_wk_before = (get_rook_attacks(f, occ_before) & (1ULL<<candidate_wk)) != 0;
+                    if(attacks_to_after && !attacks_wk_before)
+                    {
+                        wk=candidate_wk; king_to=to; enemy_rook_sq=f;
+                        break;
+                    }
+                }
+            }
+        }
+        expect(wk!=-1, "test setup: should find a king step that walks into an enemy rook's line");
+
+        BB board = BB();
+        board.Board[5] = 1ULL << wk;             // white king
+        board.Board[7] = 1ULL << enemy_rook_sq;  // black rook
+        int bk = 63; while((board.Board[5]|board.Board[7]|(1ULL<<king_to)) & (1ULL<<bk)) bk--;
+        board.Board[11] = 1ULL << bk;             // black king, out of the way
+
+        bool legal = table.verify_move_is_legal_now(board, 5, Move(wk, king_to));
+        expect(!legal, "verify_move_is_legal_now: must reject a king move that walks into check");
+    }
+
     std::cout << "All CuckooCycleTable probe checks passed." << std::endl;
     return 0;
 }

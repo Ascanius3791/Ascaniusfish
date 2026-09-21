@@ -114,6 +114,60 @@ bool CuckooCycleTable::probe_full(const BB& board_a, const BB& board_b, int ply_
     return probe_with_board_check(board_a.zobrist_hash, board_b.zobrist_hash, ply_gap, board_a, piece_type_out, move_out);
 }
 
+bool CuckooCycleTable::verify_move_is_legal_now(const BB& board, int piece_type, const Move& move) const
+{
+    uint64_t occupancy = 0;
+    for(int i=0;i<12;i++)
+    occupancy |= board.Board[i];
+
+    //the table only ever represents QUIET moves - if the destination is
+    //occupied (by either side), this isn't actually that quiet move
+    if(occupancy & (1ULL << move.to))
+    return false;
+
+    //re-check geometric reachability against the REAL occupancy - populate()
+    //built the table assuming an empty board (get_*_attacks(square, 0ULL)),
+    //which is a superset of what a slider can actually reach once other
+    //pieces are in the way
+    int piece_kind = piece_type % 6; // 0=pawn,1=rook,2=knight,3=bishop,4=queen,5=king
+    uint64_t real_reachable;
+    switch(piece_kind)
+    {
+        case 1: real_reachable = get_rook_attacks(move.from, occupancy); break;
+        case 2: real_reachable = Kn_template[move.from]; break; //knights ignore blockers
+        case 3: real_reachable = get_bishop_attacks(move.from, occupancy); break;
+        case 4: real_reachable = get_rook_attacks(move.from, occupancy) | get_bishop_attacks(move.from, occupancy); break;
+        case 5: real_reachable = K_template[move.from]; break; //plain king step, castling isn't in this table
+        default: return false; //pawns (and anything else) were never inserted - shouldn't happen
+    }
+    if(!(real_reachable & (1ULL << move.to)))
+    return false;
+
+    //finally, making the move must not leave the mover's own king in check
+    BB after = board;
+    after.Board[piece_type] &= ~(1ULL << move.from);
+    after.Board[piece_type] |= (1ULL << move.to);
+    return !in_check(after.Board, board.white_move);
+}
+
+bool CuckooCycleTable::detect_upcoming_cycle(const BB& current_board, const BB& ancestor_board, int ply_gap, int& piece_type_out, Move& move_out) const
+{
+    int piece_type;
+    Move move;
+    if(!probe_full(current_board, ancestor_board, ply_gap, piece_type, move))
+    return false;
+
+    //probe_full() orients move_out from whichever board it was given as
+    //board_a - we passed current_board, so `move` already describes a move
+    //starting from current_board's own piece placement
+    if(!verify_move_is_legal_now(current_board, piece_type, move))
+    return false;
+
+    piece_type_out = piece_type;
+    move_out = move;
+    return true;
+}
+
 void CuckooCycleTable::populate()
 {
     //piece_type indices follow BB::Board's convention: 0-5 white (pawn, rook,

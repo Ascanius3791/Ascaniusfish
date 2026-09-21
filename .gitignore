@@ -17,6 +17,7 @@ diagnostics/engine_move_diag_dbg
 diagnostics/lookup_consistency_test
 diagnostics/pawn_shift_probe
 diagnostics/ptt_probe
+diagnostics/repetition_detection_probe
 *.gcda
 *.gcno
 

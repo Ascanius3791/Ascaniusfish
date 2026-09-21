@@ -1,5 +1,6 @@
 // OWNERSHIP=Ascanius
 #include"ascaniusfish.hpp"
+#include "lib/cuckoo_cycle_table.hpp"
 #include <algorithm>
 #include <cstdlib>//for communication with python
 #include <thread>
@@ -93,11 +94,64 @@ vector<int> sorting_moves(const BB* const Base, vector<Move> moves, int num, boo
     return indices;
 }
 
-PV_Line minimax(const BB*const original ,BB* const wfh ,int depth = 0, WEIGHTS W= WEIGHTS_OG,int alpha = INT_MIN, int beta = INT_MAX,lookup_table* const table=NULL)
+PV_Line minimax(const BB*const original ,BB* const wfh ,int depth = 0, WEIGHTS W= WEIGHTS_OG,int alpha = INT_MIN, int beta = INT_MAX,lookup_table* const table=NULL, BB* const path_history=nullptr, int ply=0, const CuckooCycleTable* const cycle_table=nullptr)
 {
     if(DEBUG_MODE)
     saefty_checks(original);
     number_of_mimimax_calls++;
+
+    // Repetition/cycle detection - runs BEFORE the TT probe below, since a
+    // TT-cached eval for this exact board doesn't know about THIS path's
+    // history: if this position is a repeat right now, a stale non-draw TT
+    // entry for the same raw board would be wrong here. Neither draw result
+    // below is inserted into the TT - unlike the stalemate/checkmate case
+    // further down, a repetition-forced draw is PATH-DEPENDENT (the same exact
+    // board can be a draw in one line and not in another), so caching it would
+    // corrupt a later, unrelated encounter of that board.
+    if(path_history && ply<MAX_SEARCH_PLY)
+    {
+        int window_start = max(0, ply - original->halfmoves_since_last_capture_or_pawn_move);
+
+        //exact repeat: same side to move, so only even ply gaps can match
+        for(int i=ply-2; i>=window_start; i-=2)
+        {
+            if(are_equal(&path_history[i], original))
+            {
+                PV_Line draw_pv_line = PV_Line(0);
+                draw_pv_line.depth = depth;
+                draw_pv_line.current_lenght = 0;
+                draw_pv_line.bound_type = 0;
+                return draw_pv_line;
+            }
+        }
+
+        //one reversible move from recreating an earlier position: opposite side
+        //to move right now, so only odd ply gaps are candidates. Starts at
+        //ply-3, NOT ply-1: ply_gap=1 means "the immediate parent", and undoing
+        //whatever move was just played to reach `original` is ALWAYS available
+        //for any quiet move - that's not a cycle, it's just what "reversible"
+        //means, and treating it as one would score almost every quiet move as
+        //an instant draw (this was a real bug - it made the engine play
+        //nearly at random, favoring whichever move sorting_moves tried first).
+        if(cycle_table)
+        {
+            for(int i=ply-3; i>=window_start; i-=2)
+            {
+                int found_piece_type;
+                Move found_move;
+                if(cycle_table->detect_upcoming_cycle(*original, path_history[i], ply-i, found_piece_type, found_move))
+                {
+                    PV_Line draw_pv_line = PV_Line(0);
+                    draw_pv_line.depth = depth;
+                    draw_pv_line.current_lenght = 0;
+                    draw_pv_line.bound_type = 0;
+                    return draw_pv_line;
+                }
+            }
+        }
+
+        path_history[ply] = *original;
+    }
 
     PV_Line tt_hint;
     bool is_tt_hint_found=0;
@@ -158,6 +212,7 @@ PV_Line minimax(const BB*const original ,BB* const wfh ,int depth = 0, WEIGHTS W
             depth++;
         }
     }
+    
     int exception_state=exception_eval(original);
     if(exception_state==1||exception_state==2)
         {
@@ -200,7 +255,7 @@ PV_Line minimax(const BB*const original ,BB* const wfh ,int depth = 0, WEIGHTS W
         if(captures_more_valuable_piece(original,wfh+indices[i],W))
         depth_to_use++;   
         Move move =moves[indices[i]];
-        PV_Line candidate_pv_line = minimax(wfh+indices[i],wfh+number_of_new_moves,depth_to_use,W,alpha,beta,table);
+        PV_Line candidate_pv_line = minimax(wfh+indices[i],wfh+number_of_new_moves,depth_to_use,W,alpha,beta,table,path_history,ply+1,cycle_table);
         int eval = candidate_pv_line.eval;
         if(eval<INT_MIN+max_mating_seq)//this assures the quickest mate
         eval++;
@@ -250,7 +305,6 @@ PV_Line minimax(const BB*const original ,BB* const wfh ,int depth = 0, WEIGHTS W
     return pv_line;
 }
 
-
 bool is_legit_input(char file, char rank)
 {
     if(rank == '1' || rank == '2' || rank == '3' || rank == '4' || rank == '5' || rank == '6' || rank == '7' || rank == '8')
@@ -263,9 +317,35 @@ bool is_legit_input(char file, char rank)
 int result(const BB* const original)//0=game on 1=white wins -1=black wins 2=draw
 {
     int exception_state=exception_eval(original);//0=no_exception 1=stalmate 2=checkmate
-    
+
     if(exception_state==0)
-    return 0;//game on
+    {
+        // Draw by threefold repetition: `history` (populated by
+        // nicely_written_play()) already has *original as its last entry at
+        // this point, so counting how many times this exact position (board +
+        // side to move + castling rights + en passant, via the existing
+        // are_equal()) appears in it naturally includes "now" as one
+        // occurrence. Bounded to the tail since the last capture/pawn move,
+        // same as minimax()'s own repetition window - nothing further back
+        // could ever repeat. This is the real FIDE threefold rule, not
+        // minimax()'s more aggressive search-time draw heuristic (which also
+        // treats a single upcoming-cycle as drawish for pruning purposes) -
+        // the two are deliberately different: one is the actual game result,
+        // the other is a search approximation.
+        int window_start = max(0, (int)history.size()-1-original->halfmoves_since_last_capture_or_pawn_move);
+        int occurrences = 0;
+        for(int i=(int)history.size()-1; i>=window_start; i--)
+        {
+            if(are_equal(&history[i], original))
+            occurrences++;
+        }
+        if(occurrences>=3)
+        {
+            cout << "Draw by threefold repetition." << endl;
+            return 2;//draw
+        }
+        return 0;//game on
+    }
     cout << "Thee war was result: " << exception_state << endl;
     if(exception_state==1)
     return 2;//draw
@@ -877,10 +957,24 @@ class Play  : public initialize_FEN_to
             return INT_MAX/2;
         }
 
+        // Repetition/cycle detection context for minimax(): built once (the
+        // CuckooCycleTable's population and the path array's default-construction
+        // both only happen on the very first call, thanks to `static`) and reseeded
+        // from the real game's `history` on every move. Only the tail bounded by
+        // halfmoves_since_last_capture_or_pawn_move is copied - nothing further
+        // back could ever be part of a repeat, and `history` itself can outgrow
+        // MAX_SEARCH_PLY over a long game.
+        static const CuckooCycleTable cycle_table;
+        static BB path_history[MAX_SEARCH_PLY];
+        int seed_count = min({(int)history.size(), original->halfmoves_since_last_capture_or_pawn_move+1, MAX_SEARCH_PLY});
+        for(int i=0;i<seed_count;i++)
+        path_history[i] = history[history.size()-seed_count+i];
+        int ply = (seed_count>0) ? seed_count-1 : 0;
+
         PV_Line pv_line;
         for(int d=1;d<=depth;d++)
         {
-            pv_line = minimax(original,wfh+number_of_new_moves,d,W,INT_MIN,INT_MAX,table);
+            pv_line = minimax(original,wfh+number_of_new_moves,d,W,INT_MIN,INT_MAX,table,path_history,ply,&cycle_table);
             if(pipe)
             {
                 const int displayed_length = min(pv_line.depth,pv_line.current_lenght);

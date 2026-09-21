@@ -8,13 +8,15 @@
 
 #include <cstdint>
 
-// Standalone building block for cheap "cycle" (upcoming/possible repetition)
-// detection, based on the technique used by Stockfish (see the chess programming
-// wiki's "cuckoo hashing" repetition-detection article). NOT wired into the
-// engine's search/minimax yet - this file only depends on already-initialized
-// Zobrist keys and slider-attack tables, so it can be built and tested in
-// isolation (call init_magics(); init_sliders_attacks(1); init_sliders_attacks(0);
-// and construct a Zobrist() before constructing a CuckooCycleTable).
+// Building block for cheap "cycle" (upcoming/possible repetition) detection,
+// based on the technique used by Stockfish (see the chess programming wiki's
+// "cuckoo hashing" repetition-detection article). Wired into minimax() via
+// detect_upcoming_cycle() below (see ascaniusfish_2.hpp). This file only
+// depends on already-initialized Zobrist keys and slider-attack tables, so it
+// can also be built and tested in isolation (call init_magics();
+// init_sliders_attacks(1); init_sliders_attacks(0); and construct a Zobrist()
+// before constructing a CuckooCycleTable - main() already does this at startup,
+// before any real move is requested, so the engine's own use needs no extra care).
 //
 // THE CORE IDEA: a quiet (non-capture, non-pawn, non-castling) move of one piece
 // from square A to square B changes the Zobrist hash by exactly
@@ -105,6 +107,33 @@ class CuckooCycleTable
     // hashes (not full boards) are available, e.g. a compact history array.
     bool probe_full(const BB& board_a, const BB& board_b, int ply_gap, int& piece_type_out, Move& move_out) const;
 
+    // probe_full() only proves the delta/board-identity math checks out - it
+    // does NOT prove the move is actually playable in `board` right now: the
+    // destination could be occupied (the table only ever represents quiet,
+    // non-capture moves), a sliding piece's path could be blocked by a real
+    // piece (the table was built assuming an empty board), or the move could
+    // leave the mover's own king in check. This checks all three against the
+    // real board, reusing the existing attack tables/in_check() rather than
+    // reimplementing move generation.
+    bool verify_move_is_legal_now(const BB& board, int piece_type, const Move& move) const;
+
+    // The single call site minimax() needs: current_board is the node being
+    // searched, ancestor_board is some earlier position from the search path,
+    // ply_gap is how many plies apart they are (must be ODD for this to mean
+    // anything - see the note on probe_full()/ply parity in
+    // src/cuckoo_cycle_table.cpp). Combines probe_full() with
+    // verify_move_is_legal_now(): true only if both agree this is a real,
+    // currently-legal move that would recreate ancestor_board.
+    //
+    // CALLER TRAP: never call this with ply_gap==1 (ancestor_board = the
+    // immediate parent). Undoing whatever move was just played to reach
+    // current_board is ALWAYS available for any quiet move - that's simply
+    // what "reversible" means, not a cycle - so it would return true for
+    // nearly every quiet move a caller ever asks about. This was a real bug
+    // in minimax()'s integration: it scored almost every non-capture move as
+    // an instant draw. Only ply_gap 3, 5, 7, ... are meaningful.
+    bool detect_upcoming_cycle(const BB& current_board, const BB& ancestor_board, int ply_gap, int& piece_type_out, Move& move_out) const;
+
     int size() const { return TABLE_SIZE; }
     int entries_stored() const { return stored_count; }
 
@@ -125,8 +154,8 @@ class CuckooCycleTable
     void populate();
 };
 
-// Not wired into ascaniusfish.hpp's central include chain yet (this class isn't
-// used anywhere in the standard engine flow), so the header pulls in its own
+// Not part of ascaniusfish.hpp's central include chain (ascaniusfish_2.hpp
+// includes this header directly instead), so it pulls in its own
 // implementation, the same way lib/RuntimeSettings.hpp does.
 #include "../src/cuckoo_cycle_table.cpp"
 
