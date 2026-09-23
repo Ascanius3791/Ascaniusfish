@@ -19,6 +19,7 @@
 #include "src/timers.cpp"
 #include "src/printing.cpp"
 #include "src/checks.cpp"
+#include "src/see.cpp"
 #include "src/python_communication.cpp"
 #include "src/lookup_table.cpp"
 #include "src/move_generation.cpp"
@@ -34,56 +35,7 @@ vector<BB> history(0);
 
 BB Standartboard;
 
-class CBE //combines eval, and position,and key(for later hash funktion)
-    {
-        public:
-        uint64_t Board[12];
-        bool castle[2][2];
-        bool en_peasent;
-        int pos_x;
-        int pos_y;
-        int move;
-        bool white_move;
-        bool has_not_been_evaluated;
-        int eval;
-        
-        bool is_filled;
-        
-            int key=0;
-
-            bool k_w = false;
-            bool b_k = false;
-            int num_wp;
-            int num_bp;
-            int num_wB;
-            int num_bB;
-            int num_wKn;
-            int num_bKn;
-            int num_wR;
-            int num_bR;
-            int num_wQ;
-            int num_bQ;
-        
-        CBE()
-        {
-            castle[0][0]=true;castle[0][1]=true;castle[1][0]=true;castle[1][1]=true;
-            en_peasent=false;
-            pos_x=0;pos_y=0;move=1;white_move=true;has_not_been_evaluated=true;eval=0;key=0;is_filled=false;
-            //initialize_FEN_to_standartboard(&Fen);//delete this this is for testing, it wastes time!
-            initialize_FEN_to::empty(Board);
-            num_wp = 0;
-            num_bp = 0;
-            num_wB = 0;
-            num_bB = 0;
-            num_wKn = 0;
-            num_bKn = 0;
-            num_wR = 0;
-            num_bR = 0;
-            num_wQ = 0;
-            num_bQ = 0;
-        }
-    };
-   
+  
 bool is_a_capture_avalable(const uint64_t Board[12], bool white_move)
 {
     uint64_t white_pieces = Board[0]|Board[1]|Board[2]|Board[3]|Board[4]|Board[5];
@@ -127,75 +79,30 @@ inline bool captures_more_valuable_piece(const BB* const parent, const BB* const
     return W.piece_value[captured_piece] > W.piece_value[moving_piece];
 }
 
-inline int resolved_assigned_depth(const int assigned_depth, const int parent_depth)
-{
-    return assigned_depth==INT_MAX ? parent_depth : assigned_depth;
-}
-
-vector<int> assign_depth(const BB* const original, const BB* const wfh, int number_of_new_moves, const int free_depth, const WEIGHTS& W = WEIGHTS_OG)
-{
-    uint64_t original_own_P = original->Board[0+6*!original->white_move]|original->Board[1+6*!original->white_move]|original->Board[2+6*!original->white_move]|original->Board[3+6*!original->white_move]|original->Board[4+6*!original->white_move]|original->Board[5+6*!original->white_move];
-    uint64_t original_enemy_P = original->Board[0+6*original->white_move]|original->Board[1+6*original->white_move]|original->Board[2+6*original->white_move]|original->Board[3+6*original->white_move]|original->Board[4+6*original->white_move]|original->Board[5+6*original->white_move];
-    //uint64_t original_own_attacks = attacks_by_col(original->Board,original->white_move);
-    //if the move was a capture use the free depth
-    vector<int> depth(number_of_new_moves);
-    float depth_measure[number_of_new_moves],total_depth_measure=1;
-    if(free_depth<1)
-    {
-        cout << "Error in assign_depth\n";
-        cout << "Free depth = " << free_depth << endl;
-        exit(1);
-    }
-    for(int i=0;i<number_of_new_moves;i++)
-    {
-        if(captures_more_valuable_piece(original,wfh+i,W))
-        {
-            depth[i]=INT_MAX;
-            depth_measure[i]=0;
-            continue;
-        }
-
-        uint64_t own_P = wfh[i].Board[0+6*!original->white_move]|wfh[i].Board[1+6*!original->white_move]|wfh[i].Board[2+6*!original->white_move]|wfh[i].Board[3+6*!original->white_move]|wfh[i].Board[4+6*!original->white_move]|wfh[i].Board[5+6*!original->white_move];
-        uint64_t enemy_P = wfh[i].Board[0+6*original->white_move]|wfh[i].Board[1+6*original->white_move]|wfh[i].Board[2+6*original->white_move]|wfh[i].Board[3+6*original->white_move]|wfh[i].Board[4+6*original->white_move]|wfh[i].Board[5+6*original->white_move];
-        
-        //if(original_enemy_P==enemy_P)
-        {
-            depth_measure[i] =tactical_potential(wfh[i].Board);
-            total_depth_measure += depth_measure[i];
-        }
-        //else 
-        //depth_measure[i]=-1;
-        
-    }
-
-    for(int i=0;i<number_of_new_moves;i++)
-    {
-        if(depth[i]==INT_MAX)
-        continue;
-
-        //if(depth_measure[i]!=-1)
-        depth[i]=free_depth*(depth_measure[i]/total_depth_measure);
-        //else 
-        //depth[i]=free_depth;
-    }
-    for(int i=0;i<number_of_new_moves;i++)
-    {
-        if(depth[i]<0)
-        {
-            cout << "Error in assign_depth\n";
-            cout << "Depth = " << depth[i] << endl;
-            exit(1);
-        }
-    }
-    return depth;
-}
-
 void initialize_FEN_to::random_position( uint64_t Board[12], int max_eval_diff, int num_of_pieces, bool pawn, bool rook, bool knight, bool bishop, bool queen)
 {
+    // If every non-king piece type is disabled but more than the two kings were
+    // asked for, there is nothing left the piece-selection loop below could ever
+    // legally place - it would spin forever re-rolling a type that's always
+    // rejected. Was an unconditional infinite loop before this guard.
+    if(!pawn && !rook && !knight && !bishop && !queen)
+    num_of_pieces = 2;
+
     int eval_diff=INT_MAX;
+    int attempts=0;
+    // Rejection sampling on max_eval_diff has no guarantee of hitting a tight
+    // threshold quickly (or ever, for an unlucky combination of num_of_pieces/
+    // enabled types) - cap the attempts so this can't hang, and remember the
+    // closest miss so far to fall back on instead of just giving up on the last
+    // (possibly far worse) attempt.
+    const int max_attempts=5000;
+    uint64_t best_Board[12];
+    int best_eval_diff=INT_MAX;
+
     do
     {
-        
+        attempts++;
+
         empty(Board);
         uint64_t allowed_squares=~(0Ull);
 
@@ -229,7 +136,7 @@ void initialize_FEN_to::random_position( uint64_t Board[12], int max_eval_diff, 
                 n++;
             }
         }
-        
+
         BB* temp = new BB;
         for(int i=0;i<12;i++)
         temp->Board[i]=Board[i];
@@ -241,10 +148,20 @@ void initialize_FEN_to::random_position( uint64_t Board[12], int max_eval_diff, 
         eval_diff=abs(eval_diff);
         //cout << "Eval diff: " << eval_diff << "\n";
         delete temp;
-    }while (eval_diff>max_eval_diff);
-    
-    
-    
+
+        if(eval_diff<best_eval_diff)
+        {
+            best_eval_diff=eval_diff;
+            for(int i=0;i<12;i++) best_Board[i]=Board[i];
+        }
+    }while (eval_diff>max_eval_diff && attempts<max_attempts);
+
+    if(eval_diff>max_eval_diff)
+    {
+        // Gave up without hitting max_eval_diff - use the closest attempt seen
+        // rather than whatever the last (possibly worse) attempt happened to be.
+        for(int i=0;i<12;i++) Board[i]=best_Board[i];
+    }
 }
 
 void invert_colour(BB &original)// malfunctioning!!!!!!!!! also changes the board orientation(meaning white and black switch places else castling and pawn direction are messed up)
@@ -427,16 +344,19 @@ string get_move(const BB* const original, const BB* const goal )
             break;
         }
         
-        if(UCI_moves_with_same_end_and_same_piece.size()>1)
-        if (UCI_moves_with_same_end_and_same_piece_and_same_file.size() > 1 && UCI_moves_with_same_end_and_same_piece_and_same_rank.size() > 1) {
-            move += char('a' + start % 8);
-            move += char('1' + start / 8);
-        } else if (UCI_moves_with_same_end_and_same_piece_and_same_file.size() == 1) {
-            move += char('a' + start % 8);
-        } else if (UCI_moves_with_same_end_and_same_piece_and_same_rank.size() == 1) {
-            move += char('1' + start / 8);
+        if(moved_piece!=0)  // pawns are already disambiguated by their capture file above; skip generic rank/file disambiguation
+        {
+            if(UCI_moves_with_same_end_and_same_piece.size()>1)
+            if (UCI_moves_with_same_end_and_same_piece_and_same_file.size() > 1 && UCI_moves_with_same_end_and_same_piece_and_same_rank.size() > 1) {
+                move += char('a' + start % 8);
+                move += char('1' + start / 8);
+            } else if (UCI_moves_with_same_end_and_same_piece_and_same_file.size() == 1) {
+                move += char('a' + start % 8);
+            } else if (UCI_moves_with_same_end_and_same_piece_and_same_rank.size() == 1) {
+                move += char('1' + start / 8);
+            }
         }
-        
+
         if(original_enemy_piece!=goal_enemy_piece)
         {
             move+='x';

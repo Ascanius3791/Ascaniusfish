@@ -1,0 +1,93 @@
+--- a/ascaniusfish_2.hpp	2026-09-22 00:10:16.231489243 +0200
++++ b/ascaniusfish_2.hpp	2026-09-22 01:53:39.264073528 +0200
+@@ -94,12 +94,54 @@
+     return indices;
+ }
+ 
+-PV_Line minimax(const BB*const original ,BB* const wfh ,int depth = 0, WEIGHTS W= WEIGHTS_OG,int alpha = INT_MIN, int beta = INT_MAX,lookup_table* const table=NULL, BB* const path_history=nullptr, int ply=0, const CuckooCycleTable* const cycle_table=nullptr)
++// Builds the PV_Line returned when the repetition/cycle heuristic below
++// fires. For an interior node (ply>root_ply) the bare, move-less version is
++// all that's needed - the parent wraps it with ITS OWN move via
++// PV_Line(move,depth,&candidate), so candidate.moves[] is never read. But
++// when this fires exactly at the root of a search tree (ply==root_ply),
++// there's no parent to attach a move to, and engine_move() needs
++// pv_line.moves[0] to know what to actually play. Leaving it as an unmatched
++// default Move there used to make engine_move()'s move-match loop silently
++// fall through to best_move_index's 0-initialized default - i.e. "play
++// whatever all_moves() happened to list first" - any time the actual current
++// game position had already recurred once (a real, reachable case: any
++// slow/shuffling position can trip it). The eval/bound_type/draw semantics
++// are unchanged either way - this only ever adds move info, never changes
++// the score.
++PV_Line make_repetition_draw_pv_line(const BB* const original, BB* const wfh, int depth, int ply, int root_ply, WEIGHTS W)
++{
++    PV_Line draw_pv_line = PV_Line(0);
++    draw_pv_line.depth = depth;
++    draw_pv_line.current_lenght = 0;
++    draw_pv_line.bound_type = 0;
++
++    if(ply==root_ply)
++    {
++        auto result = all_moves(original, wfh);
++        int number_of_new_moves = std::get<0>(result);
++        vector<Move> moves = std::get<1>(result);
++        if(number_of_new_moves>0)
++        {
++            vector<int> indices = sorting_moves(wfh, moves, number_of_new_moves, original->white_move, nullptr, 0, W);
++            draw_pv_line.moves[0] = moves[indices[0]];
++            draw_pv_line.current_lenght = 1;
++        }
++    }
++    return draw_pv_line;
++}
++
++PV_Line minimax(const BB*const original ,BB* const wfh ,int depth = 0, WEIGHTS W= WEIGHTS_OG,int alpha = INT_MIN, int beta = INT_MAX,lookup_table* const table=NULL, BB* const path_history=nullptr, int ply=0, const CuckooCycleTable* const cycle_table=nullptr, int root_ply=INT_MIN)
+ {
+     if(DEBUG_MODE)
+     saefty_checks(original);
+     number_of_mimimax_calls++;
+ 
++    // Marks where THIS search tree started - see make_repetition_draw_pv_line()
++    // above. Sentinel default means every existing external caller is
++    // automatically its own root; no call site other than the recursive one
++    // below needs to change.
++    int effective_root_ply = (root_ply==INT_MIN) ? ply : root_ply;
++
+     // Repetition/cycle detection - runs BEFORE the TT probe below, since a
+     // TT-cached eval for this exact board doesn't know about THIS path's
+     // history: if this position is a repeat right now, a stale non-draw TT
+@@ -117,11 +159,7 @@
+         {
+             if(are_equal(&path_history[i], original))
+             {
+-                PV_Line draw_pv_line = PV_Line(0);
+-                draw_pv_line.depth = depth;
+-                draw_pv_line.current_lenght = 0;
+-                draw_pv_line.bound_type = 0;
+-                return draw_pv_line;
++                return make_repetition_draw_pv_line(original, wfh, depth, ply, effective_root_ply, W);
+             }
+         }
+ 
+@@ -141,11 +179,7 @@
+                 Move found_move;
+                 if(cycle_table->detect_upcoming_cycle(*original, path_history[i], ply-i, found_piece_type, found_move))
+                 {
+-                    PV_Line draw_pv_line = PV_Line(0);
+-                    draw_pv_line.depth = depth;
+-                    draw_pv_line.current_lenght = 0;
+-                    draw_pv_line.bound_type = 0;
+-                    return draw_pv_line;
++                    return make_repetition_draw_pv_line(original, wfh, depth, ply, effective_root_ply, W);
+                 }
+             }
+         }
+@@ -255,7 +289,7 @@
+         if(captures_more_valuable_piece(original,wfh+indices[i],W))
+         depth_to_use++;   
+         Move move =moves[indices[i]];
+-        PV_Line candidate_pv_line = minimax(wfh+indices[i],wfh+number_of_new_moves,depth_to_use,W,alpha,beta,table,path_history,ply+1,cycle_table);
++        PV_Line candidate_pv_line = minimax(wfh+indices[i],wfh+number_of_new_moves,depth_to_use,W,alpha,beta,table,path_history,ply+1,cycle_table,effective_root_ply);
+         int eval = candidate_pv_line.eval;
+         if(eval<INT_MIN+max_mating_seq)//this assures the quickest mate
+         eval++;

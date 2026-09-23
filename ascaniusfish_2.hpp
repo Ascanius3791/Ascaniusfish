@@ -94,63 +94,181 @@ vector<int> sorting_moves(const BB* const Base, vector<Move> moves, int num, boo
     return indices;
 }
 
-PV_Line minimax(const BB*const original ,BB* const wfh ,int depth = 0, WEIGHTS W= WEIGHTS_OG,int alpha = INT_MIN, int beta = INT_MAX,lookup_table* const table=NULL, BB* const path_history=nullptr, int ply=0, const CuckooCycleTable* const cycle_table=nullptr)
+// Builds the PV_Line returned when the repetition/cycle heuristic below
+// fires. For an interior node (ply>root_ply) the bare, move-less version is
+// all that's needed - the parent wraps it with ITS OWN move via
+// PV_Line(move,depth,&candidate), so candidate.moves[] is never read. But
+// when this fires exactly at the root of a search tree (ply==root_ply),
+// there's no parent to attach a move to, and engine_move() needs
+// pv_line.moves[0] to know what to actually play. Leaving it as an unmatched
+// default Move there used to make engine_move()'s move-match loop silently
+// fall through to best_move_index's 0-initialized default - i.e. "play
+// whatever all_moves() happened to list first" - any time the actual current
+// game position had already recurred once (a real, reachable case: any
+// slow/shuffling position can trip it). The eval/bound_type/draw semantics
+// are unchanged either way - this only ever adds move info, never changes
+// the score.
+PV_Line make_repetition_draw_pv_line(const BB* const original, BB* const wfh, int depth, int ply, int root_ply, WEIGHTS W)
+{
+    PV_Line draw_pv_line = PV_Line(0);
+    draw_pv_line.depth = depth;
+    draw_pv_line.current_lenght = 0;
+    draw_pv_line.bound_type = 0;
+
+    if(ply==root_ply)
+    {
+        auto result = all_moves(original, wfh);
+        int number_of_new_moves = std::get<0>(result);
+        vector<Move> moves = std::get<1>(result);
+        if(number_of_new_moves>0)
+        {
+            vector<int> indices = sorting_moves(wfh, moves, number_of_new_moves, original->white_move, nullptr, 0, W);
+            draw_pv_line.moves[0] = moves[indices[0]];
+            draw_pv_line.current_lenght = 1;
+        }
+    }
+    return draw_pv_line;
+}
+
+// Hard upper bound on how deep minimax_tactical()'s recursion can ever go (see
+// minimax_tactical() below): it recurses only into moves for which
+// is_good_capture() holds, and every such move removes exactly one non-king piece
+// from the board (promotion alone doesn't change the count). At most 15 non-king
+// pieces per side -> at most 30 ever -> the recursion can't exceed 30 plies. This
+// is a proven combinatorial bound, not a heuristic, so it needs no safety margin.
+constexpr int max_non_king_pieces = 30;
+
+// Dedicated tactical/quiescence-style leaf search, invoked from minimax() when
+// depth==0 (replacing the old direct eval() leaf). All legal moves are generated;
+// only "tactical" moves (for now: good captures per is_good_capture()) are explored
+// further, everything else is discarded. No lookup-table probe/insert during the
+// recursion itself (not worth it at this granularity) - the lookup table is only
+// consulted, read-only, at a genuinely quiet leaf (no tactical moves available),
+// and only an exact (bound_type==0) entry is trusted; otherwise the board is
+// evaluated directly. See max_non_king_pieces above for why this recursion is
+// hard-bounded without needing its own depth/ply counter.
+PV_Line minimax_tactical(const BB* const original, BB* const wfh, WEIGHTS W = WEIGHTS_OG, int alpha = INT_MIN, int beta = INT_MAX, lookup_table* const table = NULL)
+{
+    auto result = all_moves(original, wfh);
+    int number_of_new_moves = std::get<0>(result);
+    vector<Move> moves = std::get<1>(result);
+    vector<int> indices = sorting_moves(wfh, moves, number_of_new_moves, original->white_move, nullptr, 0, W);
+
+    vector<int> tactical_order;
+    for(int idx : indices)
+        if(
+            moves[idx].promotion_piece_type!=-1 ||
+            is_good_capture(original, moves[idx].from, moves[idx].to, moves[idx].is_en_passant, W)
+            )
+        tactical_order.push_back(idx);
+
+    if(tactical_order.empty())
+    {
+        if(number_of_new_moves==0)
+        {
+            int best_eval = in_check(original->Board, original->white_move) ? (original->white_move ? INT_MIN : INT_MAX) : 0;
+            PV_Line exception_pv_line = PV_Line(best_eval);
+            exception_pv_line.current_lenght = 0;
+            exception_pv_line.bound_type = 0;
+            return exception_pv_line;
+        }
+        if(table)
+        {
+            TT_readout readout = table->is_retrivable_eval(original, 0);
+            if(readout.is_found && readout.pv_line.bound_type==0)
+            return readout.pv_line;
+        }
+        int evaluation = eval(original, W, 0); // exception_state=0: number_of_new_moves>0 above already proves the game isn't over
+        PV_Line leaf = PV_Line(evaluation);
+        leaf.current_lenght = 0;
+        leaf.bound_type = 0;
+        return leaf;
+    }
+
+    PV_Line pv_line = PV_Line(original->white_move ? INT_MIN : INT_MAX);
+    for(int idx : tactical_order)
+    {
+        PV_Line candidate = minimax_tactical(wfh+idx, wfh+number_of_new_moves, W, alpha, beta, table);
+        int child_eval = candidate.eval;
+        if(child_eval<INT_MIN+max_mating_seq)
+        child_eval++;
+        if(child_eval>INT_MAX-max_mating_seq)
+        child_eval--;
+        candidate.eval = child_eval;
+        bool improves_pv;
+        if(original->white_move)
+        {
+            improves_pv = child_eval>pv_line.eval;
+            pv_line.eval=max(pv_line.eval,child_eval);
+            alpha=max(alpha,child_eval);
+        }
+        else
+        {
+            improves_pv = child_eval<pv_line.eval;
+            pv_line.eval=min(pv_line.eval,child_eval);
+            beta=min(beta,child_eval);
+        }
+        if(improves_pv)
+        pv_line = PV_Line(moves[idx], 0, &candidate);
+        if(beta<=alpha)
+        break;
+    }
+    return pv_line;
+}
+
+PV_Line minimax(const BB*const original ,BB* const wfh ,int depth = 0, WEIGHTS W= WEIGHTS_OG,int alpha = INT_MIN, int beta = INT_MAX,lookup_table* const table=NULL, BB* const path_history=nullptr, int ply=0, const CuckooCycleTable* const cycle_table=nullptr, int root_ply=INT_MIN)
 {
     if(DEBUG_MODE)
     saefty_checks(original);
     number_of_mimimax_calls++;
 
-    // Repetition/cycle detection - runs BEFORE the TT probe below, since a
-    // TT-cached eval for this exact board doesn't know about THIS path's
-    // history: if this position is a repeat right now, a stale non-draw TT
-    // entry for the same raw board would be wrong here. Neither draw result
-    // below is inserted into the TT - unlike the stalemate/checkmate case
-    // further down, a repetition-forced draw is PATH-DEPENDENT (the same exact
-    // board can be a draw in one line and not in another), so caching it would
-    // corrupt a later, unrelated encounter of that board.
+    // Marks where THIS search tree started - see make_repetition_draw_pv_line()
+    // above. Sentinel default means every existing external caller is
+    // automatically its own root; no call site other than the recursive one
+    // below needs to change.
+    int effective_root_ply = (root_ply==INT_MIN) ? ply : root_ply;
+
+    // Repetition/cycle bookkeeping - just records this node's board for
+    // descendants to check against. This USED to also short-circuit the whole
+    // node to an immediate draw as soon as any repeat/cycle was detected here,
+    // before any move was even generated - which scored the position as a draw
+    // unconditionally, regardless of whether the side to move actually had a
+    // better alternative (a completely winning position with a repetition
+    // available anywhere in reach would be scored as 0, even though the side
+    // to move would obviously never choose to repeat). The correct place to
+    // apply the draw score is per-CANDIDATE-MOVE in the loop below - compared
+    // against every other candidate via the normal alpha-beta max/min - not as
+    // a blanket override for the entire node. See the per-move checks below.
     if(path_history && ply<MAX_SEARCH_PLY)
     {
-        int window_start = max(0, ply - original->halfmoves_since_last_capture_or_pawn_move);
-
-        //exact repeat: same side to move, so only even ply gaps can match
-        for(int i=ply-2; i>=window_start; i-=2)
-        {
-            if(are_equal(&path_history[i], original))
-            {
-                PV_Line draw_pv_line = PV_Line(0);
-                draw_pv_line.depth = depth;
-                draw_pv_line.current_lenght = 0;
-                draw_pv_line.bound_type = 0;
-                return draw_pv_line;
-            }
-        }
-
-        //one reversible move from recreating an earlier position: opposite side
-        //to move right now, so only odd ply gaps are candidates. Starts at
-        //ply-3, NOT ply-1: ply_gap=1 means "the immediate parent", and undoing
-        //whatever move was just played to reach `original` is ALWAYS available
-        //for any quiet move - that's not a cycle, it's just what "reversible"
-        //means, and treating it as one would score almost every quiet move as
-        //an instant draw (this was a real bug - it made the engine play
-        //nearly at random, favoring whichever move sorting_moves tried first).
-        if(cycle_table)
-        {
-            for(int i=ply-3; i>=window_start; i-=2)
-            {
-                int found_piece_type;
-                Move found_move;
-                if(cycle_table->detect_upcoming_cycle(*original, path_history[i], ply-i, found_piece_type, found_move))
-                {
-                    PV_Line draw_pv_line = PV_Line(0);
-                    draw_pv_line.depth = depth;
-                    draw_pv_line.current_lenght = 0;
-                    draw_pv_line.bound_type = 0;
-                    return draw_pv_line;
-                }
-            }
-        }
-
         path_history[ply] = *original;
+    }
+
+    // One reversible move from recreating an earlier position - opposite side
+    // to move right now, so only odd ply gaps are candidates. Starts at
+    // ply-3, NOT ply-1: ply_gap=1 means "the immediate parent", and undoing
+    // whatever move was just played to reach `original` is ALWAYS available
+    // for any quiet move - that's not a cycle, it's just what "reversible"
+    // means. Computed once here (it only depends on `original`, not on which
+    // candidate move we're about to consider) and used per-move in the loop
+    // below, since `found_move` is exactly one specific move `original` could
+    // play - only THAT move's evaluation should be replaced with a draw score.
+    Move cycle_avoiding_move;
+    bool cycle_move_found = false;
+    if(path_history && cycle_table && ply<MAX_SEARCH_PLY)
+    {
+        int window_start = max(0, ply - original->halfmoves_since_last_capture_or_pawn_move);
+        for(int i=ply-3; i>=window_start; i-=2)
+        {
+            int found_piece_type;
+            Move found_move;
+            if(cycle_table->detect_upcoming_cycle(*original, path_history[i], ply-i, found_piece_type, found_move))
+            {
+                cycle_avoiding_move = found_move;
+                cycle_move_found = true;
+                break;
+            }
+        }
     }
 
     PV_Line tt_hint;
@@ -161,7 +279,10 @@ PV_Line minimax(const BB*const original ,BB* const wfh ,int depth = 0, WEIGHTS W
 
             if(readout.is_found)
             {
-                if(depth<=readout.pv_line.depth && readout.pv_line.current_lenght>0)
+                bool is_proven_mate = readout.pv_line.bound_type==0
+                    && (readout.pv_line.eval <= INT_MIN + max_mating_seq
+                        || readout.pv_line.eval >= INT_MAX - max_mating_seq);
+                if((depth<=readout.pv_line.depth || is_proven_mate) && readout.pv_line.current_lenght>0)
                 {
                     if(readout.pv_line.bound_type==0)//exact
                     return readout.pv_line;
@@ -185,32 +306,8 @@ PV_Line minimax(const BB*const original ,BB* const wfh ,int depth = 0, WEIGHTS W
         }
         
     if(depth==0)
-    {   
-        int tactical_pot = tactical_potential(original->Board,W);
-        
-        const int tactical_potential_threshold = INT_MAX;//effectivly deactivates this
-        if(tactical_pot<tactical_potential_threshold)
-        {
-            int evaluation=eval(original,W);
-            //if(table)//include this in the table, only if it turns out, that looking up is faster than evaluating
-            //table->insert(*original,0);
-            PV_Line returned_line = PV_Line(evaluation);
-            returned_line.depth=depth;
-            returned_line.current_lenght=0;
-            returned_line.bound_type = 0; // exact evaluation
-            return returned_line;
-        }
-        else
-        {
-            cout << "Tactical potential is high: " << tactical_pot << ", proceeding with deeper search." << endl;
-            //print if its a white or black move
-            if(original->white_move)
-            printf("White to move\n");
-            else
-            printf("Black to move\n");
-            print(original->Board);
-            depth++;
-        }
+    {
+        return minimax_tactical(original, wfh, W, alpha, beta, table);
     }
     
     int exception_state=exception_eval(original);
@@ -252,10 +349,29 @@ PV_Line minimax(const BB*const original ,BB* const wfh ,int depth = 0, WEIGHTS W
     for(int i=0;i<number_of_new_moves;i++)
     {    
         int depth_to_use=depth-1;
-        if(captures_more_valuable_piece(original,wfh+indices[i],W))
-        depth_to_use++;   
         Move move =moves[indices[i]];
-        PV_Line candidate_pv_line = minimax(wfh+indices[i],wfh+number_of_new_moves,depth_to_use,W,alpha,beta,table,path_history,ply+1,cycle_table);
+        BB* child = wfh+indices[i];
+
+        // Would THIS specific move recreate an earlier position (exact repeat),
+        // or is it the specific move detect_upcoming_cycle identified as leading
+        // toward one (see above)? If so, its value is a draw - fed into the
+        // normal comparison below exactly like any other candidate's eval, so a
+        // better alternative move still wins if one exists.
+        bool forced_draw = false;
+        if(path_history && ply+1<MAX_SEARCH_PLY)
+        {
+            int child_window_start = max(0, (ply+1) - child->halfmoves_since_last_capture_or_pawn_move);
+            for(int j=ply-1; j>=child_window_start; j-=2) // (ply+1)-2, nearest same-side-to-move ancestor
+            {
+                if(are_equal(&path_history[j], child)) { forced_draw = true; break; }
+            }
+            if(!forced_draw && cycle_move_found && move==cycle_avoiding_move)
+            forced_draw = true;
+        }
+
+        PV_Line candidate_pv_line = forced_draw
+            ? make_repetition_draw_pv_line(child, wfh+number_of_new_moves, depth_to_use, ply+1, effective_root_ply, W)
+            : minimax(child,wfh+number_of_new_moves,depth_to_use,W,alpha,beta,table,path_history,ply+1,cycle_table,effective_root_ply);
         int eval = candidate_pv_line.eval;
         if(eval<INT_MIN+max_mating_seq)//this assures the quickest mate
         eval++;
@@ -833,7 +949,7 @@ class Play  : public initialize_FEN_to
         {
             Move move = moves[indices[k]];
             int depth_to_use=depth-1;
-            if(captures_more_valuable_piece(original,wfh+i,W))
+            if(is_good_capture(original,move.from,move.to,move.is_en_passant,W))
             depth_to_use++;
             PV_Line candidate_PV_line;
             for(int j=0;j<=depth_to_use;j++)
@@ -983,6 +1099,10 @@ class Play  : public initialize_FEN_to
                                             " eval=" + to_string(pv_line.eval) +
                                             " " + moves_to_PGN(*original, pv_moves));
             }
+            bool is_proven_checkmate = (pv_line.eval <= INT_MIN + max_mating_seq) || (pv_line.eval >= INT_MAX - max_mating_seq);
+            if(is_proven_checkmate)
+            d = depth+1;
+            //std::cin.get(); // Wait for user input before proceeding to the next depth
         }
 
         int best_move_index=0;
@@ -1509,7 +1629,7 @@ class PRESENT
             cin >> p.depth;
             
             p.original=&original;
-            wfh=new BB[80*p.depth];
+            wfh=new BB[80*(p.depth+max_non_king_pieces)]; // headroom for minimax_tactical()'s capture-only recursion, see max_non_king_pieces
             p.wfh=wfh;
             cout << "Do you want to start from a specific position (y/n)?\n";
             char y2=' ';

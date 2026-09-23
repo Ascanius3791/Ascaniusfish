@@ -10,10 +10,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Every file in this repo declares ownership via a comment at the very top of the file, containing `OWNERSHIP=Ascanius` or `OWNERSHIP=Claude`, written with that file's own comment syntax (`// OWNERSHIP=Claude` in C++ `.cpp`/`.hpp` files — a literal leading `#` there is a preprocessor directive and fails to compile; `# OWNERSHIP=Claude` in the Makefile, Python, and shell files).
 
-- **Never edit a file owned by Ascanius** (`#OWNERSHIP=Ascanius`), even when running with auto-edit / "always allow edits" privileges. This holds regardless of permission mode — auto-accept settings do not override this rule.
+- **Never silently edit a file owned by Ascanius** (`#OWNERSHIP=Ascanius`) — treat it as off-limits by default, even when running with auto-edit / "always allow edits" privileges. A standing permission mode does not by itself count as authorization to edit these files.
+- If a task requires changing an Ascanius-owned file, stop and propose the exact change to the user (e.g. as a patch) instead of editing it directly.
+- Modifying an Ascanius-owned file is allowed once Ascanius has explicitly given permission for that specific change in the conversation. The point of this rule is that Ascanius always knows what changed and why — never that a change lands without them seeing and understanding it first, even if they've said yes.
 - Files owned by Claude (`#OWNERSHIP=Claude`) may be edited freely.
 - A file with no ownership comment has no declared owner — ask the user before editing it rather than assuming either ownership.
-- If a task requires changing an Ascanius-owned file, stop and propose the change to the user instead of editing it directly.
 - Whenever Claude creates a new file, mark it as Claude-owned by adding `#OWNERSHIP=Claude` as a comment at the very top of that file.
 
 ## Build & run

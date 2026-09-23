@@ -198,10 +198,6 @@ int king_safety_of_colour(const uint64_t Board[12],bool white, const WEIGHTS W )
         else if(Board[5+6*white] & 1Ull << i)
         score -= W.offensive_value[5]/metric;
     }
-    if(score>0)
-    ;
-    else
-    ;//std::cout << "king is in danger: " << score << std::endl;
     if(score>0)//king is safe
     return W.king_safety_value*sqrt(score);
     return W.king_safety_value*score*100;
@@ -238,7 +234,7 @@ int central_pawn_presence(const BB* const original, bool white, const WEIGHTS W)
             score+=W.piece_table_value_opening[0+6*!white][j];
         }
     }
-    return score;
+    return score/4;
 }
 
 int pawn_struckture_eval_of_colour(const BB* const original, bool white, const WEIGHTS W)//positive is good for both colours

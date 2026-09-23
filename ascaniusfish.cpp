@@ -25,12 +25,13 @@ int main()
     init_magics();
     init_sliders_attacks(1);//bishop
     init_sliders_attacks(0);//rook
-    const int len=500;//*pow(40,depth);//10*2*log10(depth)+500; //number of boards currently avaliable
+    ;//*pow(40,depth);//10*2*log10(depth)+500; //number of boards currently avaliable
     
     const int depth=RS.depth;//1000000;//10^7 \approx 10 seconds of thinking time
-    
+    const int len=5000+depth*50;
     BB* ptr = new BB[len];
-    initialize_FEN_to::Standartboard(ptr->Board);
+    //initialize_FEN_to::Standartboard(ptr->Board);
+    initialize_FEN_to::ruy_lopez_berlin_defense(ptr->Board);
     //std::string FEN = "rnbqkbnr/p1p2ppp/8/1pPpp3/3P4/8/PP2PPPP/RNBQKBNR w KQkq b6 0 4";
     //FEN_to_BB(FEN,ptr);
     //ptr->en_passant = 1ULL << 8*3+1;      

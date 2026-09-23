@@ -18,6 +18,16 @@ diagnostics/lookup_consistency_test
 diagnostics/pawn_shift_probe
 diagnostics/ptt_probe
 diagnostics/repetition_detection_probe
+diagnostics/pruning_oracle_test
+diagnostics/attackers_of_probe
+diagnostics/eval_breakdown_probe
+diagnostics/legal_movegen_perft_compare
+diagnostics/minimax_tactical_probe
+diagnostics/one_move_fast_stress_test
+diagnostics/random_position_stress_test
+diagnostics/repetition_forced_draw_bug_test
+diagnostics/see_extension_overflow_repro
+diagnostics/see_probe
 *.gcda
 *.gcno
 

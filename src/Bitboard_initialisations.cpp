@@ -152,6 +152,8 @@ void initialize_FEN_to::puzzle_2(uint64_t Board[12] )
 
 void initialize_FEN_to::puzzle_3(bool FEN[8][8][2][6] )
 {
+    //not implemented yet
+    std::throw_with_nested(std::runtime_error("puzzle_3 is not implemented yet"));
     empty(FEN); 
     
     FEN[0][0][1][5]=true;

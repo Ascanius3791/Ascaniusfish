@@ -14,9 +14,12 @@
     }
 
     template<int EXPONENT_FOR_SIZE, int BUCKET_SIZE>
-    int lookup_table_base<EXPONENT_FOR_SIZE, BUCKET_SIZE>::value_for_victim_index(const TT_entry& entry) const
+    float lookup_table_base<EXPONENT_FOR_SIZE, BUCKET_SIZE>::value_for_victim_index(const TT_entry& entry) const
     {
-        int lambda = 2;
+#ifndef LOOKUP_TABLE_LAMBDA
+#define LOOKUP_TABLE_LAMBDA 0.5f
+#endif
+        float lambda = LOOKUP_TABLE_LAMBDA;
                                 // +-?
         return entry.pv_line.depth + lambda * entry.board.move;
     }
@@ -38,10 +41,10 @@
             exit(1);
         }
         int victim_index=-1;
-        int min_value=value_for_victim_index(candidate);
+        float min_value=value_for_victim_index(candidate);
         for(int i=0;i<bucket_size;i++)
         {
-            int value=value_for_victim_index(bucket[i]);
+            float value=value_for_victim_index(bucket[i]);
             if(value<min_value)
             {
                 min_value=value;
@@ -294,7 +297,7 @@
     template class lookup_table_base<TT_EXPONENT_FOR_SIZE, TT_BUCKET_SIZE>;
     template class lookup_table_base<PTT_EXPONENT_FOR_SIZE, PTT_BUCKET_SIZE>;
 
-    int PTT::value_for_victim_index(const TT_entry& entry) const
+    float PTT::value_for_victim_index(const TT_entry& entry) const
     {
         // depth dominates; among equal depths, prefer keeping an exact bound over a
         // lower/upper one, since exact entries are more broadly reusable later

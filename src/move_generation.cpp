@@ -587,8 +587,8 @@ std::string moves_to_PGN(const BB& initial_position, const std::vector<Move>& mo
 
             if(legal_moves[index].from == move.from &&
                legal_moves[index].to == move.to &&
-               legal_moves[index].promotion_piece_type == 0 &&
-               move.promotion_piece_type <= 0)
+               legal_moves[index].promotion_piece_type == -1 &&
+               move.promotion_piece_type <= -1)
             {
                 matching_index = index;
                 break;
@@ -659,6 +659,7 @@ bool one_move(const BB* const original)
             wfh[GI].Board[2+6*!WM] |= 1Ull << j;
             if(!in_check(wfh[GI].Board,WM))   
             {
+                delete wfh;
                 return 1;
             }
 
@@ -683,6 +684,7 @@ bool one_move(const BB* const original)
             wfh[GI].Board[5+6*!WM] |= 1Ull << j;
             if(!in_check(wfh[GI].Board,WM))   
             {
+                delete wfh;
                 return 1;
             }
             
@@ -711,6 +713,7 @@ bool one_move(const BB* const original)
                 wfh[GI].Board[0] |= 1Ull << j;
                 if(!in_check(wfh[GI].Board,WM))   
                 {
+                    delete wfh;
                     return 1;
                 }            
             }       
@@ -729,6 +732,7 @@ bool one_move(const BB* const original)
                 
                 if(!in_check(wfh[GI].Board,WM))   //  oooooooooooooooooo
                 {
+                    delete wfh;
                     return 1;
                 }
 
@@ -757,6 +761,7 @@ bool one_move(const BB* const original)
             wfh[GI].Board[0] |= 1Ull << (i+8);
             if (!in_check(wfh[GI].Board,WM))
             {
+                delete wfh;
                 return 1; 
             }
             if(i<16 && !((Own_P | Enemy_P) & 1Ull << (i+16) ))
@@ -766,6 +771,7 @@ bool one_move(const BB* const original)
                 wfh[GI].Board[0] |= 1Ull << (i+16);
                 if (!in_check(wfh[GI].Board,WM))
                 {
+                    delete wfh;
                     return 1;                    
                 }
             }
@@ -782,6 +788,7 @@ bool one_move(const BB* const original)
             wfh[GI].Board[6] |= 1Ull << (i-8);
             if(!in_check(wfh[GI].Board,WM))   //  oooooooooooooooooo
         {
+            delete wfh;
             return 1;
         }
         if(i>=8*6 && !((Own_P | Enemy_P) & 1Ull << (i-16) ))
@@ -791,6 +798,7 @@ bool one_move(const BB* const original)
             wfh[GI].Board[6] |= 1Ull << (i-16);
             if (!in_check(wfh[GI].Board,WM))
             {
+                delete wfh;
                 return 1;
             }
         }
@@ -823,6 +831,7 @@ bool one_move(const BB* const original)
                 wfh[GI].Board[R_or_Q] |= 1Ull <<(i-j);
                 if(!in_check(wfh[GI].Board,WM))   
                 {
+                    delete wfh;
                     return 1;
                 }
                 if(Enemy_P & 1Ull <<(i-j) ) 
@@ -841,6 +850,7 @@ bool one_move(const BB* const original)
                 wfh[GI].Board[R_or_Q] |= 1Ull <<(i+j);
                 if(!in_check(wfh[GI].Board,WM))   
                 {
+                    delete wfh;
                     return 1;
                 }
                 if(Enemy_P & 1Ull <<(i+j) ) 
@@ -860,6 +870,7 @@ bool one_move(const BB* const original)
                 wfh[GI].Board[R_or_Q] |= 1Ull <<( i+8*j);
                 if(!in_check(wfh[GI].Board,WM))   
                 {
+                    delete wfh;
                     return 1;
                 }
                 if(Enemy_P & 1Ull <<( i+8*j) ) 
@@ -878,6 +889,7 @@ bool one_move(const BB* const original)
                 wfh[GI].Board[R_or_Q] |= 1Ull <<(i-8*j);
                 if(!in_check(wfh[GI].Board,WM))   
                 {
+                    delete wfh;
                     return 1;
                 }
                 if(Enemy_P & 1Ull <<(i-8*j) ) 
@@ -915,6 +927,7 @@ bool one_move(const BB* const original)
                 wfh[GI].Board[B_or_Q] |= 1Ull <<(i+j);
                 if(!in_check(wfh[GI].Board,WM))   
                 {
+                    delete wfh;
                     return 1;
                 }
                 if(Enemy_P & 1Ull <<(i+j) ) 
@@ -936,6 +949,7 @@ bool one_move(const BB* const original)
                 wfh[GI].Board[B_or_Q] |= 1Ull <<(i+j);
                 if(!in_check(wfh[GI].Board,WM))   
                 {
+                    delete wfh;
                     return 1;
                 }
                 if(Enemy_P & 1Ull <<(i+j) ) 
@@ -957,6 +971,7 @@ bool one_move(const BB* const original)
                 wfh[GI].Board[B_or_Q] |= 1Ull <<(i-j);
                 if(!in_check(wfh[GI].Board,WM))   
                 {
+                    delete wfh;
                     return 1;
                 }
                 if(Enemy_P & 1Ull <<(i-j) ) 
@@ -978,6 +993,7 @@ bool one_move(const BB* const original)
                 wfh[GI].Board[B_or_Q] |= 1Ull <<(i-j);
                 if(!in_check(wfh[GI].Board,WM))   
                 {
+                    delete wfh;
                     return 1;
                 }
                 if(Enemy_P & 1Ull <<(i-j) ) 

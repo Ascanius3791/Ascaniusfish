@@ -10,13 +10,25 @@
 // (ascaniusfish_2.hpp): drives Play::engine_move() through the SAME `history`
 // global Play::nicely_written_play() itself uses.
 //
-// All three positions below give white an extra rook - a real search must
-// return a clearly positive (white-favoring) eval, NEVER exactly 0, unless the
-// repetition/cycle logic is what's producing that 0. This is deliberate: an
-// earlier version of this file used a materially SYMMETRIC bare-king position,
-// where a real eval is also legitimately 0 - which meant it couldn't actually
-// tell a correct search apart from a bug forcing every position to a draw, and
-// it missed exactly that bug (see the regression test below).
+// All positions below give White an extra rook (a materially SYMMETRIC bare-
+// king position can't tell a correct search apart from a bug forcing every
+// position to a draw, since a real eval there is also legitimately 0). This
+// asymmetry is what a real earlier version of this file lacked, and it's
+// exactly why it missed a real bug (found via live play, not by this probe):
+// minimax() used to treat "a repeat/cycle is reachable from here" as an
+// unconditional, node-level early return, scoring the WHOLE node as a draw
+// before generating any moves - regardless of whether the side to move had a
+// better option. A completely winning position could get scored as a draw the
+// moment ANY reversible shuffle was merely available.
+//
+// The fix moved both checks (exact repeat, and the cuckoo-cycle "one
+// reversible move away" heuristic) into the per-move loop: a candidate move
+// that would recreate an earlier position is scored as a draw for THAT move
+// only, compared normally against every other candidate via alpha-beta - so a
+// genuinely better move still wins. This means eval==0 is only ever correct
+// when a draw is actually the side-to-move's best available outcome (see the
+// second scenario below, where it's the DISADVANTAGED side holding the
+// option) - not an unconditional rule for "a repeat is reachable."
 
 static void expect(bool condition, const std::string& message)
 {
@@ -113,9 +125,17 @@ int main()
         delete table;
     }
 
-    // --- Exact repeat: history=[P0,P1,P0], current=P0 again. Must draw
-    // despite White's material advantage - that's the whole point of
-    // repetition being a draw regardless of who's ahead.
+    // --- Exact repeat: history=[P0,P1,P0], current=P0 again, White to move.
+    // REGRESSION (found via real play, not by this probe): minimax() used to
+    // treat "this exact position already occurred once" as an unconditional,
+    // node-level early return - scoring the WHOLE position as a draw before
+    // even generating moves, regardless of whether the side to move had a
+    // better option. Here White (to move, up a rook) obviously has better
+    // moves than shuffling the king back toward a repeat (e.g. any rook move),
+    // so the search must find and prefer one of those - eval must NOT be
+    // forced to 0. The fix moved the repeat check into the per-move loop: a
+    // move that would recreate an earlier position is scored as a draw for
+    // THAT move only, compared normally against every other candidate.
     {
         history.clear();
         history.push_back(P0);
@@ -128,16 +148,26 @@ int main()
 
         int eval = play.engine_move(&original, wfh, false, 3, WEIGHTS_OG, table);
 
-        expect(eval==0, "engine_move: an exact repeat should score as a draw even with a material edge");
-        expect(table->number_of_inserions==insertions_before, "engine_move: an exact-repeat draw must not be cached into the TT");
+        expect(eval>0, "engine_move: White (ahead, to move) must not be forced into a repeat when a better move exists");
+        expect(table->number_of_inserions>insertions_before, "engine_move: a real search happened here now, so real subtrees get cached into the TT");
         delete table;
     }
 
     // --- Genuine upcoming cycle at ply_gap=3: history=[P0,P1,P2,P3],
-    // current=P3. From P3 (Black to move), Black can play Kbk_to-bk_from,
+    // current=P3, Black to move. From P3, Black can play Kbk_to-bk_from,
     // which recreates P0 exactly (White's king is already back home from its
     // own round trip at P1->P2->P3). ply_gap=3 is the smallest gap where this
     // is actually meaningful, unlike the ply_gap=1 case above.
+    //
+    // Unlike the exact-repeat case above, THIS scenario has the DISADVANTAGED
+    // side (Black, down a rook) holding the reversible move - Black has no
+    // better option in this bare-king-vs-king-and-rook position, so correctly
+    // CHOOSING the draw (eval==0) is the right answer here, not a bug: a draw
+    // beats losing. This scenario alone can't distinguish "black rationally
+    // took its best available option" from "the old bug forced 0 regardless
+    // of alternatives", since both produce the same eval - the case that
+    // actually isolates the bug (the ADVANTAGED side facing a reachable cycle)
+    // is covered by diagnostics/repetition_forced_draw_bug_test.cpp.
     {
         history.clear();
         history.push_back(P0);
@@ -151,8 +181,8 @@ int main()
 
         int eval = play.engine_move(&original, wfh, false, 3, WEIGHTS_OG, table);
 
-        expect(eval==0, "engine_move: a genuine ply_gap=3 upcoming cycle should score as a draw even with a material edge");
-        expect(table->number_of_inserions==insertions_before, "engine_move: an upcoming-cycle draw must not be cached into the TT");
+        expect(eval==0, "engine_move: Black (behind, to move) should rationally take the only draw available");
+        expect(table->number_of_inserions>insertions_before, "engine_move: Black's other (losing) candidate moves are still really searched and cached, even though the draw wins out");
         delete table;
     }
 

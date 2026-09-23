@@ -55,7 +55,7 @@ class lookup_table_base
     TT_readout is_retrivable_eval(const BB* const original, int requestes_depth);
 
     protected:
-    virtual int value_for_victim_index(const TT_entry& entry) const;
+    virtual float value_for_victim_index(const TT_entry& entry) const;
     int find_victim_index(int hash,const TT_entry& candidate);// returns -1 if the candidate is the lease valuable, otherwise returns the index of the least valuable entry in the bucket
     public:
     void insert(TT_entry original);
@@ -90,7 +90,7 @@ class PTT : public lookup_table_base<PTT_EXPONENT_FOR_SIZE, PTT_BUCKET_SIZE>
     // (weighted by board.move, i.e. "how far into this particular game") isn't a
     // meaningful eviction signal here - score purely by search depth instead,
     // with a tie-break preferring exact bounds over lower/upper ones.
-    int value_for_victim_index(const TT_entry& entry) const override;
+    float value_for_victim_index(const TT_entry& entry) const override;
 
     public:
     static constexpr const char* default_path = "books/ptt_cache.bin";
