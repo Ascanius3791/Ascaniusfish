@@ -1,3 +1,4 @@
+<!-- OWNERSHIP=Claude -->
 # Opening Book Integration Guide
 
 ## Overview

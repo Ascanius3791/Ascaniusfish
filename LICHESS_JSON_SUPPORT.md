@@ -1,3 +1,4 @@
+<!-- OWNERSHIP=Claude -->
 # Lichess JSON Opening Book Support - Implementation Summary
 
 ## What Was Added

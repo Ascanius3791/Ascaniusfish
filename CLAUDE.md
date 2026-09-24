@@ -1,3 +1,4 @@
+<!-- OWNERSHIP=Claude -->
 # CLAUDE.md
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
@@ -16,6 +17,11 @@ Every file in this repo declares ownership via a comment at the very top of the 
 - Files owned by Claude (`#OWNERSHIP=Claude`) may be edited freely.
 - A file with no ownership comment has no declared owner — ask the user before editing it rather than assuming either ownership.
 - Whenever Claude creates a new file, mark it as Claude-owned by adding `#OWNERSHIP=Claude` as a comment at the very top of that file.
+- All Markdown files are Claude-owned (`<!-- OWNERSHIP=Claude -->`). `.claude/settings.json` is Claude-owned too; JSON can't hold the marker.
+
+## Workflow
+
+Development is GitHub-issue driven. Read `docs/WORKFLOW.md` before writing an issue or a commit.
 
 ## Build & run
 

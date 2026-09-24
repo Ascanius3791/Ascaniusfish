@@ -1,3 +1,4 @@
+<!-- OWNERSHIP=Claude -->
 # Full Opening Book Loading with Deduplication & Binary Save
 
 This guide explains how to load the entire Lichess opening book database, deduplicate it (keeping the best evaluation per position), and save it as a binary file for fast subsequent loading.
