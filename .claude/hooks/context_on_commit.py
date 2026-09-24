@@ -3,7 +3,10 @@
 # back to Claude so it can decide whether to keep going, suggest /compact, or hand
 # off to a fresh session. Context size = input + cache tokens of the last
 # main-thread assistant message in the transcript.
+# Manual check any time: python3 .claude/hooks/context_on_commit.py --now
+import glob
 import json
+import os
 import re
 import sys
 
@@ -33,12 +36,24 @@ def last_context_tokens(transcript_path):
     return tokens
 
 
+def newest_transcript():
+    slug = re.sub(r"[^A-Za-z0-9]", "-", os.getcwd())
+    files = glob.glob(os.path.expanduser(f"~/.claude/projects/{slug}/*.jsonl"))
+    return max(files, key=os.path.getmtime) if files else None
+
+
 def main():
-    data = json.load(sys.stdin)
-    command = (data.get("tool_input") or {}).get("command", "")
-    if not COMMIT_RE.search(command):
-        return
-    tokens = last_context_tokens(data["transcript_path"])
+    if "--now" in sys.argv:
+        transcript = newest_transcript()
+        if transcript is None:
+            return
+    else:
+        data = json.load(sys.stdin)
+        command = (data.get("tool_input") or {}).get("command", "")
+        if not COMMIT_RE.search(command):
+            return
+        transcript = data["transcript_path"]
+    tokens = last_context_tokens(transcript)
     if tokens is None:
         return
 
@@ -54,7 +69,7 @@ def main():
     else:
         level, advice = "OK", "Continue."
 
-    summary = f"Context after commit: {tokens:,} tokens [{level}] (warn {WARN_TOKENS:,}, stop {STOP_TOKENS:,})."
+    summary = f"Context: {tokens:,} tokens [{level}] (warn {WARN_TOKENS:,}, stop {STOP_TOKENS:,})."
     print(json.dumps({
         "systemMessage": summary,
         "hookSpecificOutput": {

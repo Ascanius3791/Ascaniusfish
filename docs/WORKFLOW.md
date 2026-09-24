@@ -52,7 +52,7 @@ Co-Authored-By: ...
 
 ## Context budget
 
-A hook (`.claude/hooks/context_on_commit.py`) reports the context size after every commit:
+A hook (`.claude/hooks/context_on_commit.py`) reports the context size after every commit. Claude also runs it with `--now` at natural breakpoints:
 - **OK** (<100k): continue.
 - **WARN** (100k–160k): finish the current issue, then wrap up.
 - **STOP** (≥160k): stop cleanly (tree committed or deliberately left dirty, stated). Then either:
