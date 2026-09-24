@@ -1,4 +1,7 @@
 {
+  "env": {
+    "GH_REPO": "Ascanius3791/Ascaniusfish"
+  },
   "hooks": {
     "PostToolUse": [
       {
