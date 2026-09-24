@@ -55,6 +55,15 @@ constexpr int PTT_BUCKET_SIZE = 8;
 //this bound simply skip repetition checking for that node rather than overflow.
 constexpr int MAX_SEARCH_PLY = 512;
 
+//==================================================================================================================================
+//null-move pruning (see minimax()'s null-move guard in ascaniusfish_2.hpp).
+//R is fixed for now (not adaptive). MIN_DEPTH is kept as its own tunable
+//constant, not inlined as "depth-1-NULL_MOVE_REDUCTION>=0", so it can be
+//raised independently of R for extra safety margin later.
+constexpr bool ENABLE_NULL_MOVE_PRUNING = 1;
+constexpr int NULL_MOVE_REDUCTION = 2;
+constexpr int NULL_MOVE_MIN_DEPTH = 3;
+
 
 
 

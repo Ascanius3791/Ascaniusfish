@@ -9,6 +9,8 @@
 
 float enemy_material_left_percent(const BB* const original, bool for_white);
 
+bool side_to_move_lacks_non_pawn_material(const BB* const original);// zugzwang guard for null-move pruning
+
 int piecetable(const BB* const original , const WEIGHTS W = WEIGHTS_OG);
 
 int piece_activity_eval(const BB* const original, const WEIGHTS W = WEIGHTS_OG);

@@ -3,7 +3,7 @@
 # Parsed by load_runtime_settings() in src/RuntimeSettings.cpp.
 
 # Search depth (was the hardcoded `const int depth` in ascaniusfish.cpp)
-depth=5
+depth=4
 
 # Load the opening book at startup (was USE_OPENING_BOOK)
 use_opening_book=false
@@ -16,3 +16,13 @@ use_lookup_table=true
 # engine flow yet - parsed but currently unused.
 load_ptt=false
 save_ptt=false
+
+# Time management: if true, the engine searches with iterative deepening
+# against a per-move time budget (time_seconds) instead of always using the
+# fixed `depth` above. It stops deepening once it predicts the next depth
+# would exceed the budget (predicted time = last depth's time * 10), or once
+# it proves a mate.
+use_time_management=true
+
+# Per-move time budget in seconds, used only when use_time_management=true.
+time_seconds=10.0

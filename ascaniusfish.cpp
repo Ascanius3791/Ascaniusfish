@@ -31,9 +31,10 @@ int main()
     const int len=5000+depth*50;
     BB* ptr = new BB[len];
     //initialize_FEN_to::Standartboard(ptr->Board);
-    initialize_FEN_to::ruy_lopez_berlin_defense(ptr->Board);
-    //std::string FEN = "rnbqkbnr/p1p2ppp/8/1pPpp3/3P4/8/PP2PPPP/RNBQKBNR w KQkq b6 0 4";
-    //FEN_to_BB(FEN,ptr);
+    //initialize_FEN_to::ruy_lopez_berlin_defense(ptr->Board);
+    std::string FEN = "2nrkb2/2pppp2/7p/8/8/P7/2PPPP2/2BRKN2 w - - 0 1";
+    //std::string FEN = "2bqkb2/2pppp2/8/8/8/8/2PPPP2/2BQKB2 w - - 0 1";
+    FEN_to_BB(FEN,ptr);
     //ptr->en_passant = 1ULL << 8*3+1;      
     
     castling_rights(ptr);
@@ -86,6 +87,8 @@ int main()
     SP.original=ptr;
     SP.wfh=ptr+1;
     SP.depth=depth;
+    SP.is_timed_move=RS.use_time_management;
+    SP.time_limit_seconds=RS.time_seconds;
     SP.print_Board=1;
     SP.max_game_lengh=400;
     SP.Number_of_games=1000;
@@ -95,7 +98,7 @@ int main()
     
     SP.W_white=WEIGHTS_OG;//.read_values_from_file("weights.txt");
     SP.W_black=WEIGHTS_OG;
-    SP.is_human_play=0;
+    SP.is_human_play=1;
     SP.show_eval=1;
     SP.is_pretty_print=1;
     

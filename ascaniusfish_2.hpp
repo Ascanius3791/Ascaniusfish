@@ -4,6 +4,8 @@
 #include <algorithm>
 #include <cstdlib>//for communication with python
 #include <thread>
+#include <unordered_map>
+#include <array>
 
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -216,7 +218,7 @@ PV_Line minimax_tactical(const BB* const original, BB* const wfh, WEIGHTS W = WE
     return pv_line;
 }
 
-PV_Line minimax(const BB*const original ,BB* const wfh ,int depth = 0, WEIGHTS W= WEIGHTS_OG,int alpha = INT_MIN, int beta = INT_MAX,lookup_table* const table=NULL, BB* const path_history=nullptr, int ply=0, const CuckooCycleTable* const cycle_table=nullptr, int root_ply=INT_MIN)
+PV_Line minimax(const BB*const original ,BB* const wfh ,int depth = 0, WEIGHTS W= WEIGHTS_OG,int alpha = INT_MIN, int beta = INT_MAX,lookup_table* const table=NULL, BB* const path_history=nullptr, int ply=0, const CuckooCycleTable* const cycle_table=nullptr, int root_ply=INT_MIN, bool null_move_allowed=true)
 {
     if(DEBUG_MODE)
     saefty_checks(original);
@@ -336,7 +338,85 @@ PV_Line minimax(const BB*const original ,BB* const wfh ,int depth = 0, WEIGHTS W
             }
             return exception_pv_line;
         }
-    
+
+    // Null-move pruning: assume the side to move could do nothing at all and
+    // still search a reduced-depth response - if that's already enough to
+    // beat the current bound, a real move will almost certainly do at least
+    // as well, so we cut off without generating/searching the real move list.
+    // ply!=effective_root_ply (not ply>0) mirrors make_repetition_draw_pv_line's
+    // root check above: engine_move() can seed ply at a nonzero value from
+    // real game history, so a literal ply>0 test would fire at the wrong node.
+    // The zugzwang guard (side_to_move_lacks_non_pawn_material) is a crude
+    // first cut - see its TODO in src/basic_eval.cpp.
+    if(ENABLE_NULL_MOVE_PRUNING
+       && depth >= NULL_MOVE_MIN_DEPTH
+       && ply != effective_root_ply
+       && null_move_allowed
+       && !side_to_move_lacks_non_pawn_material(original)
+       && !in_check(original->Board, original->white_move))
+    {
+        BB null_child(original, "base"); // flips side to move, clears en passant, keeps castling rights
+        Zobrist::update_zobrist_hash_null_move(*original, null_child);
+        int null_depth = depth - 1 - NULL_MOVE_REDUCTION;
+
+        if(original->white_move)
+        {
+            // Max node: can the opponent, even with a free tempo, still be held to eval>=beta?
+            PV_Line null_pv = minimax(&null_child, wfh, null_depth, W, beta-1, beta, table,
+                                       nullptr, ply+1, nullptr, effective_root_ply, false);
+            int null_eval = null_pv.eval;
+            if(null_eval<INT_MIN+max_mating_seq)//same mate-distance fixup as the real move loop below
+            null_eval++;
+            if(null_eval>INT_MAX-max_mating_seq)
+            null_eval--;
+            if(null_eval >= beta)
+            {
+                PV_Line cutoff_pv = PV_Line(null_eval);
+                cutoff_pv.depth = depth;
+                cutoff_pv.current_lenght = 0;
+                cutoff_pv.bound_type = -1; // lower bound / fail-high
+                if(table)
+                {
+                    TT_entry entry;
+                    entry.board = *original;
+                    entry.zobrist_hash = original->zobrist_hash;
+                    entry.pv_line = cutoff_pv;
+                    entry.initialized = true;
+                    table->insert(entry);
+                }
+                return cutoff_pv;
+            }
+        }
+        else
+        {
+            // Min node: can white, even with a free tempo, still be held to eval<=alpha?
+            PV_Line null_pv = minimax(&null_child, wfh, null_depth, W, alpha, alpha+1, table,
+                                       nullptr, ply+1, nullptr, effective_root_ply, false);
+            int null_eval = null_pv.eval;
+            if(null_eval<INT_MIN+max_mating_seq)
+            null_eval++;
+            if(null_eval>INT_MAX-max_mating_seq)
+            null_eval--;
+            if(null_eval <= alpha)
+            {
+                PV_Line cutoff_pv = PV_Line(null_eval);
+                cutoff_pv.depth = depth;
+                cutoff_pv.current_lenght = 0;
+                cutoff_pv.bound_type = 1; // upper bound / fail-low
+                if(table)
+                {
+                    TT_entry entry;
+                    entry.board = *original;
+                    entry.zobrist_hash = original->zobrist_hash;
+                    entry.pv_line = cutoff_pv;
+                    entry.initialized = true;
+                    table->insert(entry);
+                }
+                return cutoff_pv;
+            }
+        }
+    }
+
     auto result = all_moves(original,wfh);
     int number_of_new_moves = std::get<0>(result);
     vector<Move> moves = std::get<1>(result);
@@ -485,6 +565,8 @@ class PP //play parameters
     BB* wfh=0;
     lookup_table* table=0;
     int depth=4;
+    bool is_timed_move=0;//if true, engine moves use timed_engine_move() (iterative deepening against time_limit_seconds) instead of engine_move() (fixed depth)
+    double time_limit_seconds=5.0;//per-move time budget used when is_timed_move is true
     bool colour=1;//which colour do you play?
     bool is_human_play=1;
     bool is_pretty_print=1;
@@ -531,6 +613,73 @@ string read_from_last_move(const bool col)
     return last_move;
 
 }
+
+// Tracks, per search depth, how long that depth actually took to search the last
+// (up to) two times it was reached, so timed_engine_move() can predict the cost of
+// the next depth before committing to it. See DepthTimeStats::estimate().
+struct DepthTimeStats
+{
+    // samples[d] = {most recent time at depth d, second-most-recent time at depth d}
+    std::unordered_map<int, std::array<chrono::duration<double>,2>> samples;
+    std::unordered_map<int, int> counts; // how many of the two slots above are filled (0,1,2)
+
+    void record(int depth, chrono::duration<double> t)
+    {
+        auto& arr = samples[depth];
+        arr[1] = arr[0];
+        arr[0] = t;
+        int& c = counts[depth];
+        c = min(c+1,2);
+    }
+
+    // Weighted-average time for `depth` from its own history: 2/3 on the most recent
+    // sample, 1/3 on the second-most-recent; full weight on the single sample if only
+    // one is known. Returns false (out left untouched) if depth was never reached.
+    bool estimate(int depth, chrono::duration<double>& out) const
+    {
+        auto it = counts.find(depth);
+        if(it==counts.end() || it->second==0)
+        return false;
+        const auto& arr = samples.at(depth);
+        if(it->second==1)
+        out = arr[0];
+        else
+        out = arr[0]*(2.0/3.0) + arr[1]*(1.0/3.0);
+        return true;
+    }
+
+    // Predicted time to search `depth`:
+    //  1. its own weighted-average history, if depth was reached before;
+    //  2. otherwise, geometric extrapolation: if both depth-1 and depth-2 have
+    //     history, the search-tree size (and so search time) grows roughly by a
+    //     constant factor per ply - the "effective branching factor" - so we take
+    //     the ratio estimate(depth-1)/estimate(depth-2) actually observed for this
+    //     position and project it one more ply forward. This adapts to how bushy
+    //     the current position actually is instead of assuming a fixed constant;
+    //  3. otherwise, if only depth-1 is known, fall back to a flat multiplier of 6
+    //     - a rough effective branching factor for alpha-beta search with decent
+    //     move ordering (real branching factor ~35, alpha-beta with good ordering
+    //     gets close to its sqrt) - better than nothing, but only used this early;
+    //  4. otherwise "unknown" (predicted as zero, i.e. always attempt it - used to
+    //     bootstrap the very first depth of the very first move of a game).
+    static constexpr double fallback_branching_factor = 6.0;
+    chrono::duration<double> predict(int depth) const
+    {
+        chrono::duration<double> out(0.0);
+        if(estimate(depth,out))
+        return out;
+
+        chrono::duration<double> prev(0.0), prev2(0.0);
+        bool have_prev = estimate(depth-1,prev);
+        if(have_prev && estimate(depth-2,prev2) && prev2.count()>0)
+        return prev * (prev.count()/prev2.count());
+
+        if(have_prev)
+        return prev * fallback_branching_factor;
+
+        return out; // 0.0 - no information yet, don't block the search
+    }
+};
 
 class Play  : public initialize_FEN_to
 {
@@ -741,6 +890,14 @@ class Play  : public initialize_FEN_to
     
     public:
     PP p;
+    // Per-depth timing history used by timed_engine_move() to predict how long the
+    // next depth will take. Keeps up to the last 2 times each depth was actually
+    // reached, weighted 2/3 most recent + 1/3 second most recent. Kept here (in the
+    // caller of timed_engine_move) rather than inside the search itself so the
+    // estimate accumulates across the whole game. White and black get separate
+    // histories since their positions/branching factor over a game can diverge.
+    DepthTimeStats time_stats_white;
+    DepthTimeStats time_stats_black;
     //these three should be the only non special(zb checkmating line) play functions
     void human_move(BB *original, BB* wfh, bool pretty_print=0)
     {
@@ -1127,6 +1284,163 @@ class Play  : public initialize_FEN_to
         return pv_line.eval;
     }
 
+    // Same as engine_move(), but instead of always deepening to a fixed `depth`,
+    // it deepens iteratively until either a proven mate is found or `stats` predicts
+    // the next depth would push total time over time_limit, in which case that depth
+    // is skipped and the search stops. `stats` is owned by the caller (see
+    // time_stats_white/time_stats_black) and persists across moves so predictions
+    // improve over the course of the game. Always completes at least depth 1, so it
+    // always returns a legal move.
+    int timed_engine_move(BB* original, BB* wfh, DepthTimeStats& stats, bool pretty_print=0, chrono::duration<double> time_limit=chrono::duration<double>(5.0), WEIGHTS W=WEIGHTS_OG,lookup_table* table=0,FILE* pipe=0)
+    {
+        auto result = all_moves(original,wfh);
+        int number_of_new_moves = std::get<0>(result);
+        vector<Move> moves = std::get<1>(result);
+        if(number_of_new_moves==1)
+        {
+            copy_BB(wfh,original);
+            return INT_MAX/2;
+        }
+
+        static const CuckooCycleTable cycle_table;
+        static BB path_history[MAX_SEARCH_PLY];
+        int seed_count = min({(int)history.size(), original->halfmoves_since_last_capture_or_pawn_move+1, MAX_SEARCH_PLY});
+        for(int i=0;i<seed_count;i++)
+        path_history[i] = history[history.size()-seed_count+i];
+        int ply = (seed_count>0) ? seed_count-1 : 0;
+
+        auto search_start = chrono::steady_clock::now();
+        chrono::duration<double> elapsed(0.0);
+        chrono::duration<double> last_depth_duration(0.0);
+
+        // Describes, for debug printing, exactly how stats.predict(depth) arrived at
+        // its number: own weighted history (and the raw sample(s) it came from), the
+        // 30x-lower-depth fallback, or "no info at all".
+        auto describe_prediction = [&](int depth) -> string
+        {
+            chrono::duration<double> e;
+            auto it = stats.counts.find(depth);
+            if(it!=stats.counts.end() && it->second>0)
+            {
+                const auto& arr = stats.samples.at(depth);
+                if(it->second==1)
+                return "own history, 1 sample: " + to_string(arr[0].count()) + "s -> predicted " + to_string(arr[0].count()) + "s";
+                stats.estimate(depth,e);
+                return "own history, 2 samples: most-recent=" + to_string(arr[0].count()) + "s (weight 2/3), second-most-recent="
+                     + to_string(arr[1].count()) + "s (weight 1/3) -> predicted " + to_string(e.count()) + "s";
+            }
+            chrono::duration<double> prev, prev2;
+            bool have_prev = stats.estimate(depth-1,prev);
+            if(have_prev && stats.estimate(depth-2,prev2) && prev2.count()>0)
+            {
+                double ratio = prev.count()/prev2.count();
+                return "no history for depth " + to_string(depth) + ", extrapolating growth ratio from depth "
+                     + to_string(depth-1) + " (" + to_string(prev.count()) + "s) / depth " + to_string(depth-2)
+                     + " (" + to_string(prev2.count()) + "s) = " + to_string(ratio) + "x -> predicted "
+                     + to_string((prev*ratio).count()) + "s";
+            }
+            if(have_prev)
+            return "no history for depth " + to_string(depth) + " or depth " + to_string(depth-2)
+                 + ", using fallback " + to_string(DepthTimeStats::fallback_branching_factor) + "x depth " + to_string(depth-1)
+                 + "'s estimate (" + to_string(prev.count()) + "s) -> predicted " + to_string((prev*DepthTimeStats::fallback_branching_factor).count()) + "s";
+            return "no history at all yet -> predicted 0s (unblocked)";
+        };
+
+        PV_Line pv_line;
+        for(int d=1;;d++)
+        {
+            // Depth 1 always runs (need at least one move); for deeper iterations,
+            // skip (stop deepening) if the predicted cost of this depth would blow
+            // the remaining time budget.
+            if(d>1)
+            {
+                chrono::duration<double> predicted = stats.predict(d);
+                if(pretty_print)
+                cout << "Depth " << d << " prediction: " << describe_prediction(d)
+                     << " | elapsed so far " << elapsed.count() << "s, budget " << time_limit.count() << "s" << endl;
+                if(elapsed + predicted > time_limit)
+                {
+                    if(pretty_print)
+                    cout << "Skipping depth " << d << ": elapsed(" << elapsed.count() << "s) + predicted("
+                         << predicted.count() << "s) exceeds budget(" << time_limit.count() << "s)" << endl;
+                    break;
+                }
+            }
+
+            auto depth_start = chrono::steady_clock::now();
+            pv_line = minimax(original,wfh+number_of_new_moves,d,W,INT_MIN,INT_MAX,table,path_history,ply,&cycle_table);
+            last_depth_duration = chrono::steady_clock::now() - depth_start;
+            elapsed = chrono::steady_clock::now() - search_start;
+
+            // A time that's faster than the shallower depth's own average is a search
+            // that can only be that quick because of a TT hit or similar shortcut, not
+            // because depth d is genuinely cheaper than depth d-1 - discard it instead
+            // of feeding it into stats, since it would otherwise drag the prediction
+            // down and cause a later depth to be under-budgeted. No such check exists
+            // for depth 1 - there's no depth 0 to compare it against.
+            bool looks_like_outlier = false;
+            string outlier_reason;
+            if(d>1)
+            {
+                chrono::duration<double> prev_avg;
+                if(stats.estimate(d-1,prev_avg) && last_depth_duration < prev_avg)
+                {
+                    looks_like_outlier = true;
+                    outlier_reason = "faster than depth " + to_string(d-1) + "'s average (" + to_string(prev_avg.count()) + "s)";
+                }
+            }
+            if(!looks_like_outlier)
+            stats.record(d,last_depth_duration);
+
+            if(pretty_print)
+            {
+                cout << "Depth " << d << " actually took " << last_depth_duration.count() << "s, total elapsed " << elapsed.count() << "s";
+                if(looks_like_outlier)
+                cout << " (outlier - " << outlier_reason << " - not recorded into stats)";
+                cout << endl;
+            }
+
+            if(pipe)
+            {
+                const int displayed_length = min(pv_line.depth,pv_line.current_lenght);
+                vector<Move> pv_moves(pv_line.moves,pv_line.moves+displayed_length);
+                write_to_python_script(pipe, "PV depth=" + to_string(d) +
+                                            " eval=" + to_string(pv_line.eval) +
+                                            " " + moves_to_PGN(*original, pv_moves));
+            }
+
+            bool is_proven_checkmate = (pv_line.eval <= INT_MIN + max_mating_seq) || (pv_line.eval >= INT_MAX - max_mating_seq);
+            if(is_proven_checkmate)
+            {
+                if(pretty_print)
+                cout << "Stopping: depth " << d << " found a proven mate." << endl;
+                break;
+            }
+        }
+
+        int best_move_index=0;
+        for(int i=0;i<number_of_new_moves;i++)
+        {
+            if(moves[i]==pv_line.moves[0])
+            {
+                best_move_index=i;
+                break;
+            }
+        }
+
+        if(pretty_print)
+        {
+            const int displayed_length = min(pv_line.depth,pv_line.current_lenght);
+            vector<Move> pv_moves(pv_line.moves,pv_line.moves+displayed_length);
+            cout << "Engine line: " << moves_to_PGN(*original, pv_moves) << std::endl;
+            cout << "Evaluation after this move: " << pv_line.eval << std::endl;
+            cout << "Time spent: " << elapsed.count() << "s (limit " << time_limit.count() << "s), reached depth " << pv_line.depth << std::endl;
+        }
+
+        copy_BB(wfh+best_move_index,original);
+        return pv_line.eval;
+    }
+
     int engine_move_for_time_testing(BB* original, BB* wfh, bool pretty_print=0,int depth=1, WEIGHTS W=WEIGHTS_OG,lookup_table* table=0,FILE* pipe=0)
     {
         int alpha=INT_MIN,beta=INT_MAX;
@@ -1402,15 +1716,22 @@ class Play  : public initialize_FEN_to
             }
             else if(p.colour!=WM && p.is_human_play)
             {
-                current_eval = engine_move(original,p.wfh,p.show_eval,p.depth,p.W,p.table,p.pipe);
+                DepthTimeStats& stats = WM ? time_stats_white : time_stats_black;
+                current_eval = p.is_timed_move
+                    ? timed_engine_move(original,p.wfh,stats,p.show_eval,chrono::duration<double>(p.time_limit_seconds),p.W,p.table,p.pipe)
+                    : engine_move(original,p.wfh,p.show_eval,p.depth,p.W,p.table,p.pipe);
             }
             else if(WM)
             {
-                current_eval = engine_move(original,p.wfh,p.show_eval,p.depth,p.W_white,p.table,p.pipe);
+                current_eval = p.is_timed_move
+                    ? timed_engine_move(original,p.wfh,time_stats_white,p.show_eval,chrono::duration<double>(p.time_limit_seconds),p.W_white,p.table,p.pipe)
+                    : engine_move(original,p.wfh,p.show_eval,p.depth,p.W_white,p.table,p.pipe);
             }
             else if(!WM)
             {
-                current_eval = engine_move(original,p.wfh,p.show_eval,p.depth,p.W_black,p.table,p.pipe);
+                current_eval = p.is_timed_move
+                    ? timed_engine_move(original,p.wfh,time_stats_black,p.show_eval,chrono::duration<double>(p.time_limit_seconds),p.W_black,p.table,p.pipe)
+                    : engine_move(original,p.wfh,p.show_eval,p.depth,p.W_black,p.table,p.pipe);
             }
             auto end_time = chrono::high_resolution_clock::now();
             auto duration = chrono::duration_cast<chrono::milliseconds>(end_time - start_time).count();

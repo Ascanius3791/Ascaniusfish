@@ -37,7 +37,9 @@ RuntimeSettings load_runtime_settings(const std::string& path)
                    << ", use_opening_book=" << settings.use_opening_book
                    << ", use_lookup_table=" << settings.use_lookup_table
                    << ", load_ptt=" << settings.load_ptt
-                   << ", save_ptt=" << settings.save_ptt << ")" << std::endl;
+                   << ", save_ptt=" << settings.save_ptt
+                   << ", use_time_management=" << settings.use_time_management
+                   << ", time_seconds=" << settings.time_seconds << ")" << std::endl;
         return settings;
     }
 
@@ -61,6 +63,8 @@ RuntimeSettings load_runtime_settings(const std::string& path)
         else if (key == "use_lookup_table") settings.use_lookup_table = parse_bool(value, settings.use_lookup_table);
         else if (key == "load_ptt") settings.load_ptt = parse_bool(value, settings.load_ptt);
         else if (key == "save_ptt") settings.save_ptt = parse_bool(value, settings.save_ptt);
+        else if (key == "use_time_management") settings.use_time_management = parse_bool(value, settings.use_time_management);
+        else if (key == "time_seconds") settings.time_seconds = std::stod(value);
         else std::cerr << "Warning: unknown runtime_settings.txt key '" << key << "'" << std::endl;
     }
 

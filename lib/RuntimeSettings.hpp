@@ -16,6 +16,12 @@ struct RuntimeSettings
     // transposition table (PTT) once it's hooked up to Play/main().
     bool load_ptt = false;
     bool save_ptt = false;
+    // Time management: when true, the engine picks its search depth via
+    // iterative deepening against a per-move time budget (time_seconds)
+    // instead of always searching to a fixed `depth`. See timed_engine_move()
+    // in ascaniusfish_2.hpp.
+    bool use_time_management = false;
+    double time_seconds = 5.0;
 };
 
 // Parses "key=value" lines from path ('#' starts a comment, blank lines

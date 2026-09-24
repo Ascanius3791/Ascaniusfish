@@ -174,6 +174,13 @@ void Zobrist::adjust_for_side_to_move(BB& new_board)
     new_board.zobrist_hash ^= sideKey;
 }
 
+void Zobrist::update_zobrist_hash_null_move(const BB& old_board, BB& new_board)
+{
+    if (old_board.en_passant)
+        new_board.zobrist_hash ^= enPassantKeys[en_passant_to_index(old_board)]; // Remove the old en passant square
+    adjust_for_side_to_move(new_board); // Update the side to move
+}
+
 
 void FEN_to_BB(const std::string FEN, BB* const original)
 {

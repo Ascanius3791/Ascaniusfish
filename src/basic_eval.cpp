@@ -15,6 +15,18 @@ float enemy_material_left_percent(const BB* const original, bool for_white)//
     return score/max_score;
 }
 
+// TODO: crude first cut for the null-move zugzwang guard - only checks piece
+// *existence*, not whether any remaining piece has a legal/reasonable move.
+// A more elaborate implementation (checking move legality / reasonableness
+// of the remaining pieces) may be worth the time later.
+bool side_to_move_lacks_non_pawn_material(const BB* const original)
+{
+    int offset = 6*(!original->white_move);
+    int non_pawn_pieces = count(original->Board[1+offset]) + count(original->Board[2+offset])
+                         + count(original->Board[3+offset]) + count(original->Board[4+offset]);
+    return non_pawn_pieces == 0;
+}
+
 int piecetable(const BB* const original , const WEIGHTS W)
 {
     float score=0;
