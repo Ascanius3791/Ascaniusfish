@@ -1,6 +1,7 @@
 // OWNERSHIP=Ascanius
 #include"ascaniusfish.hpp"
 #include "lib/cuckoo_cycle_table.hpp"
+#include "lib/search_control.hpp"
 #include <algorithm>
 #include <cstdlib>//for communication with python
 #include <thread>
@@ -151,6 +152,7 @@ constexpr int max_non_king_pieces = 30;
 // hard-bounded without needing its own depth/ply counter.
 PV_Line minimax_tactical(const BB* const original, BB* const wfh, WEIGHTS W = WEIGHTS_OG, int alpha = INT_MIN, int beta = INT_MAX, lookup_table* const table = NULL)
 {
+    poll_search_abort();//see minimax()
     auto result = all_moves(original, wfh);
     int number_of_new_moves = std::get<0>(result);
     vector<Move> moves = std::get<1>(result);
@@ -223,6 +225,7 @@ PV_Line minimax(const BB*const original ,BB* const wfh ,int depth = 0, WEIGHTS W
     if(DEBUG_MODE)
     saefty_checks(original);
     number_of_mimimax_calls++;
+    poll_search_abort();//UCI "stop"/movetime: throws search_aborted, see lib/search_control.hpp
 
     // Marks where THIS search tree started - see make_repetition_draw_pv_line()
     // above. Sentinel default means every existing external caller is
