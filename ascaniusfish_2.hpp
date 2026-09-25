@@ -150,7 +150,10 @@ constexpr int max_non_king_pieces = 30;
 // and only an exact (bound_type==0) entry is trusted; otherwise the board is
 // evaluated directly. See max_non_king_pieces above for why this recursion is
 // hard-bounded without needing its own depth/ply counter.
-PV_Line minimax_tactical(const BB* const original, BB* const wfh, WEIGHTS W = WEIGHTS_OG, int alpha = INT_MIN, int beta = INT_MAX, lookup_table* const table = NULL)
+// A position with exactly one legal move is always searched on (forced move),
+// even if that move isn't a capture. Such a move removes no piece, so
+// forced_moves_left caps these extensions per line to keep the recursion bounded.
+PV_Line minimax_tactical(const BB* const original, BB* const wfh, WEIGHTS W = WEIGHTS_OG, int alpha = INT_MIN, int beta = INT_MAX, lookup_table* const table = NULL, int forced_moves_left = max_non_king_pieces)
 {
     poll_search_abort();//see minimax()
     auto result = all_moves(original, wfh);
@@ -158,9 +161,11 @@ PV_Line minimax_tactical(const BB* const original, BB* const wfh, WEIGHTS W = WE
     vector<Move> moves = std::get<1>(result);
     vector<int> indices = sorting_moves(wfh, moves, number_of_new_moves, original->white_move, nullptr, 0, W);
 
+    const bool is_forced_move = number_of_new_moves==1 && forced_moves_left>0;
     vector<int> tactical_order;
     for(int idx : indices)
         if(
+            is_forced_move ||
             moves[idx].promotion_piece_type!=-1 ||
             is_good_capture(original, moves[idx].from, moves[idx].to, moves[idx].is_en_passant, W)
             )
@@ -190,9 +195,30 @@ PV_Line minimax_tactical(const BB* const original, BB* const wfh, WEIGHTS W = WE
     }
 
     PV_Line pv_line = PV_Line(original->white_move ? INT_MIN : INT_MAX);
+    // Stand pat: out of check the side to move may decline every capture, so
+    // the static eval is already a bound - cut off if it alone beats beta/alpha.
+    if(!in_check(original->Board, original->white_move))
+    {
+        int stand_pat = eval(original, W, 0); // number_of_new_moves>0 here, see above
+        pv_line = PV_Line(stand_pat);
+        pv_line.current_lenght = 0;
+        pv_line.bound_type = 0;
+        if(original->white_move)
+        {
+            if(stand_pat>=beta)
+            return pv_line;
+            alpha=max(alpha,stand_pat);
+        }
+        else
+        {
+            if(stand_pat<=alpha)
+            return pv_line;
+            beta=min(beta,stand_pat);
+        }
+    }
     for(int idx : tactical_order)
     {
-        PV_Line candidate = minimax_tactical(wfh+idx, wfh+number_of_new_moves, W, alpha, beta, table);
+        PV_Line candidate = minimax_tactical(wfh+idx, wfh+number_of_new_moves, W, alpha, beta, table, forced_moves_left - is_forced_move);
         int child_eval = candidate.eval;
         if(child_eval<INT_MIN+max_mating_seq)
         child_eval++;
