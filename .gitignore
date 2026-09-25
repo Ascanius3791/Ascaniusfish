@@ -9,6 +9,9 @@ hash_table_test
 hash_game_test
 pv_first_move_diagnostic
 benchmarks/minimax_speed_test
+tools/perft
+tools/bench
+tools/speed_compare
 benchmarks/profile_startpos
 diagnostics/attack_invariants_probe
 diagnostics/cuckoo_cycle_table_probe

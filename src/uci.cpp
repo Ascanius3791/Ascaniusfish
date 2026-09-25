@@ -227,7 +227,7 @@ std::vector<std::string> UCI_Engine::pv_to_uci(const BB& root, const PV_Line& pv
     return out;
 }
 
-static long long perft(const BB* pos, int depth, BB* buf)
+long long perft(const BB* pos, int depth, BB* buf)
 {
     int n = std::get<0>(all_moves(pos, buf));
     if(depth<=1)

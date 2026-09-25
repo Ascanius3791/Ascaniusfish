@@ -48,6 +48,7 @@ Co-Authored-By: ...
 - `area` ∈ `search`, `eval`, `movegen`, `tt`, `book`, `gui`, `tools`, `build`, `docs`.
 - One logical change per commit. The build (`make`) must succeed.
 - If the change affects strength or speed, add the measurement to the body, e.g. `nps 1.21M → 1.34M`.
+- Commits touching search, eval or move ordering put `bench: <nodes>` (from `make bench`) in the body; commits touching move generation must pass `make perft`. See `docs/BENCHMARKS.md`.
 - Don't mix Ascanius-approved edits to Ascanius-owned files with other changes.
 - Commit to `main`. Use a branch only for experiments that may be reverted (e.g. `exp/lmr`); merge it if the issue is met, else delete it.
 

@@ -33,6 +33,9 @@ make run          # build + run (alias: make play)
 make debug        # build with -O0 -g (no optimizations, for debugging)
 make asm          # emit ascaniusfish.s (assembly output)
 make tests        # builds hash_table_test, hash_game_test, pv_first_move_diagnostic
+make perft        # movegen vs known perft counts (PERFT_DEPTH=4 for a quick check)
+make bench        # fixed-depth search; prints "bench: nodes N ..." (the search signature)
+make speed-compare A=main B=.   # nps A/B of two git refs, 95% CI ("." = working tree)
 make rebuild      # clean + all
 make clean        # remove build artifacts
 ```
@@ -41,6 +44,8 @@ Run a single test binary directly, e.g. `./hash_table_test` or `./hash_game_test
 ```bash
 g++ -O3 -Wall -Wno-unknown-pragmas -Wno-parentheses -Wno-unused-variable -DNDEBUG -o diagnostics/<name> diagnostics/<name>.cpp
 ```
+
+`tools/` holds the benchmarking tools behind `make perft`/`bench`/`speed-compare` (see `docs/BENCHMARKS.md`).
 
 Profiling: `make profile-startpos` (builds `benchmarks/profile_startpos` with `-pg`, runs `PROFILE_ITERATIONS`/`PROFILE_DEPTH`-controlled iterations from inside `benchmarks/`, then runs `gprof` into `benchmarks/profile_startpos.gprof`).
 

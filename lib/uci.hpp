@@ -35,6 +35,10 @@ bool uci_parse_fen(const std::string& fen, BB& out);
 // Finds the legal move `uci` (e.g. "e2e4", "e7e8q", "e1g1") in `pos`.
 bool uci_apply_move(const BB& pos, const std::string& uci, BB& out);
 
+// Legal move-path count to `depth` from `pos`; `buf` is BB scratch
+// (depth*~256 entries suffice).
+long long perft(const BB* pos, int depth, BB* buf);
+
 // "cp N" or "mate N", from the side to move's point of view.
 std::string uci_score(int eval, bool white_to_move);
 
