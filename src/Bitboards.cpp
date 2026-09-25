@@ -469,9 +469,9 @@ std::string get_FEN(BB original)
     FEN+='K';
     if(original.castle[1][0])
     FEN+='Q';
-    if(original.castle[0][0])
-    FEN+='k';
     if(original.castle[0][1])
+    FEN+='k';
+    if(original.castle[0][0])
     FEN+='q';
     if(!original.castle[0][0] && !original.castle[0][1] && !original.castle[1][0] && !original.castle[1][1])
     FEN+='-';
