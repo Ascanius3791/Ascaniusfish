@@ -28,7 +28,8 @@ If Ascanius wants a specific technique, put it under Constraints.
 **Rules**
 - *Goal*, *Done when* and *Constraints* are fixed. Only Ascanius changes them.
 - *Implementation notes* are suggestions. Discard them if a better route appears, and say so when closing.
-- One issue = one session's work. Split anything bigger.
+- Size: a meaningful deliverable (a feature, a tool, a measured change), usually 1–2 sessions. Don't split work into steps that only make sense together. Test in proportion to the goal.
+- Prefer C++ for all code; other languages only where unavoidable (e.g. browser UI).
 - If an issue's work touches an Ascanius-owned file, the issue says which file.
 - Labels: `bug`, `feature`, `perf`, `tooling`. Milestones group issues.
 - To close an issue, add a one-line comment: `Done in <hash>: <result>`, e.g. `Done in 3f2a1c0: +40±25 Elo, 300 games`.
