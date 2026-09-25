@@ -142,3 +142,18 @@ search nps (~10k) is far below perft speed (~16M/s).
 pairs 1–1, Elo 0.0 ± 0.0, as expected for a deterministic engine (see above).
 Endings: 154 mates, 26 threefold repetitions, 12 fifty-move rule, 4 stalemates,
 4 insufficient material.
+
+**match, TC=10+0.1** (`make match A=main B=main TC=10+0.1`, 8e88e4a): a real
+clock breaks the determinism above, so this is the CI baseline for noise. 200
+games in 694 s. `B vs A: W 84 D 25 L 91`, score 48.2%, pairs
+14/11/55/8/12 (0/0.5/1/1.5/2 points), Elo −12.2 ± 37.9 (95% CI
+[−50.2, +25.6]) — not significant, as expected for identical engines.
+Endings: 175 mates, 8 threefold repetitions, 3 fifty-move rule, 3 stalemates,
+11 insufficient material.
+
+**match, depth 3 vs 2** (`./tools/match main main depthB=2`, 8e88e4a): sanity
+check that the runner detects a real strength gap. 200 games in 535 s.
+`B vs A: W 12 D 14 L 174`, score 9.5%, pairs 74/14/12/0/0, Elo −391.6 ± 71.1
+(95% CI [−474.3, −332.1]) — B (depth 2) is significantly weaker, as expected.
+Endings: 186 mates, 10 threefold repetitions, 2 fifty-move rule, 1 stalemate,
+1 insufficient material.
