@@ -41,7 +41,10 @@ constexpr int MAX_PV_Lenght = 128; //maximum principlad variation lenght(cheap)
 //PV_Line's Move[MAX_PV_Lenght] array), so total size is roughly
 //(1<<exponent_for_size) * bucket_size * 2.2KB - keep that in mind before raising
 //either exponent.
-constexpr int TT_EXPONENT_FOR_SIZE = 15;   //regular per-game transposition table: ~580MB
+#ifndef TT_EXPONENT
+#define TT_EXPONENT 15
+#endif
+constexpr int TT_EXPONENT_FOR_SIZE = TT_EXPONENT;   //regular per-game transposition table: ~580MB (-DTT_EXPONENT=n overrides, e.g. for parallel match engines)
 constexpr int TT_BUCKET_SIZE = 8;
 constexpr int PTT_EXPONENT_FOR_SIZE = 16;  //persistent transposition table: ~1.16GB
 constexpr int PTT_BUCKET_SIZE = 8;
