@@ -4,6 +4,7 @@ CXXFLAGS ?= -O3 -Wall -Wno-unknown-pragmas -Wno-parentheses -Wno-unused-variable
 
 TARGET ?= ascaniusfish
 MAIN := ascaniusfish.cpp
+UCI_TARGET := ascaniusfish_uci
 HEADERS := $(wildcard *.hpp lib/*.hpp)
 SOURCES := $(wildcard src/*.cpp)
 TEST_SOURCES := hash_table_test.cpp hash_game_test.cpp pv_first_move_diagnostic.cpp
@@ -14,10 +15,14 @@ PROFILE_CXXFLAGS ?= -O2 -g -pg -Wall -Wno-unknown-pragmas -Wno-parentheses -Wno-
 
 .PHONY: all run play asm tests debug profile-startpos clean rebuild
 
-all: $(TARGET)
+all: $(TARGET) $(UCI_TARGET)
 
 $(TARGET): $(MAIN) $(HEADERS) $(SOURCES)
 	$(CXX) $(CXXFLAGS) -o $@ $(MAIN)
+
+# UCI engine (stdin/stdout protocol), separate binary so GUIs can launch it without arguments
+$(UCI_TARGET): ascaniusfish_uci.cpp $(HEADERS) $(SOURCES)
+	$(CXX) $(CXXFLAGS) -pthread -o $@ ascaniusfish_uci.cpp
 
 a.out: $(MAIN) $(HEADERS) $(SOURCES)
 	$(CXX) $(CXXFLAGS) -o $@ $(MAIN)
@@ -55,4 +60,4 @@ debug: $(TARGET)
 rebuild: clean all
 
 clean:
-	rm -f $(TARGET) a.out ascaniusfish.s $(TEST_TARGETS) benchmarks/profile_startpos benchmarks/gmon.out benchmarks/profile_startpos.gprof
+	rm -f $(TARGET) $(UCI_TARGET) a.out ascaniusfish.s $(TEST_TARGETS) benchmarks/profile_startpos benchmarks/gmon.out benchmarks/profile_startpos.gprof
