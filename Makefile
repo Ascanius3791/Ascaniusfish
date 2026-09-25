@@ -14,10 +14,14 @@ PROFILE_DEPTH ?= 100000
 PERFT_DEPTH ?=
 BENCH_DEPTH ?=
 ROUNDS ?= 10
-TOOL_TARGETS := tools/perft tools/bench tools/speed_compare
+DEPTH ?=
+TC ?=
+CONCURRENCY ?=
+PAIRS ?=
+TOOL_TARGETS := tools/perft tools/bench tools/speed_compare tools/match tools/make_openings
 PROFILE_CXXFLAGS ?= -O2 -g -pg -Wall -Wno-unknown-pragmas -Wno-parentheses -Wno-unused-variable
 
-.PHONY: all run play asm tests debug profile-startpos perft bench speed-compare clean rebuild
+.PHONY: all run play asm tests debug profile-startpos perft bench speed-compare match clean rebuild
 
 all: $(TARGET) $(UCI_TARGET)
 
@@ -61,8 +65,14 @@ tools/perft: tools/perft.cpp $(HEADERS) $(SOURCES)
 tools/bench: tools/bench.cpp $(HEADERS) $(SOURCES)
 	$(CXX) $(CXXFLAGS) -pthread -o $@ tools/bench.cpp
 
-tools/speed_compare: tools/speed_compare.cpp
+tools/speed_compare: tools/speed_compare.cpp tools/git_build.hpp
 	$(CXX) -O2 -Wall -o $@ tools/speed_compare.cpp
+
+tools/match: tools/match.cpp tools/game_rules.hpp tools/git_build.hpp $(HEADERS) $(SOURCES)
+	$(CXX) $(CXXFLAGS) -pthread -o $@ tools/match.cpp
+
+tools/make_openings: tools/make_openings.cpp tools/game_rules.hpp $(HEADERS) $(SOURCES)
+	$(CXX) $(CXXFLAGS) -pthread -o $@ tools/make_openings.cpp
 
 # Move generation vs known perft counts (PERFT_DEPTH=4 for a quick check)
 perft: tools/perft
@@ -76,6 +86,11 @@ bench: tools/bench
 speed-compare: tools/speed_compare
 	@test -n "$(A)" -a -n "$(B)" || (echo "usage: make speed-compare A=<ref> B=<ref> [ROUNDS=10] [BENCH_DEPTH=n]"; exit 2)
 	./tools/speed_compare $(A) $(B) $(ROUNDS) $(BENCH_DEPTH)
+
+# Elo match of two engines (git refs or UCI binaries): make match A=main B=.
+match: tools/match
+	@test -n "$(A)" -a -n "$(B)" || (echo "usage: make match A=<ref|binary> B=<ref|binary> [DEPTH=3] [TC=10+0.1] [CONCURRENCY=n] [PAIRS=n]"; exit 2)
+	./tools/match $(A) $(B) depth=$(DEPTH) tc=$(TC) concurrency=$(CONCURRENCY) pairs=$(PAIRS)
 
 run play: $(TARGET)
 	./$(TARGET)

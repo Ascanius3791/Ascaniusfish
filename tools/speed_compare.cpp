@@ -9,6 +9,7 @@
 // with *this* tree's tools/bench.cpp, so both sides run the same workload.
 // Runs alternate AB, BA, AB, ... to cancel load/thermal drift; the verdict
 // uses the paired per-round nps ratio B/A with a 95% t-interval.
+#include "git_build.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -17,27 +18,6 @@
 #include <vector>
 
 static const char* const CXXFLAGS = "-O3 -Wall -Wno-unknown-pragmas -Wno-parentheses -Wno-unused-variable -DNDEBUG -pthread";
-
-static std::string run_capture(const std::string& cmd, int* status = nullptr)
-{
-    std::string out;
-    FILE* p = popen(cmd.c_str(), "r");
-    if(!p)
-    return out;
-    char buf[4096];
-    while(fgets(buf, sizeof buf, p))
-    out += buf;
-    int s = pclose(p);
-    if(status) *status = s;
-    while(!out.empty() && (out.back()=='\n' || out.back()=='\r'))
-    out.pop_back();
-    return out;
-}
-
-static int sh(const std::string& cmd)
-{
-    return std::system(cmd.c_str());
-}
 
 static void die(const std::string& msg)
 {
@@ -66,38 +46,20 @@ static Mean_CI mean_ci(const std::vector<double>& x)
     return {m, t95((int)n-1)*sd/std::sqrt(n)};
 }
 
-struct Side
+struct Side : Checkout
 {
-    std::string ref, label, dir, binary;
-    bool worktree = false;
+    std::string binary;
     long long nodes = -1;
     std::vector<double> nps;
 };
 
 static void prepare(Side& s, const std::string& root, const std::string& tag)
 {
-    if(s.ref==".")
-    {
-        s.label = ". (working tree)";
-        s.dir = root;
-    }
-    else
-    {
-        if(s.ref.find_first_of("'\\ \t\n")!=std::string::npos)
-        die("bad ref: " + s.ref);
-        int st = 0;
-        std::string sha = run_capture("git -C '" + root + "' rev-parse --verify --quiet '" + s.ref + "^{commit}'", &st);
-        if(st!=0 || sha.empty())
-        die("unknown ref: " + s.ref);
-        s.label = s.ref + " (" + sha.substr(0, 9) + ")";
-        s.dir = "/tmp/ascaniusfish_speed_" + tag + "_" + sha.substr(0, 12);
-        (void)sh("git -C '" + root + "' worktree remove --force '" + s.dir + "' >/dev/null 2>&1; rm -rf '" + s.dir + "'");
-        if(sh("git -C '" + root + "' worktree add --detach --quiet '" + s.dir + "' " + sha)!=0)
-        die("git worktree add failed for " + s.ref);
-        s.worktree = true;
-        if(sh("mkdir -p '" + s.dir + "/tools' && cp '" + root + "/tools/bench.cpp' '" + s.dir + "/tools/bench.cpp'")!=0)
-        die("could not copy tools/bench.cpp into " + s.dir);
-    }
+    std::string error = checkout(s, root, "/tmp/ascaniusfish_speed_" + tag);
+    if(!error.empty())
+    die(error);
+    if(s.worktree && sh("mkdir -p '" + s.dir + "/tools' && cp '" + root + "/tools/bench.cpp' '" + s.dir + "/tools/bench.cpp'")!=0)
+    die("could not copy tools/bench.cpp into " + s.dir);
     s.binary = "/tmp/ascaniusfish_speed_bench_" + tag;
     std::printf("building %s ...\n", s.label.c_str());
     std::fflush(stdout);
@@ -122,8 +84,7 @@ static void run_once(Side& s, const std::string& depth_arg)
 
 static void cleanup(Side& s, const std::string& root)
 {
-    if(s.worktree)
-    (void)sh("git -C '" + root + "' worktree remove --force '" + s.dir + "' >/dev/null 2>&1");
+    remove_checkout(s, root);
     std::remove(s.binary.c_str());
 }
 
@@ -139,7 +100,7 @@ int main(int argc, char** argv)
     if(rounds<2)
     die("need at least 2 rounds");
 
-    std::string root = run_capture("git rev-parse --show-toplevel");
+    std::string root = repo_root();
     if(root.empty())
     die("not inside the git repository");
 

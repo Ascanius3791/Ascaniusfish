@@ -12,6 +12,9 @@ benchmarks/minimax_speed_test
 tools/perft
 tools/bench
 tools/speed_compare
+tools/match
+tools/make_openings
+match.pgn
 benchmarks/profile_startpos
 diagnostics/attack_invariants_probe
 diagnostics/cuckoo_cycle_table_probe

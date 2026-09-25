@@ -1,14 +1,15 @@
 <!-- OWNERSHIP=Claude -->
 # Benchmarks
 
-Three commands for checking correctness and speed. They build their tools in
-`tools/` and don't touch the engine binaries.
+Four commands for checking correctness, speed and strength. They build their
+tools in `tools/` and don't touch the engine binaries.
 
 | Command | Checks | Time |
 |---|---|---|
 | `make perft` | move generation against known node counts | ~40–55 s (`PERFT_DEPTH=4`: 1 s) |
 | `make bench` | search signature (total nodes) and nps | ~12–17 s |
 | `make speed-compare A=<ref> B=<ref>` | whether B is faster than A | ~5 min |
+| `make match A=<ref> B=<ref>` | whether B is stronger than A, in Elo | ~27 min (depth 3) |
 
 ## `make perft`
 
@@ -60,6 +61,47 @@ Answers "is B faster than A, beyond noise?"
 Keep the machine otherwise idle while it runs. The runs are single-threaded
 and sequential.
 
+## `make match A=<ref> B=<ref>`
+
+Answers "is B stronger than A, and by how much?"
+
+- A and B are git refs (built like in `speed-compare`, `.` = working tree)
+  or paths to UCI binaries. A ref is built as `ascaniusfish_uci` with
+  `-DTT_EXPONENT=11` (~36 MB TT instead of ~580 MB) so that many engines fit
+  in memory. Refs older than 55c44ce ignore that flag and need ~580 MB each.
+- Every position of `tools/openings.epd` is played twice with colours
+  swapped (a game pair): 100 openings, 200 games.
+- `DEPTH=n` (default 3) fixes the search depth. `TC=10+0.1` plays with a
+  clock instead (seconds + increment, sent as `go wtime … btime …`).
+  `tools/match` also takes `depthA=`/`depthB=` for different depths per side.
+- `CONCURRENCY=n` games run in parallel (default: cores−1, capped by free
+  memory). `PAIRS=n` uses only the first n openings.
+- The runner applies the rules itself, with the engine's move generator:
+  mate, stalemate, threefold repetition, 50-move rule, insufficient material.
+  An illegal move, a hung engine or a flag fall loses the game.
+- Output is from B's point of view: W/D/L, score, and Elo ± 95% CI. The CI
+  comes from the pentanomial distribution of the game-pair results (0, ½, 1,
+  1½, 2 points per pair). The two games of a pair share an opening and are not
+  independent. Treating them as single games gets the CI wrong (usually too wide,
+  because the colour swap cancels most of the opening's bias).
+- All games go to `match.pgn` (`pgn=` in `tools/match`), with the engine's
+  score and depth as a comment after each move.
+
+At a fixed depth the engine is deterministic, so identical engines play
+identical games from both colours. Every pair then scores exactly 1 point
+and the result is 0 ± 0. A real change makes the games diverge. For a CI that
+includes timing noise, use `TC=`.
+
+### Opening suite
+
+`tools/openings.epd` holds 100 positions after 8–16 plies of named
+openings from [lichess-org/chess-openings](https://github.com/lichess-org/chess-openings),
+spread over ECO A–E. At most one position per variation and three per opening family.
+Each one has a Lichess cloud eval of |cp| ≤ 30 at depth ≥ 29 (`ce`, from the side
+to move; `acd` = depth). `tools/make_openings.cpp` builds it:
+`./tools/make_openings tools/openings.epd 100 a.tsv b.tsv c.tsv d.tsv e.tsv`
+(needs curl and network access, ~5 min due to the API's rate limit).
+
 ## Baseline
 
 Recorded 2026-09-25 at b138d31 plus this tooling, g++ -O3, WSL2, 8 cores.
@@ -94,3 +136,9 @@ evaluations. `piece_activity_eval`, `king_safety_of_colour`, `attacks_by_col`,
 `piecetable` and `sorting_eval` take ~70% of the time. They are called from
 `sorting_moves()` for every child of every node. This is the main reason
 search nps (~10k) is far below perft speed (~16M/s).
+
+**match** (`make match A=main B=main`, 55c44ce, depth 3, 7 in parallel,
+98 MB per engine pair): 200 games in 27 min, `W 77 D 46 L 77`, all 100
+pairs 1–1, Elo 0.0 ± 0.0, as expected for a deterministic engine (see above).
+Endings: 154 mates, 26 threefold repetitions, 12 fifty-move rule, 4 stalemates,
+4 insufficient material.
