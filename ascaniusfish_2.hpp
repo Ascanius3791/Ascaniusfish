@@ -2,6 +2,7 @@
 #include"ascaniusfish.hpp"
 #include "lib/cuckoo_cycle_table.hpp"
 #include "lib/search_control.hpp"
+#include "lib/move_ordering.hpp"
 #include <algorithm>
 #include <cstdlib>//for communication with python
 #include <thread>
@@ -458,9 +459,8 @@ PV_Line minimax(const BB*const original ,BB* const wfh ,int depth = 0, const WEI
     auto result = all_moves(original,wfh);
     int number_of_new_moves = std::get<0>(result);
     vector<Move> moves = std::get<1>(result);
-    // The TT move is searched before the other moves are sorted: if it cuts
-    // off, the sort is skipped. sorting_moves() puts it first anyway, so the
-    // search order is unchanged.
+    // The TT move is searched before the other moves are ordered: if it cuts
+    // off, the ordering is skipped. The rest come in stages, see lib/move_ordering.hpp.
     int tt_move_index = -1;
     if(is_tt_hint_found && tt_hint.current_lenght>0)
     for(int i=0;i<number_of_new_moves;i++)
@@ -469,9 +469,7 @@ PV_Line minimax(const BB*const original ,BB* const wfh ,int depth = 0, const WEI
         tt_move_index=i;
         break;
     }
-    vector<int> indices;
-    if(tt_move_index<0)
-    indices = sorting_moves(wfh,moves,number_of_new_moves,original->white_move,&tt_hint,0,W);// why on earth would this be slower? its pruning ration is better, by a lot!
+    Staged_Move_Order order;
     prunable_moves_total+=number_of_new_moves-1;//analizing how efficient pruning is.
     Move best_move;
     const int alpha_0 = alpha, beta_0 = beta;
@@ -479,9 +477,9 @@ PV_Line minimax(const BB*const original ,BB* const wfh ,int depth = 0, const WEI
     pv_line.depth=depth;
     for(int i=0;i<number_of_new_moves;i++)
     {    
-        if(i==1 && tt_move_index>=0)//the TT move didn't cut off
-        indices = sorting_moves(wfh,moves,number_of_new_moves,original->white_move,&tt_hint,0,W);
-        int move_index = (i==0 && tt_move_index>=0) ? tt_move_index : indices[i];
+        if(i==(tt_move_index>=0))//the TT move didn't cut off, or there is none
+        order.init(original,wfh,moves,number_of_new_moves,tt_move_index,ply-effective_root_ply,W);
+        int move_index = (i==0 && tt_move_index>=0) ? tt_move_index : order.next();
         int depth_to_use=depth-1;
         Move move =moves[move_index];
         BB* child = wfh+move_index;
@@ -532,6 +530,8 @@ PV_Line minimax(const BB*const original ,BB* const wfh ,int depth = 0, const WEI
         
         if(beta<=alpha)
         {
+            if(is_quiet_move(original,move))
+            store_killer_move(ply-effective_root_ply,move);
             pruned_moves+=number_of_new_moves-i-1;
             break;
         }        
