@@ -20,6 +20,7 @@
 //   tt=<n>             TT exponent for engines built from refs (default 11, ~36MB)
 #include "git_build.hpp"
 #include "game_rules.hpp"
+#include "uci_engine.hpp"
 
 #include <atomic>
 #include <cmath>
@@ -39,144 +40,12 @@ static const char* const CXXFLAGS = "-O3 -Wall -Wno-unknown-pragmas -Wno-parenth
 constexpr int MAX_GAME_PLIES = 1000;          // adjudicated a draw beyond this; the rules end almost every game long before
 constexpr long long DEPTH_MOVE_TIMEOUT_MS = 600000;
 constexpr long long TC_GRACE_MS = 1000;       // how long past its clock an engine may take before it counts as hung
-constexpr long long READY_TIMEOUT_MS = 60000;
 
 [[noreturn]] static void die(const std::string& msg)
 {
     std::fprintf(stderr, "match: %s\n", msg.c_str());
     std::exit(2);
 }
-
-static long long now_ms()
-{
-    return steady_now_ns()/1000000;
-}
-
-// One UCI engine process.
-class Engine
-{
-    public:
-    std::string path;
-    pid_t pid = -1;
-
-    bool start()
-    {
-        int to_child[2], from_child[2];
-        if(pipe2(to_child, O_CLOEXEC)!=0 || pipe2(from_child, O_CLOEXEC)!=0)
-        return false;
-        pid = fork();
-        if(pid==0)
-        {
-            dup2(to_child[0], 0);
-            dup2(from_child[1], 1);
-            int null = open("/dev/null", O_WRONLY);
-            dup2(null, 2);
-            execl(path.c_str(), path.c_str(), (char*)nullptr);
-            _exit(127);
-        }
-        close(to_child[0]);
-        close(from_child[1]);
-        in = to_child[1];
-        out = from_child[0];
-        buffer.clear();
-        send("uci");
-        return wait_for("uciok", 10000) && ready();
-    }
-
-    bool ready()
-    {
-        send("isready");
-        return wait_for("readyok", READY_TIMEOUT_MS);
-    }
-
-    void send(const std::string& line)
-    {
-        std::string s = line + "\n";
-        if(write(in, s.data(), s.size())<0) {}  // a dead engine shows up as a read failure
-    }
-
-    // Next line before the deadline (steady ms); false on EOF or timeout.
-    bool read_line(std::string& line, long long deadline_ms)
-    {
-        for(;;)
-        {
-            size_t nl = buffer.find('\n');
-            if(nl!=std::string::npos)
-            {
-                line = buffer.substr(0, nl);
-                if(!line.empty() && line.back()=='\r') line.pop_back();
-                buffer.erase(0, nl+1);
-                return true;
-            }
-            long long left = deadline_ms-now_ms();
-            if(left<=0)
-            return false;
-            pollfd p = {out, POLLIN, 0};
-            if(poll(&p, 1, (int)std::min(left, 1000000LL))<=0)
-            continue;
-            char chunk[4096];
-            ssize_t n = read(out, chunk, sizeof chunk);
-            if(n<=0)
-            return false;
-            buffer.append(chunk, n);
-        }
-    }
-
-    bool wait_for(const std::string& token, long long timeout_ms, std::string* line_out = nullptr)
-    {
-        long long deadline = now_ms()+timeout_ms;
-        std::string line;
-        while(read_line(line, deadline))
-        {
-            if(line.compare(0, token.size(), token)==0)
-            {
-                if(line_out) *line_out = line;
-                return true;
-            }
-            last_info = line.compare(0, 5, "info ")==0 && line.find(" score ")!=std::string::npos ? line : last_info;
-        }
-        return false;
-    }
-
-    void stop()
-    {
-        if(pid<0)
-        return;
-        send("quit");
-        close(in);
-        close(out);
-        for(int i=0;i<100 && waitpid(pid, nullptr, WNOHANG)==0;i++)
-        usleep(10000);
-        if(waitpid(pid, nullptr, WNOHANG)==0)
-        {
-            ::kill(pid, SIGKILL);
-            waitpid(pid, nullptr, 0);
-        }
-        pid = -1;
-    }
-
-    bool restart()
-    {
-        stop();
-        return start();
-    }
-
-    long rss_kb() const
-    {
-        std::ifstream f("/proc/" + std::to_string(pid) + "/status");
-        std::string key;
-        long value = 0;
-        while(f >> key)
-        if(key=="VmRSS:" && f >> value) return value;
-        return 0;
-    }
-
-    std::string last_info;  // last "info ... score ..." line of the current search
-
-    private:
-    int in = -1, out = -1;
-    std::string buffer;
-};
 
 struct Limits
 {

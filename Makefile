@@ -18,10 +18,11 @@ DEPTH ?=
 TC ?=
 CONCURRENCY ?=
 PAIRS ?=
-TOOL_TARGETS := tools/perft tools/bench tools/speed_compare tools/match tools/make_openings
+MOVETIME ?= 10000
+TOOL_TARGETS := tools/perft tools/bench tools/speed_compare tools/match tools/make_openings tools/gui_match
 PROFILE_CXXFLAGS ?= -O2 -g -pg -Wall -Wno-unknown-pragmas -Wno-parentheses -Wno-unused-variable
 
-.PHONY: all run play asm tests debug profile-startpos perft bench speed-compare match clean rebuild
+.PHONY: all run play asm tests debug profile-startpos perft bench speed-compare match gui-match clean rebuild
 
 all: $(TARGET) $(UCI_TARGET)
 
@@ -68,8 +69,11 @@ tools/bench: tools/bench.cpp $(HEADERS) $(SOURCES)
 tools/speed_compare: tools/speed_compare.cpp tools/git_build.hpp
 	$(CXX) -O2 -Wall -o $@ tools/speed_compare.cpp
 
-tools/match: tools/match.cpp tools/game_rules.hpp tools/git_build.hpp $(HEADERS) $(SOURCES)
+tools/match: tools/match.cpp tools/game_rules.hpp tools/git_build.hpp tools/uci_engine.hpp $(HEADERS) $(SOURCES)
 	$(CXX) $(CXXFLAGS) -pthread -o $@ tools/match.cpp
+
+tools/gui_match: tools/gui_match.cpp tools/game_rules.hpp tools/uci_engine.hpp $(HEADERS) $(SOURCES)
+	$(CXX) $(CXXFLAGS) -pthread -o $@ tools/gui_match.cpp
 
 tools/make_openings: tools/make_openings.cpp tools/game_rules.hpp $(HEADERS) $(SOURCES)
 	$(CXX) $(CXXFLAGS) -pthread -o $@ tools/make_openings.cpp
@@ -91,6 +95,11 @@ speed-compare: tools/speed_compare
 match: tools/match
 	@test -n "$(A)" -a -n "$(B)" || (echo "usage: make match A=<ref|binary> B=<ref|binary> [DEPTH=3] [TC=10+0.1] [CONCURRENCY=n] [PAIRS=n]"; exit 2)
 	./tools/match $(A) $(B) depth=$(DEPTH) tc=$(TC) concurrency=$(CONCURRENCY) pairs=$(PAIRS)
+
+# One game of two UCI binaries at MOVETIME ms per move, shown in display_board.py
+gui-match: tools/gui_match
+	@test -n "$(A)" -a -n "$(B)" || (echo "usage: make gui-match A=<white binary> B=<black binary> [MOVETIME=10000]"; exit 2)
+	./tools/gui_match $(A) $(B) movetime=$(MOVETIME)
 
 run play: $(TARGET)
 	./$(TARGET)

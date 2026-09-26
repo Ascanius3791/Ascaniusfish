@@ -10,6 +10,7 @@ tools in `tools/` and don't touch the engine binaries.
 | `make bench` | search signature (total nodes) and nps | ~12–17 s |
 | `make speed-compare A=<ref> B=<ref>` | whether B is faster than A | ~5 min |
 | `make match A=<ref> B=<ref>` | whether B is stronger than A, in Elo | ~27 min (depth 3) |
+| `make gui-match A=<bin> B=<bin>` | one watchable game, depth per move | ~20 min (10 s/move) |
 
 ## `make perft`
 
@@ -102,6 +103,23 @@ Each one has a Lichess cloud eval of |cp| ≤ 30 at depth ≥ 29 (`ce`, from the
 to move; `acd` = depth). `tools/make_openings.cpp` builds it:
 `./tools/make_openings tools/openings.epd 100 a.tsv b.tsv c.tsv d.tsv e.tsv`
 (needs curl and network access, ~5 min due to the API's rate limit).
+
+## `make gui-match A=<white> B=<black>`
+
+One game between two UCI binaries at `MOVETIME` ms per move (default 10000),
+shown live in `display_board.py` (moves and the mover's PV). Run from the repo
+root. The terminal gets a line per move (depth, nodes, nps, time, score) and at
+the end each engine's mean/median depth and depth histogram; the game goes to
+`gui_match.pgn`. For a profile, pass wrapper scripts as the engines, e.g.
+
+```sh
+#!/bin/sh
+exec /usr/lib/linux-tools/5.15.0-194-generic/perf record -F 999 --call-graph fp -o a.data -- ./a_uci
+```
+
+with the engine built with `-g -fno-omit-frame-pointer`. `quit_wait=` (default
+60 s) is how long the driver waits for perf to write its data. Only one game
+from one side: it shows depth and profile, not strength (use `make match`).
 
 ## Baseline
 
