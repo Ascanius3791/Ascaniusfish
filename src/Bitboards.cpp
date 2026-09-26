@@ -226,6 +226,7 @@ void copy_BB(const BB* const original ,BB* const goal)
         goal->number_of_repetitions=original->number_of_repetitions;
         goal->move=original->move;
         goal->halfmoves_since_last_capture_or_pawn_move=original->halfmoves_since_last_capture_or_pawn_move;
+        goal->lazy.reset();//goal may be a reused buffer slot (e.g. a wfh[] entry) carrying a stale cache
        // goal->parent=original->parent;
     }
 
@@ -244,6 +245,7 @@ void Base_BB(const BB* const original, BB* const goal)
         goal->number_of_repetitions=original->number_of_repetitions;
         goal->move=original->move+1;
         goal->halfmoves_since_last_capture_or_pawn_move=original->halfmoves_since_last_capture_or_pawn_move+1;
+        goal->lazy.reset();//goal may be a reused buffer slot (e.g. a wfh[] entry) carrying a stale cache
         //goal->parent=original; //no parents so far-> many things can be const
     // goal->alpha=INT_MIN;
         //goal->beta=INT_MAX; 
@@ -574,6 +576,36 @@ bool are_equal(const BB* const  BB_1,const BB* const BB_2)
     }
 
     
+uint64_t get_occupancy(const BB* const b)
+{
+    if(!b->lazy.occupancy_valid)
+    {
+        b->lazy.occupancy = b->Board[0]|b->Board[1]|b->Board[2]|b->Board[3]|b->Board[4]|b->Board[5]
+                           |b->Board[6]|b->Board[7]|b->Board[8]|b->Board[9]|b->Board[10]|b->Board[11];
+        b->lazy.occupancy_valid = true;
+    }
+    return b->lazy.occupancy;
+}
+
+uint64_t get_pieces_of_colour(const BB* const b, bool white)
+{
+    if(white)
+    {
+        if(!b->lazy.white_pieces_valid)
+        {
+            b->lazy.white_pieces = b->Board[0]|b->Board[1]|b->Board[2]|b->Board[3]|b->Board[4]|b->Board[5];
+            b->lazy.white_pieces_valid = true;
+        }
+        return b->lazy.white_pieces;
+    }
+    if(!b->lazy.black_pieces_valid)
+    {
+        b->lazy.black_pieces = b->Board[6]|b->Board[7]|b->Board[8]|b->Board[9]|b->Board[10]|b->Board[11];
+        b->lazy.black_pieces_valid = true;
+    }
+    return b->lazy.black_pieces;
+}
+
 std::string get_coordinate_PGN(std::vector<BB> history)
 {
     std::string PGN="";
