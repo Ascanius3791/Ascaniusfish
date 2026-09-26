@@ -85,7 +85,8 @@ Answers "is B stronger than A, and by how much?"
   independent. Treating them as single games gets the CI wrong (usually too wide,
   because the colour swap cancels most of the opening's bias).
 - All games go to `match.pgn` (`pgn=` in `tools/match`), with the engine's
-  score and depth as a comment after each move.
+  score and depth as a comment after each move, and with `TC=` also the
+  time the move took: `{+0.35/3 1.21s}`.
 
 At a fixed depth the engine is deterministic, so identical engines play
 identical games from both colours. Every pair then scores exactly 1 point

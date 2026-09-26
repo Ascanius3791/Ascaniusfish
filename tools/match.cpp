@@ -203,8 +203,9 @@ struct Game_Record
     std::string pgn;
 };
 
-// "{+0.35/3}" (mover's view, like UCI) from the last info line, or "".
-static std::string score_comment(const std::string& info)
+// "{+0.35/3}" (mover's view, like UCI) from the last info line, or "";
+// with a clock also the time the move took: "{+0.35/3 1.21s}".
+static std::string score_comment(const std::string& info, long long used_ms)
 {
     std::istringstream in(info);
     std::string tok, depth, kind, value;
@@ -213,13 +214,16 @@ static std::string score_comment(const std::string& info)
         if(tok=="depth") in >> depth;
         else if(tok=="score") in >> kind >> value;
     }
+    char time[24] = "";
+    if(used_ms>=0)
+    std::snprintf(time, sizeof time, "%.2fs", used_ms/1000.0);
     if(kind.empty())
-    return "";
-    char buf[48];
+    return used_ms>=0 ? "{" + std::string(time) + "}" : "";
+    char buf[64];
     if(kind=="mate")
-    std::snprintf(buf, sizeof buf, "{%sM%s/%s}", value[0]=='-' ? "-" : "+", value.c_str()+(value[0]=='-'), depth.c_str());
+    std::snprintf(buf, sizeof buf, "{%sM%s/%s%s%s}", value[0]=='-' ? "-" : "+", value.c_str()+(value[0]=='-'), depth.c_str(), *time ? " " : "", time);
     else
-    std::snprintf(buf, sizeof buf, "{%+.2f/%s}", std::atoi(value.c_str())/100.0, depth.c_str());
+    std::snprintf(buf, sizeof buf, "{%+.2f/%s%s%s}", std::atoi(value.c_str())/100.0, depth.c_str(), *time ? " " : "", time);
     return buf;
 }
 
@@ -331,7 +335,7 @@ static Game_Record play_game(Engine& white, Engine& black, const Player& wp, con
             result = wtm ? "0-1" : "1-0";
             break;
         }
-        comments.push_back(score_comment(e.last_info));
+        comments.push_back(score_comment(e.last_info, l.base_ms ? used : -1));
     }
 
     int white_points2 = result=="1-0" ? 2 : result=="0-1" ? 0 : 1;
