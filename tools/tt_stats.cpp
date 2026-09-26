@@ -3,10 +3,13 @@
 // for again later, by depth of the lost entry? (issue #11, lib/tt_stats.hpp)
 //
 // Plays self-play games from the match openings at a fixed depth per move
-// (iterative deepening 1..depth, like UCI "go depth N"). The TT is kept
-// across the moves of a game, as in UCI play, and reset between games.
+// (iterative deepening 1..depth, like UCI "go depth N"), or with movetime=ms
+// at a fixed time per move (like "go movetime", one line per ply). The TT is
+// kept across the moves of a game, as in UCI play, and reset between games.
+// A snapshot of the statistics so far is printed when the TT first reaches
+// 2/3 full, then 99% full, then every 5 plies after that.
 //
-//   ./tools/tt_stats [depth=5] [games=4] [plies=160] [openings=tools/openings.epd]
+//   ./tools/tt_stats [depth=5] [movetime=0] [games=4] [plies=160] [openings=tools/openings.epd]
 // Built with -DTT_STATS; the TT size is the engine's (-DTT_EXPONENT=n to vary).
 #ifndef TT_STATS
 #error "tools/tt_stats must be built with -DTT_STATS (use make tt-stats)"
@@ -56,7 +59,7 @@ static std::vector<std::string> load_opening_fens(const std::string& path)
 
 int main(int argc, char** argv)
 {
-    int depth = 5, games = 4, max_plies = 160;
+    int depth = 5, movetime_ms = 0, games = 4, max_plies = 160;
     std::string openings_path = "tools/openings.epd";
     for(int i=1;i<argc;i++)
     {
@@ -65,12 +68,13 @@ int main(int argc, char** argv)
         std::string key = arg.substr(0, eq), value = eq==std::string::npos ? "" : arg.substr(eq+1);
         if(value.empty()) continue;  // unset make variables arrive as "key="
         if(key=="depth") depth = std::atoi(value.c_str());
+        else if(key=="movetime") movetime_ms = std::atoi(value.c_str());
         else if(key=="games") games = std::atoi(value.c_str());
         else if(key=="plies") max_plies = std::atoi(value.c_str());
         else if(key=="openings") openings_path = value;
         else
         {
-            std::fprintf(stderr, "usage: tools/tt_stats [depth=5] [games=4] [plies=160] [openings=tools/openings.epd]\n");
+            std::fprintf(stderr, "usage: tools/tt_stats [depth=5] [movetime=0] [games=4] [plies=160] [openings=tools/openings.epd]\n");
             return 2;
         }
     }
@@ -87,8 +91,14 @@ int main(int argc, char** argv)
     BB root_children[MAX_LEGAL_MOVES];
 
     std::vector<std::string> fens = load_opening_fens(openings_path);
+    if(movetime_ms>0)
+    std::printf("tt-stats: %d ms per move, %d games, max %d plies, TT %d x %d entries\n",
+        movetime_ms, games, max_plies, 1<<TT_EXPONENT_FOR_SIZE, TT_BUCKET_SIZE);
+    else
     std::printf("tt-stats: depth %d, %d games, max %d plies, TT %d x %d entries\n",
         depth, games, max_plies, 1<<TT_EXPONENT_FOR_SIZE, TT_BUCKET_SIZE);
+    const long long capacity = (long long)(1<<TT_EXPONENT_FOR_SIZE)*TT_BUCKET_SIZE;
+    int max_depth = movetime_ms>0 ? UCI_MAX_DEPTH : depth;
 
     long long start_ns = steady_now_ns();
     for(int g=0; g<games; g++)
@@ -109,6 +119,15 @@ int main(int argc, char** argv)
 
         long long nodes_before = search_nodes;
         std::string reason = "ply limit";
+        bool seen_two_thirds = false, seen_full = false;
+        int next_snapshot_ply = 0;
+        auto snapshot = [&](const char* label)
+        {
+            std::printf("\n=== snapshot game %d after ply %zu: %s ===\n", g+1, game.uci_moves.size(), label);
+            tt_stats::print_stats(capacity);
+            std::printf("\n");
+            std::fflush(stdout);
+        };
         while((int)game.uci_moves.size()<max_plies)
         {
             if(game.outcome(reason)!=Outcome::ONGOING)
@@ -121,8 +140,26 @@ int main(int argc, char** argv)
             path_history[i] = game.positions[game.positions.size()-seed_count+i];
 
             PV_Line pv;
-            for(int d=1; d<=depth; d++)
-            pv = minimax(&root, wfh, d, WEIGHTS_OG, INT_MIN, INT_MAX, table, path_history, seed_count-1, cycle_table);
+            int reached = 0;
+            long long ply_nodes_before = search_nodes, ply_start_ns = steady_now_ns();
+            stop_search_flag.store(false);
+            search_deadline_ns.store(movetime_ms>0 ? ply_start_ns + movetime_ms*1000000LL : 0);
+            for(int d=1; d<=max_depth; d++)
+            {
+                try
+                {
+                    pv = minimax(&root, wfh, d, WEIGHTS_OG, INT_MIN, INT_MAX, table, path_history, seed_count-1, cycle_table);
+                }
+                catch(const search_aborted&)
+                {
+                    break;
+                }
+                reached = d;
+                if(pv.eval <= INT_MIN + max_mating_seq || pv.eval >= INT_MAX - max_mating_seq)
+                break;  // proven mate: deeper iterations only repeat it
+            }
+            search_deadline_ns.store(0);
+            stop_search_flag.store(false);
 
             auto result = all_moves(&root, root_children);
             int n = std::get<0>(result);
@@ -130,13 +167,41 @@ int main(int argc, char** argv)
             int best = 0;  // a PV that doesn't start with a legal move falls back to the first one
             for(int i=0;i<n;i++)
             if(pv.current_lenght>0 && moves[i]==pv.moves[0]) { best = i; break; }
-            game.play(get_UCI(&root, root_children+best));
+            std::string played = get_UCI(&root, root_children+best);
+            game.play(played);
+
+            int ply = (int)game.uci_moves.size();
+            if(movetime_ms>0)
+            {
+                std::printf("ply %3d %-5s depth %2d nodes %9lld %5lld ms  TT %5.1f%% full\n", ply, played.c_str(), reached,
+                    search_nodes-ply_nodes_before, (steady_now_ns()-ply_start_ns)/1000000, 100.0*tt_stats::filled/capacity);
+                std::fflush(stdout);
+            }
+            if(!seen_full && tt_stats::filled*100 >= capacity*99)
+            {
+                seen_two_thirds = seen_full = true;
+                next_snapshot_ply = ply+5;
+                snapshot("TT 99% full");
+            }
+            else if(!seen_two_thirds && tt_stats::filled*3 >= capacity*2)
+            {
+                seen_two_thirds = true;
+                snapshot("TT 2/3 full");
+            }
+            else if(seen_full && ply>=next_snapshot_ply)
+            {
+                next_snapshot_ply = ply+5;
+                snapshot("5 plies later");
+            }
         }
         std::printf("game %d: %3zu plies, %10lld nodes, %s\n", g+1, game.uci_moves.size(), search_nodes-nodes_before, reason.c_str());
         std::fflush(stdout);
     }
     std::printf("total %lld nodes in %lld s\n", search_nodes, (steady_now_ns()-start_ns)/1000000000);
-    tt_stats::print_report((long long)(1<<TT_EXPONENT_FOR_SIZE)*TT_BUCKET_SIZE);
+    std::printf("\n=== final ===\n");
+    tt_stats::print_stats(capacity);
+    std::printf("\n");
+    tt_stats::print_legend();
 
     delete table;
     delete[] wfh;

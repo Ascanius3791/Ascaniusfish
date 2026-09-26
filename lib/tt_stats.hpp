@@ -55,6 +55,7 @@ namespace tt_stats
     inline std::unordered_map<uint64_t, Ghost> ghosts;
     inline Depth_Row rows[DEPTH_ROWS];
     inline uint64_t insertions = 0;  // counts on_store + on_discard(REJECTED): every attempt that needed a slot
+    inline long long filled = 0;     // occupied slots since the last reset (stores into a free slot)
     inline long long probes[2] = {0, 0}, hits[2] = {0, 0}, misses[2] = {0, 0};  // [0] quiescence (depth 0), [1] main search
 
     inline int row_of(int depth)
@@ -66,6 +67,7 @@ namespace tt_stats
     inline void on_store(const Entry& entry)
     {
         insertions++;
+        filled++;  // an eviction (on_discard EVICTED) follows when the slot was taken
         rows[row_of(entry.pv_line.depth)].stored++;
         ghosts.erase(entry.zobrist_hash);
     }
@@ -75,6 +77,8 @@ namespace tt_stats
     {
         if(reason==REJECTED)
         insertions++;
+        else
+        filled--;
         Depth_Row& row = rows[row_of(entry.pv_line.depth)];
         (reason==EVICTED ? row.evicted : row.rejected)++;
         ghosts[entry.zobrist_hash] = Ghost{insertions, (int16_t)entry.pv_line.depth, (int8_t)entry.pv_line.bound_type, false};
@@ -113,12 +117,14 @@ namespace tt_stats
     // keep the counters.
     inline void on_reset()
     {
+        filled = 0;
         ghosts.clear();
     }
 
-    inline void print_report(long long capacity)
+    // Cumulative statistics so far (also used for snapshots during a game).
+    inline void print_stats(long long capacity)
     {
-        std::printf("\nTT discard statistics (capacity %lld entries, %llu insertions)\n", capacity, (unsigned long long)insertions);
+        std::printf("TT %.1f%% full (%lld of %lld entries), %llu insertions\n", 100.0*filled/capacity, filled, capacity, (unsigned long long)insertions);
         const char* kind_names[2] = {"quiescence ", "main search"};
         for(int k=1; k>=0; k--)
         std::printf("%s probes %10lld  hits %10lld (%5.1f%%)  misses %10lld\n", kind_names[k], probes[k], hits[k],
@@ -146,7 +152,11 @@ namespace tt_stats
                 d, d==DEPTH_ROWS-1 ? "+" : " ", r.stored, r.evicted, r.rejected, r.lost_then_asked,
                 lost ? 100.0*r.lost_then_asked/lost : 0.0, r.probes_deep_exact, r.probes_deep_bound, r.probes_shallow, median);
         }
-        std::printf("\ndepth: search depth of the entry when it was stored/discarded. new slot: entries written to\n"
+    }
+
+    inline void print_legend()
+    {
+        std::printf("depth: search depth of the entry when it was stored/discarded. new slot: entries written to\n"
                     "a slot at this depth (an entry deepened in place by iterative deepening keeps its first depth).\n"
                     "lost->asked: discarded entries of this depth requested again later (%%lost: share of all discarded).\n"
                     "deep-*: the lost entry was at least as deep as the request (exact: could have returned; bound: could\n"

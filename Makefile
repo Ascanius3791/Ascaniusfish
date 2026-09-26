@@ -20,6 +20,7 @@ CONCURRENCY ?=
 PAIRS ?=
 MOVETIME ?= 10000
 GAMES ?=
+MOVETIME_TT ?=
 PLIES ?=
 TT_EXPONENT ?=
 TOOL_TARGETS := tools/perft tools/bench tools/speed_compare tools/match tools/make_openings tools/gui_match tools/tt_stats
@@ -108,7 +109,7 @@ gui-match: tools/gui_match
 # -DTT_STATS; rebuilt every time so TT_EXPONENT=n always takes effect.
 tt-stats:
 	$(CXX) $(CXXFLAGS) -DTT_STATS $(if $(TT_EXPONENT),-DTT_EXPONENT=$(TT_EXPONENT)) -pthread -o tools/tt_stats tools/tt_stats.cpp
-	./tools/tt_stats depth=$(DEPTH) games=$(GAMES) plies=$(PLIES)
+	./tools/tt_stats depth=$(DEPTH) movetime=$(MOVETIME_TT) games=$(GAMES) plies=$(PLIES)
 
 run play: $(TARGET)
 	./$(TARGET)
