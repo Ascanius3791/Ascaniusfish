@@ -36,6 +36,7 @@ make tests        # builds hash_table_test, hash_game_test, pv_first_move_diagno
 make perft        # movegen vs known perft counts (PERFT_DEPTH=4 for a quick check)
 make bench        # fixed-depth search; prints "bench: nodes N ..." (the search signature)
 make speed-compare A=main B=.   # nps A/B of two git refs, 95% CI ("." = working tree)
+make tt-stats DEPTH=5 GAMES=4   # TT discards later re-requested, by depth (only build with -DTT_STATS)
 make rebuild      # clean + all
 make clean        # remove build artifacts
 ```

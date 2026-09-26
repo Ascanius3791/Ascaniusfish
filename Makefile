@@ -19,10 +19,13 @@ TC ?=
 CONCURRENCY ?=
 PAIRS ?=
 MOVETIME ?= 10000
-TOOL_TARGETS := tools/perft tools/bench tools/speed_compare tools/match tools/make_openings tools/gui_match
+GAMES ?=
+PLIES ?=
+TT_EXPONENT ?=
+TOOL_TARGETS := tools/perft tools/bench tools/speed_compare tools/match tools/make_openings tools/gui_match tools/tt_stats
 PROFILE_CXXFLAGS ?= -O2 -g -pg -Wall -Wno-unknown-pragmas -Wno-parentheses -Wno-unused-variable
 
-.PHONY: all run play asm tests debug profile-startpos perft bench speed-compare match gui-match clean rebuild
+.PHONY: all run play asm tests debug profile-startpos perft bench speed-compare match gui-match tt-stats clean rebuild
 
 all: $(TARGET) $(UCI_TARGET)
 
@@ -100,6 +103,12 @@ match: tools/match
 gui-match: tools/gui_match
 	@test -n "$(A)" -a -n "$(B)" || (echo "usage: make gui-match A=<white binary> B=<black binary> [MOVETIME=10000]"; exit 2)
 	./tools/gui_match $(A) $(B) movetime=$(MOVETIME)
+
+# TT discard statistics over self-play games (issue #11). The only build with
+# -DTT_STATS; rebuilt every time so TT_EXPONENT=n always takes effect.
+tt-stats:
+	$(CXX) $(CXXFLAGS) -DTT_STATS $(if $(TT_EXPONENT),-DTT_EXPONENT=$(TT_EXPONENT)) -pthread -o tools/tt_stats tools/tt_stats.cpp
+	./tools/tt_stats depth=$(DEPTH) games=$(GAMES) plies=$(PLIES)
 
 run play: $(TARGET)
 	./$(TARGET)

@@ -15,6 +15,7 @@ tools/speed_compare
 tools/match
 tools/make_openings
 tools/gui_match
+tools/tt_stats
 gui_match.pgn
 match.pgn
 benchmarks/profile_startpos
