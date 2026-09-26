@@ -48,6 +48,8 @@ g++ -O3 -Wall -Wno-unknown-pragmas -Wno-parentheses -Wno-unused-variable -DNDEBU
 
 `tools/` holds the benchmarking tools behind `make perft`/`bench`/`speed-compare` (see `docs/BENCHMARKS.md`).
 
+Recorded outputs of long measurement runs (e.g. `make tt-stats` games) live in `docs/measurements/`, each with a header naming the commit and command. Check there before rerunning one.
+
 Profiling: `make profile-startpos` (builds `benchmarks/profile_startpos` with `-pg`, runs `PROFILE_ITERATIONS`/`PROFILE_DEPTH`-controlled iterations from inside `benchmarks/`, then runs `gprof` into `benchmarks/profile_startpos.gprof`).
 
 `diagnostics/` (`attack_invariants_probe.cpp`, `debug_assign_depth.cpp`, `engine_move_diag.cpp`, `lookup_consistency_test.cpp`, `pawn_shift_probe.cpp`) holds one-off diagnostics written while debugging specific engine behaviors (assigned search depth, zobrist/lookup-table consistency, pawn bit-shift correctness, PV move ordering) — check an existing one for the pattern before writing a new probe. `benchmarks/` (`minimax_speed_test.cpp`, `profile_startpos.cpp`) holds performance-measurement programs. Files moved into these subfolders had their `#include "ascaniusfish.hpp"`-style includes rewritten to `../ascaniusfish.hpp` (relative to the subfolder) — keep that in mind when copying one as a template for a new probe/benchmark placed in the same folder.

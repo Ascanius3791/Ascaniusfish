@@ -1,0 +1,324 @@
+# OWNERSHIP=Claude
+# TT discard statistics, one self-play game at 5 s per move (issue #11, used by #12).
+# Engine: commit 0a64f57 (TT replacement value = depth + 0.5*board.move, default TT 32768 x 8).
+# Command: ./tools/tt_stats movetime=5000 games=1 plies=200   (built as `make tt-stats`, -DTT_STATS)
+# Opening: first line of tools/openings.epd. Machine: WSL2, 8 cores, run alone (no other heavy jobs).
+# Snapshots are cumulative. From ply 57 the engine had a proven mate, so later plies search nothing.
+# Column meanings: see the legend at the end of the output.
+
+tt-stats: 5000 ms per move, 1 games, max 200 plies, TT 32768 x 8 entries
+ply   1 d2d4  depth  7 nodes    961024  5006 ms  TT  20.2% full
+ply   2 h7h6  depth  7 nodes   1096960  5001 ms  TT  34.6% full
+ply   3 d4e5  depth  7 nodes   1116416  5000 ms  TT  55.2% full
+ply   4 d6e5  depth  8 nodes   1144576  5000 ms  TT  78.5% full
+
+=== snapshot game 1 after ply 4: TT 2/3 full ===
+TT 78.5% full (205793 of 262144 entries), 227866 insertions
+main search probes     324663  hits      96791 ( 29.8%)  misses     227872
+quiescence  probes    2304705  hits      25531 (  1.1%)  misses    2279174
+misses of discarded positions 3313 (0.13% of all misses), ghosts alive 19287
+
+depth |  new slot   evicted  rejected | lost->asked   %lost | regret probes: deep-exact deep-bound  shallow | reuse dist median
+  1  |    192191     12197      6566 |        2460   13.1% |                      0       2074      624 |               867
+  2  |     23982      2166       755 |         334   11.4% |                      0        366      188 |             13196
+  3  |      3541       146       218 |          55   15.1% |                      0         44       15 |              4697
+  4  |       501         9        15 |           2    8.3% |                      0          1        1 |             25746
+  5  |        94         0         1 |           0    0.0% |                      0          0        0 |                 -
+  6  |         2         0         0 |           0    0.0% |                      0          0        0 |                 -
+
+ply   5 d1d8  depth  8 nodes   1108480  5000 ms  TT  90.7% full
+ply   6 c6d8  depth  8 nodes   1383936  5000 ms  TT  95.1% full
+ply   7 f2f4  depth  8 nodes   1267968  5001 ms  TT  98.5% full
+ply   8 e5e4  depth  8 nodes   1324288  5000 ms  TT  99.5% full
+
+=== snapshot game 1 after ply 8: TT 99% full ===
+TT 99.5% full (260871 of 262144 entries), 508338 insertions
+main search probes     709619  hits     201263 ( 28.4%)  misses     508356
+quiescence  probes    5393682  hits      61992 (  1.1%)  misses    5331690
+misses of discarded positions 35695 (0.61% of all misses), ghosts alive 219620
+
+depth |  new slot   evicted  rejected | lost->asked   %lost | regret probes: deep-exact deep-bound  shallow | reuse dist median
+  1  |    370758    138829     60204 |       26059   13.1% |                      1      25169     4194 |              2309
+  2  |     58392     34523      5697 |        2185    5.4% |                      0       5132      858 |             11397
+  3  |      9946      5309      1287 |         295    4.5% |                      0        252       63 |             11210
+  4  |      1713      1343        71 |          21    1.5% |                      0         19        6 |              8009
+  5  |       231       158         8 |           1    0.6% |                      0          1        0 |             46160
+  6  |        30        37         0 |           0    0.0% |                      0          0        0 |                 -
+  7  |         1         1         0 |           0    0.0% |                      0          0        0 |                 -
+
+ply   9 g2g3  depth  8 nodes   1272832  5000 ms  TT  99.9% full
+ply  10 a7a5  depth  8 nodes   1252864  5000 ms  TT 100.0% full
+ply  11 f1g2  depth  8 nodes   1192192  5000 ms  TT 100.0% full
+ply  12 c8f5  depth  8 nodes   1237248  5000 ms  TT 100.0% full
+ply  13 c1d2  depth  8 nodes   1062912  5000 ms  TT 100.0% full
+
+=== snapshot game 1 after ply 13: 5 plies later ===
+TT 100.0% full (262144 of 262144 entries), 982272 insertions
+main search probes    1330227  hits     347920 ( 26.2%)  misses     982307
+quiescence  probes    8782999  hits     114449 (  1.3%)  misses    8668550
+misses of discarded positions 128717 (1.33% of all misses), ghosts alive 619748
+
+depth |  new slot   evicted  rejected | lost->asked   %lost | regret probes: deep-exact deep-bound  shallow | reuse dist median
+  1  |    637422    364337    200904 |       93735   16.6% |                     28      91500    14882 |              2581
+  2  |     95327    100248     21391 |        7548    6.2% |                      3      17948     2319 |             10841
+  3  |     17248     20862      4740 |        1597    6.2% |                      2       1450      348 |             11195
+  4  |      4108      5600       453 |         123    2.0% |                      0        213       17 |              8009
+  5  |       528      1297        23 |           7    0.5% |                      0          7        0 |             46160
+  6  |       126       229         0 |           0    0.0% |                      0          0        0 |                 -
+  7  |         2        43         0 |           0    0.0% |                      0          0        0 |                 -
+  8  |         0         1         0 |           0    0.0% |                      0          0        0 |                 -
+
+ply  14 c7c6  depth  8 nodes   1228544  5000 ms  TT 100.0% full
+ply  15 g1e2  depth  7 nodes    989696  5000 ms  TT 100.0% full
+ply  16 h6h5  depth  7 nodes    927744  5001 ms  TT 100.0% full
+ply  17 a2a4  depth  7 nodes   1006080  5000 ms  TT 100.0% full
+ply  18 d8e6  depth  7 nodes    818688  5000 ms  TT 100.0% full
+
+=== snapshot game 1 after ply 18: 5 plies later ===
+TT 100.0% full (262144 of 262144 entries), 1311044 insertions
+main search probes    1770096  hits     459002 ( 25.9%)  misses    1311094
+quiescence  probes   11298068  hits     147160 (  1.3%)  misses   11150908
+misses of discarded positions 171792 (1.38% of all misses), ghosts alive 914876
+
+depth |  new slot   evicted  rejected | lost->asked   %lost | regret probes: deep-exact deep-bound  shallow | reuse dist median
+  1  |    846942    548210    275997 |      126149   15.3% |                     46     122362    20161 |              2306
+  2  |    123823    137599     27528 |        9751    5.9% |                      6      23730     2986 |             13196
+  3  |     23583     39538      6040 |        1954    4.3% |                      2       1797      409 |              9797
+  4  |      5550      9393       543 |         152    1.5% |                      0        268       17 |              8009
+  5  |       869      3428        24 |           8    0.2% |                      0          8        0 |             46160
+  6  |       143       455         0 |           0    0.0% |                      0          0        0 |                 -
+  7  |         2       135         0 |           0    0.0% |                      0          0        0 |                 -
+  8  |         0        10         0 |           0    0.0% |                      0          0        0 |                 -
+
+ply  19 e2d4  depth  7 nodes    658944  5000 ms  TT 100.0% full
+ply  20 g7g6  depth  7 nodes    886528  5000 ms  TT 100.0% full
+ply  21 c3e2  depth  7 nodes    681216  5000 ms  TT 100.0% full
+ply  22 f8b4  depth  7 nodes    707328  5000 ms  TT 100.0% full
+ply  23 a1d1  depth  7 nodes    491776  5001 ms  TT 100.0% full
+
+=== snapshot game 1 after ply 23: 5 plies later ===
+TT 100.0% full (262144 of 262144 entries), 1486613 insertions
+main search probes    2006162  hits     519481 ( 25.9%)  misses    1486681
+quiescence  probes   12964929  hits     160924 (  1.2%)  misses   12804005
+misses of discarded positions 182318 (1.28% of all misses), ghosts alive 1083892
+
+depth |  new slot   evicted  rejected | lost->asked   %lost | regret probes: deep-exact deep-bound  shallow | reuse dist median
+  1  |    979933    659564    291723 |      132076   13.9% |                     53     126968    22386 |              2542
+  2  |    143085    162972     30609 |       10839    5.6% |                      6      27234     3139 |             11717
+  3  |     26913     55090      6197 |        1977    3.2% |                      2       1818      413 |              9797
+  4  |      6480     11923       550 |         156    1.3% |                      0        274       17 |              8289
+  5  |       954      4986        24 |           8    0.2% |                      0          8        0 |             46160
+  6  |       143       589         0 |           0    0.0% |                      0          0        0 |                 -
+  7  |         2       225         0 |           0    0.0% |                      0          0        0 |                 -
+  8  |         0        17         0 |           0    0.0% |                      0          0        0 |                 -
+
+ply  24 c6c5  depth  7 nodes    658176  5002 ms  TT 100.0% full
+ply  25 d4e6  depth  8 nodes    436480  5000 ms  TT 100.0% full
+ply  26 f7e6  depth  8 nodes    848128  5000 ms  TT 100.0% full
+ply  27 e1g1  depth  8 nodes    904960  5001 ms  TT 100.0% full
+ply  28 e8f7  depth  8 nodes    811008  5000 ms  TT 100.0% full
+
+=== snapshot game 1 after ply 28: 5 plies later ===
+TT 100.0% full (262144 of 262144 entries), 1732925 insertions
+main search probes    2322161  hits     589158 ( 25.4%)  misses    1733003
+quiescence  probes   14753627  hits     222064 (  1.5%)  misses   14531563
+misses of discarded positions 241805 (1.49% of all misses), ghosts alive 1285635
+
+depth |  new slot   evicted  rejected | lost->asked   %lost | regret probes: deep-exact deep-bound  shallow | reuse dist median
+  1  |   1109711    759288    368070 |      169852   15.1% |                     53     160128    31742 |              2219
+  2  |    159710    195027     45824 |       17693    7.3% |                      6      40770     5218 |              7073
+  3  |     31000     69367      9258 |        3044    3.9% |                      2       2768      661 |              9101
+  4  |      7212     15182       860 |         265    1.7% |                      0        409       34 |              3454
+  5  |      1066      6702        46 |          14    0.2% |                      0         14        0 |             20238
+  6  |       165       802         0 |           0    0.0% |                      0          0        0 |                 -
+  7  |         3       328         0 |           0    0.0% |                      0          0        0 |                 -
+  8  |         0        27         0 |           0    0.0% |                      0          0        0 |                 -
+
+ply  29 h2h4  depth  8 nodes    749568  5000 ms  TT 100.0% full
+ply  30 h8d8  depth  9 nodes    922624  5000 ms  TT 100.0% full
+ply  31 d2c1  depth  9 nodes   1038080  5000 ms  TT 100.0% full
+ply  32 b7b6  depth  9 nodes   1346816  5003 ms  TT 100.0% full
+ply  33 g2h1  depth  9 nodes   1432320  5000 ms  TT 100.0% full
+
+=== snapshot game 1 after ply 33: 5 plies later ===
+TT 100.0% full (262144 of 262144 entries), 2047491 insertions
+main search probes    2729910  hits     682326 ( 25.0%)  misses    2047584
+quiescence  probes   17583506  hits     352676 (  2.0%)  misses   17230830
+misses of discarded positions 449988 (2.33% of all misses), ghosts alive 1491178
+
+depth |  new slot   evicted  rejected | lost->asked   %lost | regret probes: deep-exact deep-bound  shallow | reuse dist median
+  1  |   1211143    844035    499118 |      250879   18.7% |                     55     241997    55047 |              2464
+  2  |    178668    224788     89241 |       42466   13.5% |                      6     109443    10069 |              2258
+  3  |     36125     78663     18211 |        8650    8.9% |                      2      18388     2457 |              9671
+  4  |      9005     18238      3757 |        2687   12.2% |                      0      12309      121 |               139
+  5  |      1691      7710       192 |          81    1.0% |                      0         83        0 |              4628
+  6  |       290       974         4 |           4    0.4% |                      0         11        0 |             26790
+  7  |        46       386         0 |           0    0.0% |                      0          0        0 |                 -
+  8  |         0        30         0 |           0    0.0% |                      0          0        0 |                 -
+
+ply  34 f6g4  depth  9 nodes   1388032  5000 ms  TT 100.0% full
+ply  35 e2d4  depth  9 nodes   1352448  5001 ms  TT 100.0% full
+ply  36 c5d4  depth  9 nodes   1314560  5001 ms  TT 100.0% full
+ply  37 e3d4  depth  9 nodes   1592576  5000 ms  TT 100.0% full
+ply  38 d8d7  depth  9 nodes   1610240  5000 ms  TT 100.0% full
+
+=== snapshot game 1 after ply 38: 5 plies later ===
+TT 100.0% full (262144 of 262144 entries), 2416547 insertions
+main search probes    3168856  hits     752206 ( 23.7%)  misses    2416650
+quiescence  probes   21439045  hits     531484 (  2.5%)  misses   20907561
+misses of discarded positions 812960 (3.49% of all misses), ghosts alive 1672110
+
+depth |  new slot   evicted  rejected | lost->asked   %lost | regret probes: deep-exact deep-bound  shallow | reuse dist median
+  1  |   1271129    898234    695924 |      383248   24.0% |                     58     385414    82689 |              2966
+  2  |    193970    243459    165794 |       94162   23.0% |                      6     241628    16786 |              4053
+  3  |     39074     84406     28427 |       13702   12.1% |                      2      41223     4181 |             13430
+  4  |     11501     20171      7558 |        6050   21.8% |                      0      40367      274 |               209
+  5  |      2008      8302       561 |         304    3.4% |                      0        308        3 |               950
+  6  |       533      1103        16 |          11    1.0% |                      0         21        0 |             23657
+  7  |        52       416         0 |           0    0.0% |                      0          0        0 |                 -
+  8  |         0        32         0 |           0    0.0% |                      0          0        0 |                 -
+
+ply  39 d4d5  depth  9 nodes   1610752  5000 ms  TT 100.0% full
+ply  40 e6d5  depth  9 nodes   1385216  5000 ms  TT 100.0% full
+ply  41 d1d5  depth 10 nodes   1496576  5000 ms  TT 100.0% full
+ply  42 d7d5  depth 10 nodes   1671168  5000 ms  TT 100.0% full
+ply  43 c4d5  depth 11 nodes   1660160  5000 ms  TT 100.0% full
+
+=== snapshot game 1 after ply 43: 5 plies later ===
+TT 100.0% full (262144 of 262144 entries), 2993252 insertions
+main search probes    3850725  hits     857351 ( 22.3%)  misses    2993374
+quiescence  probes   25679055  hits     750144 (  2.9%)  misses   24928911
+misses of discarded positions 1352236 (4.84% of all misses), ghosts alive 1919927
+
+depth |  new slot   evicted  rejected | lost->asked   %lost | regret probes: deep-exact deep-bound  shallow | reuse dist median
+  1  |   1337966    952739   1049799 |      626581   31.3% |                    106     653919   125276 |              2628
+  2  |    209336    265765    253356 |      157796   30.4% |                      7     362822    34223 |              5495
+  3  |     42218     90704     63731 |       35605   23.1% |                      3      78238     8694 |             11339
+  4  |     13335     23498     16112 |       13716   34.6% |                      0      84285      873 |               201
+  5  |      2234      9083      4111 |        3341   25.3% |                      0       3352       85 |               535
+  6  |       657      1357       315 |         195   11.7% |                      0        339        6 |              1204
+  7  |        63       475        18 |           8    1.6% |                      0          8        0 |             18772
+  8  |         0        44         1 |           0    0.0% |                      0          0        0 |                 -
+
+ply  44 a8d8  depth 10 nodes   1764608  5000 ms  TT 100.0% full
+ply  45 f1d1  depth 11 nodes   1505792  5000 ms  TT 100.0% full
+ply  46 b4c5  depth 10 nodes   1803008  5000 ms  TT 100.0% full
+ply  47 g1g2  depth 11 nodes   1289728  5001 ms  TT 100.0% full
+ply  48 e4e3  depth 10 nodes   1923840  5000 ms  TT 100.0% full
+
+=== snapshot game 1 after ply 48: 5 plies later ===
+TT 100.0% full (262144 of 262144 entries), 3559762 insertions
+main search probes    4542320  hits     982425 ( 21.6%)  misses    3559895
+quiescence  probes   30510828  hits    1032687 (  3.4%)  misses   29478141
+misses of discarded positions 1942314 (5.88% of all misses), ghosts alive 2202919
+
+depth |  new slot   evicted  rejected | lost->asked   %lost | regret probes: deep-exact deep-bound  shallow | reuse dist median
+  1  |   1438668   1028388   1363263 |      840968   35.2% |                    122     933617   166961 |              2440
+  2  |    231096    299835    337155 |      213734   33.6% |                      9     502694    47035 |              4475
+  3  |     47222    100288     90282 |       54624   28.7% |                      3     129708    13353 |             14271
+  4  |     15725     31492     25001 |       21493   38.0% |                      0     139836     1495 |               163
+  5  |      2611     10525      7234 |        5941   33.5% |                      0       6404      146 |               429
+  6  |       846      2793       541 |         347   10.4% |                      0        887       21 |              1204
+  7  |        74       642        41 |          16    2.3% |                      0         18        0 |             21150
+  8  |         0       133         3 |           3    2.2% |                      0          5        0 |             53044
+  9  |         0         2         0 |           0    0.0% |                      0          0        0 |                 -
+
+ply  49 g2f1  depth 10 nodes   1328640  5000 ms  TT 100.0% full
+ply  50 e3e2  depth 10 nodes   1876736  5001 ms  TT 100.0% full
+ply  51 f1e2  depth 11 nodes   1540864  5000 ms  TT 100.0% full
+ply  52 d8e8  depth 10 nodes   1657344  5000 ms  TT 100.0% full
+ply  53 h1e4  depth 11 nodes   1302016  5000 ms  TT 100.0% full
+
+=== snapshot game 1 after ply 53: 5 plies later ===
+TT 100.0% full (262144 of 262144 entries), 4180889 insertions
+main search probes    5249734  hits    1068688 ( 20.4%)  misses    4181046
+quiescence  probes   35005898  hits    1196523 (  3.4%)  misses   33809375
+misses of discarded positions 2648892 (6.97% of all misses), ghosts alive 2454176
+
+depth |  new slot   evicted  rejected | lost->asked   %lost | regret probes: deep-exact deep-bound  shallow | reuse dist median
+  1  |   1502904   1076523   1780387 |     1141032   39.9% |                    170    1333779   203003 |              2060
+  2  |    241928    319724    411213 |      264707   36.2% |                     16     594632    58946 |              4171
+  3  |     52267    106576    123658 |       79396   34.5% |                     15     201143    17249 |             14049
+  4  |     16722     36142     33359 |       29318   42.2% |                     20     223881     2004 |               123
+  5  |      3033     11753     12791 |       11028   44.9% |                      0      11806      228 |               320
+  6  |       898      3897      1575 |        1156   21.1% |                      0       1910       36 |               379
+  7  |        75       832        73 |          30    3.3% |                      0         48        0 |             17611
+  8  |         1       228         5 |           4    1.7% |                      0          6        0 |             53044
+  9  |         0         9         0 |           0    0.0% |                      0          0        0 |                 -
+
+ply  54 e8e4  depth 10 nodes    503296  5046 ms  TT 100.0% full
+ply  55 c1e3  depth 10 nodes     63488  5008 ms  TT 100.0% full
+ply  56 e4e3  depth  9 nodes    252160  5002 ms  TT 100.0% full
+ply  57 e2f1  depth  1 nodes         1     0 ms  TT 100.0% full
+ply  58 g4h2  depth  1 nodes         1     0 ms  TT 100.0% full
+
+=== snapshot game 1 after ply 58: 5 plies later ===
+TT 100.0% full (262144 of 262144 entries), 4260599 insertions
+main search probes    5340137  hits    1079371 ( 20.2%)  misses    4260766
+quiescence  probes   35444087  hits    1207330 (  3.4%)  misses   34236757
+misses of discarded positions 2710606 (7.04% of all misses), ghosts alive 2493118
+
+depth |  new slot   evicted  rejected | lost->asked   %lost | regret probes: deep-exact deep-bound  shallow | reuse dist median
+  1  |   1512003   1082663   1835680 |     1172658   40.2% |                    170    1369272   207911 |              1985
+  2  |    242084    322131    420303 |      270393   36.4% |                     17     600892    60711 |              4074
+  3  |     52973    107251    127474 |       81677   34.8% |                     15     206932    17421 |             13765
+  4  |     16756     36722     33885 |       29917   42.4% |                     20     230233     2112 |               125
+  5  |      3111     11897     13436 |       11639   45.9% |                      0      12476      249 |               322
+  6  |       903      4032      1796 |        1317   22.6% |                      0       2079       38 |               324
+  7  |       108       856        80 |          33    3.5% |                      0         51        0 |             15914
+  8  |         2       233         5 |           5    2.1% |                      0          7        0 |             46737
+  9  |         0        11         0 |           0    0.0% |                      0          0        0 |                 -
+
+ply  59 f1f2  depth  1 nodes         1     0 ms  TT 100.0% full
+ply  60 f5g4  depth  1 nodes         1     0 ms  TT 100.0% full
+ply  61 f2g1  depth  1 nodes         1     0 ms  TT 100.0% full
+ply  62 e3e2  depth  1 nodes         1     0 ms  TT 100.0% full
+ply  63 d1d4  depth  1 nodes         1     0 ms  TT 100.0% full
+
+=== snapshot game 1 after ply 63: 5 plies later ===
+TT 100.0% full (262144 of 262144 entries), 4260599 insertions
+main search probes    5340142  hits    1079376 ( 20.2%)  misses    4260766
+quiescence  probes   35444087  hits    1207330 (  3.4%)  misses   34236757
+misses of discarded positions 2710606 (7.04% of all misses), ghosts alive 2493118
+
+depth |  new slot   evicted  rejected | lost->asked   %lost | regret probes: deep-exact deep-bound  shallow | reuse dist median
+  1  |   1512003   1082663   1835680 |     1172658   40.2% |                    170    1369272   207911 |              1985
+  2  |    242084    322131    420303 |      270393   36.4% |                     17     600892    60711 |              4074
+  3  |     52973    107251    127474 |       81677   34.8% |                     15     206932    17421 |             13765
+  4  |     16756     36722     33885 |       29917   42.4% |                     20     230233     2112 |               125
+  5  |      3111     11897     13436 |       11639   45.9% |                      0      12476      249 |               322
+  6  |       903      4032      1796 |        1317   22.6% |                      0       2079       38 |               324
+  7  |       108       856        80 |          33    3.5% |                      0         51        0 |             15914
+  8  |         2       233         5 |           5    2.1% |                      0          7        0 |             46737
+  9  |         0        11         0 |           0    0.0% |                      0          0        0 |                 -
+
+ply  64 g4f3  depth  1 nodes         1     2 ms  TT 100.0% full
+ply  65 d5d6  depth  1 nodes         1     0 ms  TT 100.0% full
+ply  66 c5d4  depth  1 nodes        78     3 ms  TT 100.0% full
+game 1:  66 plies,   64859735 nodes, black mates
+total 64859735 nodes in 280 s
+
+=== final ===
+TT 100.0% full (262144 of 262144 entries), 4260600 insertions
+main search probes    5340145  hits    1079378 ( 20.2%)  misses    4260767
+quiescence  probes   35444143  hits    1207330 (  3.4%)  misses   34236813
+misses of discarded positions 2710606 (7.04% of all misses), ghosts alive 2493119
+
+depth |  new slot   evicted  rejected | lost->asked   %lost | regret probes: deep-exact deep-bound  shallow | reuse dist median
+  1  |   1512004   1082663   1835680 |     1172658   40.2% |                    170    1369272   207911 |              1985
+  2  |    242084    322132    420303 |      270393   36.4% |                     17     600892    60711 |              4074
+  3  |     52973    107251    127474 |       81677   34.8% |                     15     206932    17421 |             13765
+  4  |     16756     36722     33885 |       29917   42.4% |                     20     230233     2112 |               125
+  5  |      3111     11897     13436 |       11639   45.9% |                      0      12476      249 |               322
+  6  |       903      4032      1796 |        1317   22.6% |                      0       2079       38 |               324
+  7  |       108       856        80 |          33    3.5% |                      0         51        0 |             15914
+  8  |         2       233         5 |           5    2.1% |                      0          7        0 |             46737
+  9  |         0        11         0 |           0    0.0% |                      0          0        0 |                 -
+
+depth: search depth of the entry when it was stored/discarded. new slot: entries written to
+a slot at this depth (an entry deepened in place by iterative deepening keeps its first depth).
+lost->asked: discarded entries of this depth requested again later (%lost: share of all discarded).
+deep-*: the lost entry was at least as deep as the request (exact: could have returned; bound: could
+have tightened alpha/beta at equal depth). shallow: it would only have ordered moves.
+reuse dist: insertions between the discard and the first request; far above capacity means the
+table is too small, far below it means the replacement policy threw out something needed soon.
