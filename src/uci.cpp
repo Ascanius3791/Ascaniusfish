@@ -320,6 +320,7 @@ void UCI_Engine::search(UCI_Limits limits, long long start_ns)
         send("bestmove 0000");
         return;
     }
+    clear_killer_moves();
     // Fallback if even depth 1 gets aborted: the move ordering's favourite.
     std::vector<int> order = sorting_moves(wfh, std::get<1>(result), n, root.white_move, nullptr, 0, WEIGHTS_OG);
     std::string best = get_UCI(&root, wfh+order[0]);

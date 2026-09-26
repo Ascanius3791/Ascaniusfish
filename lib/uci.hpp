@@ -4,6 +4,7 @@
 
 #include "../ascaniusfish_2.hpp"
 #include "search_control.hpp"
+#include "move_ordering.hpp"
 #include "time_manager.hpp"
 #include <string>
 #include <vector>
