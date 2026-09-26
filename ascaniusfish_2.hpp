@@ -531,7 +531,7 @@ PV_Line minimax(const BB*const original ,BB* const wfh ,int depth = 0, const WEI
         if(beta<=alpha)
         {
             if(is_quiet_move(original,move))
-            store_killer_move(ply-effective_root_ply,move);
+            store_quiet_cutoff(original,ply-effective_root_ply,depth,move,order);
             pruned_moves+=number_of_new_moves-i-1;
             break;
         }        
