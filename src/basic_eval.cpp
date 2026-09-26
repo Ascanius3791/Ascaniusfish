@@ -35,31 +35,25 @@ int piecetable(const BB* const original , const WEIGHTS W)
     OW[0]=enemy_material_left_percent(original,0);
     EW[0]=1-OW[0];
     EW[1]=1-OW[1];
-    uint64_t all_pieces= original->Board[0]|original->Board[1]|original->Board[2]|original->Board[3]|original->Board[4]|original->Board[5]|original->Board[6]|original->Board[7]|original->Board[8]|original->Board[9]|original->Board[10]|original->Board[11];
-    
-    while(all_pieces)
+
+    for(int piece=0; piece<6; piece++)
     {
-        int i=find_and_delete_trailling_1(all_pieces);
-        //pawns
-        if(original->Board[0] & 1Ull << i)
+        int black_table_index = (piece==0) ? 6 : piece; // only pawns get a dedicated black row; other pieces share the white row (see WEIGHTS::piece_table_value_opening[7][64])
+        uint64_t white_bb = original->Board[piece];
+        while(white_bb)
         {
-            score += W.piece_table_value_opening[0][i]*OW[1]+W.piece_table_value_endgame[0][i]*EW[1];
+            int i=find_and_delete_trailling_1(white_bb);
+            score += W.piece_table_value_opening[piece][i]*OW[1]+W.piece_table_value_endgame[piece][i]*EW[1];
         }
-        if(original->Board[6] & 1Ull << i)
+        uint64_t black_bb = original->Board[piece+6];
+        while(black_bb)
         {
-            score -= W.piece_table_value_opening[6][i]*OW[0]+W.piece_table_value_endgame[6][i]*EW[0];
-        }
-        
-        //other pieces
-        for(int col =0;col<2;col++)
-        for(int piec=1;piec<6;piec++)
-        {
-            if(original->Board[piec+6*!col] & 1Ull << i)
-            score += (1-2*!col)*(W.piece_table_value_opening[piec][i]*OW[col]+W.piece_table_value_endgame[piec][i]*EW[col]);
+            int i=find_and_delete_trailling_1(black_bb);
+            score -= W.piece_table_value_opening[black_table_index][i]*OW[0]+W.piece_table_value_endgame[black_table_index][i]*EW[0];
         }
     }
-        
-            
+
+
     return score;
 }
 
@@ -71,17 +65,9 @@ int piece_activity_eval(const BB* const original, const WEIGHTS W)
     uint64_t all_pieces= all_black_pieces|all_white_pieces;
     for(int col=0;col<2;col++)
     {
-        uint64_t own_pieces = original->Board[0+6*!col]|original->Board[1+6*!col]|original->Board[2+6*!col]|original->Board[3+6*!col]|original->Board[4+6*!col]|original->Board[5+6*!col];
-        uint64_t enemy_pieces = original->Board[0+6*col]|original->Board[1+6*col]|original->Board[2+6*col]|original->Board[3+6*col]|original->Board[4+6*col]|original->Board[5+6*col];
+        uint64_t own_pieces = col ? all_white_pieces : all_black_pieces;
+        uint64_t enemy_pieces = col ? all_black_pieces : all_white_pieces;
         uint64_t own_pawns = original->Board[0+6*!col];
-        uint64_t enemy_pawns = original->Board[0+6*col];
-        
-        uint64_t white_pawn_attacks;
-        uint64_t black_pawn_attacks;
-        
-        
-        
-        own_pawns = original->Board[0+6*!col];
         while(own_pawns)
         {
             int i=find_and_delete_trailling_1(own_pawns);
@@ -155,15 +141,7 @@ int king_safety_of_colour(const uint64_t Board[12],bool white, const WEIGHTS W )
     
     float score=W.defensive_value[5];//the king can always defend itself
     int king_sq=__builtin_ctzll(Board[5+6*!white]);
-    uint64_t occupancy = Board[0]|Board[1]|Board[2]|Board[3]|Board[4]|Board[5]|Board[6]|Board[7]|Board[8]|Board[9]|Board[10]|Board[11]; 
-    uint64_t own_P = Board[0+6*!white]|Board[1+6*!white]|Board[2+6*!white]|Board[3+6*!white]|Board[4+6*!white]|Board[5+6*!white];
-    uint64_t enemy_P = Board[0+6*white]|Board[1+6*white]|Board[2+6*white]|Board[3+6*white]|Board[4+6*white]|Board[5+6*white];
-
-
-    uint64_t enemy_attacks=attacked_squares(Board,!white);   
-    uint64_t enemy_captures=enemy_attacks & own_P;
-    uint64_t own_attacks=attacked_squares(Board,white);
-    uint64_t own_captures=own_attacks & enemy_P;
+    uint64_t occupancy = Board[0]|Board[1]|Board[2]|Board[3]|Board[4]|Board[5]|Board[6]|Board[7]|Board[8]|Board[9]|Board[10]|Board[11];
     while(occupancy)
     {
         int i=find_and_delete_trailling_1(occupancy);
@@ -266,13 +244,7 @@ int pawn_struckture_eval_of_colour(const BB* const original, bool white, const W
     //punish pawn doubles and triples
     for(int j=0;j<8;j++)
     {
-        
-        int doubled_pawn_counter=0;
-        for(int i=0;i<8;i++)
-        {
-            if(pawns & 1Ull << j+8*i)
-            doubled_pawn_counter++;
-        }
+        int doubled_pawn_counter = count(pawns & mask_column[j]);
         if(doubled_pawn_counter>1)
         score -= W.punishment_for_double_pawn;
         if(doubled_pawn_counter>2)
@@ -340,36 +312,33 @@ int basic_eval(const BB*const original , const WEIGHTS W)// return the evaluatio
     score += positional_eval(original,W);
     
     
-    score+= 5*(count(attacks_by_col(original->Board,1))-count(attacks_by_col(original->Board,0)));
+    score+= 5*(count(get_attacked_squares(original,1))-count(get_attacked_squares(original,0)));
     
     score += piece_activity_eval(original,W);
 
     return score;
 }
 
-int tactical_potential(const uint64_t Board[12], WEIGHTS W)
+int tactical_potential(const BB* const original, int king_safety_white, int king_safety_black, WEIGHTS W)
 {
-    if(Board==NULL)
+    if(original==NULL)
     {
         std::cout << "Error in tactical potential\n";
         return 0;
     }
+    const uint64_t* Board = original->Board;
     uint64_t white_pieces = Board[0]|Board[1]|Board[2]|Board[3]|Board[4]|Board[5];
     uint64_t black_pieces = Board[6]|Board[7]|Board[8]|Board[9]|Board[10]|Board[11];
     uint64_t occupancy = white_pieces|black_pieces;
     int score=0;
-    int king_s = king_safety_of_colour(Board,1,W);
-    
-    if(king_s<0)
-    score-=king_s;
-    //std::cout << "Tactical potential 5: " << score << std::endl;
-    king_s = king_safety_of_colour(Board,0,W);
-    
-    if(king_s<0)
-    score-=king_s;
-    //std::cout << "Tactical potential 4: " << score << std::endl;
-    uint64_t attacks_white = attacks_by_col(Board,1);
-    uint64_t attacks_black = attacks_by_col(Board,0);
+    // king_safety_white/king_safety_black are king_safety_of_colour(Board,1/0,W), computed once
+    // by the caller (sorting_eval already needs both) instead of redone here.
+    if(king_safety_white<0)
+    score-=king_safety_white;
+    if(king_safety_black<0)
+    score-=king_safety_black;
+    uint64_t attacks_white = get_attacked_squares(original,1);
+    uint64_t attacks_black = get_attacked_squares(original,0);
     uint64_t white_captures = attacks_white & black_pieces;
     uint64_t black_captures = attacks_black & white_pieces;
     uint64_t white_defends = attacks_white & white_pieces;
@@ -455,17 +424,21 @@ int sorting_eval(const BB* const original, const WEIGHTS W )// accelerates pruni
     //return basic_eval(original,W);
     int score=0;
     score +=material_eval(original,W);
-    int king_s=king_safety_of_colour(original->Board,!original->white_move,W);
+    // king_safety_of_colour(white) and (black) computed once here and reused below for
+    // tactical_potential, instead of each being computed twice more inside it.
+    int king_safety_white=king_safety_of_colour(original->Board,true,W);
+    int king_safety_black=king_safety_of_colour(original->Board,false,W);
+    int king_s = original->white_move ? king_safety_black : king_safety_white;//king_safety_of_colour(!original->white_move)
     if(king_s<=0)//if the king may be in danger, we must attack!//is this even quicker? in a queen vs king endgame with gave 30% more pruning
     score -= W.value_of_king_safety_for_sorting*king_s*(1-2*!original->white_move);
-    king_s=king_safety_of_colour(original->Board,original->white_move,W);
+    king_s = original->white_move ? king_safety_white : king_safety_black;//king_safety_of_colour(original->white_move)
     if(king_s<=0)
     score += W.value_of_king_safety_for_sorting*king_s*(1-2*!original->white_move);
     //score +=original->Board[2+6]%1000;
     score += piecetable(original,W);// is this too slow??// if i add this pruning is more inefficiient?? what the fuck?? in all tested scenarios this is bad
     //if(in_check((*original).Board,(*original).white_move))
     //score .check_value*(1-2*!(*original).white_move);
-    score+=tactical_potential(original->Board,W)/10*(1-2*!original->white_move);//77% without this
+    score+=tactical_potential(original,king_safety_white,king_safety_black,W)/10*(1-2*!original->white_move);//77% without this
     score+=piece_activity_eval(original,W);
     return score;
 }

@@ -6,6 +6,7 @@
 #include "../src/templates.cpp"
 #include "../src/magics.cpp"
 #include "../src/printing.cpp"
+#include "../src/BB_lazyfields.cpp" // get_occupancy/get_attacked_squares/... used by sorting_eval/tactical_potential
 
 float enemy_material_left_percent(const BB* const original, bool for_white);
 
@@ -29,7 +30,7 @@ int positional_eval(const BB* const original, const WEIGHTS W = WEIGHTS_OG);
 
 int basic_eval(const BB*const original , const WEIGHTS W = WEIGHTS_OG);// return the evaluation in centipawns
 
-int tactical_potential(const uint64_t Board[12], WEIGHTS W=WEIGHTS_OG);
+int tactical_potential(const BB* const original, int king_safety_white, int king_safety_black, WEIGHTS W=WEIGHTS_OG);
 
 int sorting_eval(const BB* const original, const WEIGHTS W =WEIGHTS_OG);// accelerates pruning this function has to be lightheaded(Quick to compute)
 
