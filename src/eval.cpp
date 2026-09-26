@@ -18,7 +18,7 @@ int exception_eval(const BB* const original)//0=no exception, 1=stalemate, 2=che
     }
 }
 
-int eval(const BB* const original, WEIGHTS W, int exception_state)//exception state may be explicitly given, if it is not, it will be calculated. 0=no exception, 1=stalemate, 2=checkmate
+int eval(const BB* const original, const WEIGHTS& W, int exception_state)//exception state may be explicitly given, if it is not, it will be calculated. 0=no exception, 1=stalemate, 2=checkmate
 {
     if(exception_state==-1)
     exception_state = exception_eval(original);//in case of exceptions, this handels the assignment of the eval to original

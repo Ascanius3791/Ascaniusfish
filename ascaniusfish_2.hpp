@@ -64,7 +64,7 @@ void initialize_rand()
     srand(address);
 }
 
-vector<int> sorting_moves(const BB* const Base, vector<Move> moves, int num, bool WM, const PV_Line* const pv_line =0, int index_of_pv_line_to_compare_against=0, WEIGHTS W = WEIGHTS_OG)//returns 0, till end-start-1 ,ordered!
+vector<int> sorting_moves(const BB* const Base, vector<Move> moves, int num, bool WM, const PV_Line* const pv_line =0, int index_of_pv_line_to_compare_against=0, const WEIGHTS& W = WEIGHTS_OG)//returns 0, till end-start-1 ,ordered!
 {
     // Create an array of indices [start, end)
     vector<int> indices(num);
@@ -111,7 +111,7 @@ vector<int> sorting_moves(const BB* const Base, vector<Move> moves, int num, boo
 // slow/shuffling position can trip it). The eval/bound_type/draw semantics
 // are unchanged either way - this only ever adds move info, never changes
 // the score.
-PV_Line make_repetition_draw_pv_line(const BB* const original, BB* const wfh, int depth, int ply, int root_ply, WEIGHTS W)
+PV_Line make_repetition_draw_pv_line(const BB* const original, BB* const wfh, int depth, int ply, int root_ply, const WEIGHTS& W)
 {
     PV_Line draw_pv_line = PV_Line(0);
     draw_pv_line.depth = depth;
@@ -153,7 +153,7 @@ constexpr int max_non_king_pieces = 30;
 // A position with exactly one legal move is always searched on (forced move),
 // even if that move isn't a capture. Such a move removes no piece, so
 // forced_moves_left caps these extensions per line to keep the recursion bounded.
-PV_Line minimax_tactical(const BB* const original, BB* const wfh, WEIGHTS W = WEIGHTS_OG, int alpha = INT_MIN, int beta = INT_MAX, lookup_table* const table = NULL, int forced_moves_left = max_non_king_pieces)
+PV_Line minimax_tactical(const BB* const original, BB* const wfh, const WEIGHTS& W = WEIGHTS_OG, int alpha = INT_MIN, int beta = INT_MAX, lookup_table* const table = NULL, int forced_moves_left = max_non_king_pieces)
 {
     poll_search_abort();//see minimax()
     auto result = all_moves(original, wfh);
@@ -246,7 +246,7 @@ PV_Line minimax_tactical(const BB* const original, BB* const wfh, WEIGHTS W = WE
     return pv_line;
 }
 
-PV_Line minimax(const BB*const original ,BB* const wfh ,int depth = 0, WEIGHTS W= WEIGHTS_OG,int alpha = INT_MIN, int beta = INT_MAX,lookup_table* const table=NULL, BB* const path_history=nullptr, int ply=0, const CuckooCycleTable* const cycle_table=nullptr, int root_ply=INT_MIN, bool null_move_allowed=true)
+PV_Line minimax(const BB*const original ,BB* const wfh ,int depth = 0, const WEIGHTS& W= WEIGHTS_OG,int alpha = INT_MIN, int beta = INT_MAX,lookup_table* const table=NULL, BB* const path_history=nullptr, int ply=0, const CuckooCycleTable* const cycle_table=nullptr, int root_ply=INT_MIN, bool null_move_allowed=true)
 {
     if(DEBUG_MODE)
     saefty_checks(original);
@@ -1061,7 +1061,7 @@ class Play  : public initialize_FEN_to
             copy_BB(wfh+index_of_alignment,original);
     }
 
-    int engine_move_old(BB* original, BB* wfh, bool pretty_print=0,int depth=1, WEIGHTS W=WEIGHTS_OG,lookup_table* table=0,FILE* pipe=0)
+    int engine_move_old(BB* original, BB* wfh, bool pretty_print=0,int depth=1, const WEIGHTS& W=WEIGHTS_OG,lookup_table* table=0,FILE* pipe=0)
     {
         int alpha=INT_MIN,beta=INT_MAX;
         int best_move_index=0;
@@ -1248,7 +1248,7 @@ class Play  : public initialize_FEN_to
     // table forward from shallow to deep so sorting_moves gets a good PV-move hint at
     // every depth. Everything minimax already does internally (root TT short-circuit,
     // alpha-beta, TT insertion) is not duplicated here.
-    int engine_move(BB* original, BB* wfh, bool pretty_print=0,int depth=1, WEIGHTS W=WEIGHTS_OG,lookup_table* table=0,FILE* pipe=0)
+    int engine_move(BB* original, BB* wfh, bool pretty_print=0,int depth=1, const WEIGHTS& W=WEIGHTS_OG,lookup_table* table=0,FILE* pipe=0)
     {
         auto result = all_moves(original,wfh);
         int number_of_new_moves = std::get<0>(result);
@@ -1320,7 +1320,7 @@ class Play  : public initialize_FEN_to
     // time_stats_white/time_stats_black) and persists across moves so predictions
     // improve over the course of the game. Always completes at least depth 1, so it
     // always returns a legal move.
-    int timed_engine_move(BB* original, BB* wfh, DepthTimeStats& stats, bool pretty_print=0, chrono::duration<double> time_limit=chrono::duration<double>(5.0), WEIGHTS W=WEIGHTS_OG,lookup_table* table=0,FILE* pipe=0)
+    int timed_engine_move(BB* original, BB* wfh, DepthTimeStats& stats, bool pretty_print=0, chrono::duration<double> time_limit=chrono::duration<double>(5.0), const WEIGHTS& W=WEIGHTS_OG,lookup_table* table=0,FILE* pipe=0)
     {
         auto result = all_moves(original,wfh);
         int number_of_new_moves = std::get<0>(result);
@@ -1470,7 +1470,7 @@ class Play  : public initialize_FEN_to
         return pv_line.eval;
     }
 
-    int engine_move_for_time_testing(BB* original, BB* wfh, bool pretty_print=0,int depth=1, WEIGHTS W=WEIGHTS_OG,lookup_table* table=0,FILE* pipe=0)
+    int engine_move_for_time_testing(BB* original, BB* wfh, bool pretty_print=0,int depth=1, const WEIGHTS& W=WEIGHTS_OG,lookup_table* table=0,FILE* pipe=0)
     {
         int alpha=INT_MIN,beta=INT_MAX;
         int best_move_index=0;
@@ -2057,7 +2057,7 @@ double accuracy(int eval_bevore, int eval_after)
     return max(0.0,round_to_percentage(return_value));
 }
 
-double* evaluate_game(vector<BB> history, const int depth, WEIGHTS W=WEIGHTS_OG)
+double* evaluate_game(vector<BB> history, const int depth, const WEIGHTS& W=WEIGHTS_OG)
 {
     double accuracy_per_move[history.size()-1];
     double score=0;

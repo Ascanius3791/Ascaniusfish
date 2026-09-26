@@ -8,7 +8,7 @@
 
 int exception_eval(const BB* const original);
 
-int eval(const BB* const original, WEIGHTS W =WEIGHTS_OG, int exception_state=-1);
+int eval(const BB* const original, const WEIGHTS& W =WEIGHTS_OG, int exception_state=-1);
 
 
 

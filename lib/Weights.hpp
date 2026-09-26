@@ -32,7 +32,7 @@ class WEIGHTS
 
             void print_all_values()const;
 
-            int norm_to(WEIGHTS W);//returns the (sq)norm of the difference of the weights
+            int norm_to(const WEIGHTS& W) const;//returns the (sq)norm of the difference of the weights
 
             void append_weights_to_File(const std::string& filename = "History_of_Weights.txt")const;
 

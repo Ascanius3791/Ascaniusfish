@@ -27,7 +27,7 @@ bool side_to_move_lacks_non_pawn_material(const BB* const original)
     return non_pawn_pieces == 0;
 }
 
-int piecetable(const BB* const original , const WEIGHTS W)
+int piecetable(const BB* const original , const WEIGHTS& W)
 {
     float score=0;
     float EW[2],OW[2];//endgame weight, opening weight
@@ -75,7 +75,7 @@ int piecetable(const BB* const original , const WEIGHTS W)
     return score;
 }
 
-int piece_activity_eval(const BB* const original, const WEIGHTS W)
+int piece_activity_eval(const BB* const original, const WEIGHTS& W)
 {
     int score=0;
     uint64_t all_black_pieces= original->Board[6]|original->Board[7]|original->Board[8]|original->Board[9]|original->Board[10]|original->Board[11];
@@ -154,7 +154,7 @@ float distance_to_king(int king_sq, int other_sq)// returns the distance of a sq
     return sqrt(pow(king_row-other_row,2)+ pow(king_col-other_col,2));
 }
 
-int king_safety_of_colour(const uint64_t Board[12],bool white, const WEIGHTS W )
+int king_safety_of_colour(const uint64_t Board[12],bool white, const WEIGHTS& W )
 {   
     
     float score=W.defensive_value[5];//the king can always defend itself
@@ -214,7 +214,7 @@ int king_safety_of_colour(const uint64_t Board[12],bool white, const WEIGHTS W )
     
 }
 
-inline int material_eval(const BB* const original, const WEIGHTS W)
+inline int material_eval(const BB* const original, const WEIGHTS& W)
 {
     float score_W=0,score_B=0,material_left=0;
     for(int i=0;i<6;i++)
@@ -226,7 +226,7 @@ inline int material_eval(const BB* const original, const WEIGHTS W)
     return (int)((score_W-score_B)*sqrt(2-(8*1+3*4*2*5+9+3.5)*2/material_left));
 }
 
-int central_pawn_presence(const BB* const original, bool white, const WEIGHTS W)//positive is good for both colours
+int central_pawn_presence(const BB* const original, bool white, const WEIGHTS& W)//positive is good for both colours
 {
     int score=0;
     uint64_t mask_center = 0B0000000000000000001111000011110000111100001111000000000000000000;
@@ -245,7 +245,7 @@ int central_pawn_presence(const BB* const original, bool white, const WEIGHTS W)
     return score/4;
 }
 
-int pawn_struckture_eval_of_colour(const BB* const original, bool white, const WEIGHTS W)//positive is good for both colours
+int pawn_struckture_eval_of_colour(const BB* const original, bool white, const WEIGHTS& W)//positive is good for both colours
 {
     int score=0;
 
@@ -305,7 +305,7 @@ int pawn_struckture_eval_of_colour(const BB* const original, bool white, const W
     return score;
 }
 
-int positional_eval(const BB* const original, const WEIGHTS W)
+int positional_eval(const BB* const original, const WEIGHTS& W)
 {
     int score=0;
     score += pawn_struckture_eval_of_colour(original,true,W)-pawn_struckture_eval_of_colour(original,false,W);
@@ -313,7 +313,7 @@ int positional_eval(const BB* const original, const WEIGHTS W)
 
 }
 
-int basic_eval(const BB*const original , const WEIGHTS W)// return the evaluation in centipawns
+int basic_eval(const BB*const original , const WEIGHTS& W)// return the evaluation in centipawns
 {
     int score=0;
     
@@ -337,7 +337,7 @@ int basic_eval(const BB*const original , const WEIGHTS W)// return the evaluatio
     return score;
 }
 
-int tactical_potential(const BB* const original, int king_safety_white, int king_safety_black, WEIGHTS W)
+int tactical_potential(const BB* const original, int king_safety_white, int king_safety_black, const WEIGHTS& W)
 {
     if(original==NULL)
     {
@@ -437,7 +437,7 @@ int tactical_potential(const BB* const original, int king_safety_white, int king
     return return_value;
 }
 
-int sorting_eval(const BB* const original, const WEIGHTS W )// accelerates pruning this function has to be lightheaded(Quick to compute)
+int sorting_eval(const BB* const original, const WEIGHTS& W )// accelerates pruning this function has to be lightheaded(Quick to compute)
 {
     //return basic_eval(original,W);
     int score=0;

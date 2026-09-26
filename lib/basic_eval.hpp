@@ -12,27 +12,27 @@ float enemy_material_left_percent(const BB* const original, bool for_white);
 
 bool side_to_move_lacks_non_pawn_material(const BB* const original);// zugzwang guard for null-move pruning
 
-int piecetable(const BB* const original , const WEIGHTS W = WEIGHTS_OG);
+int piecetable(const BB* const original , const WEIGHTS& W = WEIGHTS_OG);
 
-int piece_activity_eval(const BB* const original, const WEIGHTS W = WEIGHTS_OG);
+int piece_activity_eval(const BB* const original, const WEIGHTS& W = WEIGHTS_OG);
 
 float distance_to_king(int king_sq, int other_sq);// returns the distance of a sqare, to the kings square
 
-int king_safety_of_colour(const uint64_t Board[12],bool white, const WEIGHTS W =WEIGHTS_OG);
+int king_safety_of_colour(const uint64_t Board[12],bool white, const WEIGHTS& W =WEIGHTS_OG);
 
-inline int material_eval(const BB* const original, const WEIGHTS W = WEIGHTS_OG);
+inline int material_eval(const BB* const original, const WEIGHTS& W = WEIGHTS_OG);
 
-int central_pawn_presence(const BB* const original, bool white, const WEIGHTS W = WEIGHTS_OG);//positive is good for both colours
+int central_pawn_presence(const BB* const original, bool white, const WEIGHTS& W = WEIGHTS_OG);//positive is good for both colours
 
-int pawn_struckture_eval_of_colour(const BB* const original, bool white, const WEIGHTS W = WEIGHTS_OG);//positive is good for both colours
+int pawn_struckture_eval_of_colour(const BB* const original, bool white, const WEIGHTS& W = WEIGHTS_OG);//positive is good for both colours
 
-int positional_eval(const BB* const original, const WEIGHTS W = WEIGHTS_OG);
+int positional_eval(const BB* const original, const WEIGHTS& W = WEIGHTS_OG);
 
-int basic_eval(const BB*const original , const WEIGHTS W = WEIGHTS_OG);// return the evaluation in centipawns
+int basic_eval(const BB*const original , const WEIGHTS& W = WEIGHTS_OG);// return the evaluation in centipawns
 
-int tactical_potential(const BB* const original, int king_safety_white, int king_safety_black, WEIGHTS W=WEIGHTS_OG);
+int tactical_potential(const BB* const original, int king_safety_white, int king_safety_black, const WEIGHTS& W=WEIGHTS_OG);
 
-int sorting_eval(const BB* const original, const WEIGHTS W =WEIGHTS_OG);// accelerates pruning this function has to be lightheaded(Quick to compute)
+int sorting_eval(const BB* const original, const WEIGHTS& W =WEIGHTS_OG);// accelerates pruning this function has to be lightheaded(Quick to compute)
 
 
 

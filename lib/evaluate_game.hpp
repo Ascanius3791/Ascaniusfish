@@ -26,7 +26,7 @@ double accuracy(int eval_bevore, int eval_after)
     return max(0.0,round_to_percentage(return_value));
 }
 
-double* evaluate_game(vector<BB> history, const int remaining_calls, WEIGHTS W=WEIGHTS_OG)
+double* evaluate_game(vector<BB> history, const int remaining_calls, const WEIGHTS& W=WEIGHTS_OG)
 {
     double accuracy_per_move[history.size()-1];
     double score=0;

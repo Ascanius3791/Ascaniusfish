@@ -161,7 +161,7 @@ void WEIGHTS::print_all_values()const
 
 }
 
-int WEIGHTS::norm_to(WEIGHTS W)
+int WEIGHTS::norm_to(const WEIGHTS& W) const
 {
     float sum =0;
     sum+=std::pow(skip_depth_decrease_threshold-W.skip_depth_decrease_threshold,2);
