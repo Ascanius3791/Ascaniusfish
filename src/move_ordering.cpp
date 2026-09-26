@@ -3,6 +3,7 @@
 #define MOVE_ORDERING_CPP
 #include "../lib/move_ordering.hpp"
 #include <algorithm>
+#include <cstdlib>
 
 constexpr int QUEEN_PROMOTION = 4;  // promotion_piece_type of a queen promotion (= queen's board index)
 
@@ -10,6 +11,10 @@ void clear_killer_moves()
 {
     for(int p=0;p<MAX_SEARCH_PLY;p++)
     killer_moves[p][0] = killer_moves[p][1] = Move();
+    for(int side=0;side<2;side++)
+    for(int from=0;from<64;from++)
+    for(int to=0;to<64;to++)
+    quiet_history[side][from][to] = 0;
 }
 
 void store_killer_move(int ply_from_root, const Move& move)
@@ -24,6 +29,37 @@ bool is_quiet_move(const BB* const parent, const Move& move)
 {
     return move.promotion_piece_type<=0
         && !is_capturing_move(parent->Board, move.to, parent->white_move, move.is_en_passant);
+}
+
+// "History gravity": the bigger the entry already is, the less a bonus of the
+// same sign adds, so entries stay within +-HISTORY_MAX and old results fade.
+static void update_history(int& entry, int bonus)
+{
+    entry += bonus - entry*std::abs(bonus)/HISTORY_MAX;
+}
+
+void store_quiet_cutoff(const BB* const parent, int ply_from_root, int depth, const Move& move,
+                        const Staged_Move_Order& order)
+{
+    store_killer_move(ply_from_root, move);
+    int (&history)[64][64] = quiet_history[parent->white_move];
+    const int bonus = std::min(std::max(depth,1)*std::max(depth,1), HISTORY_MAX/4);
+    update_history(history[move.from][move.to], bonus);
+
+    // Quiet moves searched before `move`. If the TT move cut off, the order was
+    // never initialised and there are none.
+    if(order.moves==nullptr)
+    return;
+    const std::vector<Move>& moves = *order.moves;
+    if(order.quiet_tt_index>=0)
+    update_history(history[moves[order.quiet_tt_index].from][moves[order.quiet_tt_index].to], -bonus);
+    const int searched_end = std::min(order.cursor, order.quiet_end);
+    for(int k=order.killer_begin;k<searched_end;k++)
+    {
+        const Move& m = moves[order.order[k]];
+        if(m.promotion_piece_type<=0 && !(m==move))
+        update_history(history[m.from][m.to], -bonus);
+    }
 }
 
 // Board index (0-5, colour stripped) of the piece on `square` among Board[offset..offset+6).
@@ -57,11 +93,13 @@ static void sort_captures(Scored_Capture* c, int n)
 void Staged_Move_Order::init(const BB* const parent, const BB* const children, const std::vector<Move>& moves, int num,
                              int skip_index, int ply_from_root, const WEIGHTS& W)
 {
+    this->moves = &moves;
     this->children = children;
     this->W = &W;
     white_move = parent->white_move;
     count = cursor = 0;
     quiets_sorted = false;
+    quiet_tt_index = skip_index>=0 && is_quiet_move(parent, moves[skip_index]) ? skip_index : -1;
 
     Scored_Capture good[MAX_ORDERED_MOVES], even[MAX_ORDERED_MOVES], bad[MAX_ORDERED_MOVES];
     int quiet[MAX_ORDERED_MOVES];
@@ -107,6 +145,7 @@ void Staged_Move_Order::init(const BB* const parent, const BB* const children, c
     sort_captures(bad, n_bad);
     for(int k=0;k<n_good;k++) order[count++] = good[k].index;
     for(int k=0;k<n_even;k++) order[count++] = even[k].index;
+    killer_begin = count;
     for(int k=0;k<2;k++) if(killer_index[k]>=0) order[count++] = killer_index[k];
     quiet_begin = count;
     for(int k=0;k<n_quiet;k++) order[count++] = quiet[k];

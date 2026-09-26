@@ -24,9 +24,20 @@ constexpr int MAX_ORDERED_MOVES = 256;  // more than the 218 legal moves any pos
 // Two killers per ply, ply counted from the root of the current search.
 inline Move killer_moves[MAX_SEARCH_PLY][2];
 
-void clear_killer_moves();  // at the start of every search ("go")
+// Butterfly history, [white to move][from][to]: how much a quiet move cut
+// off lately, weighted by remaining depth. Kept within +-HISTORY_MAX.
+constexpr int HISTORY_MAX = 16384;
+inline int quiet_history[2][64][64];
+
+void clear_killer_moves();  // killers and history, at the start of every search ("go")
 void store_killer_move(int ply_from_root, const Move& move);
 bool is_quiet_move(const BB* const parent, const Move& move);  // no capture, no promotion
+
+class Staged_Move_Order;
+// A quiet move cut off at `depth`: it becomes a killer and gains history, the
+// quiet moves searched before it at this node lose history.
+void store_quiet_cutoff(const BB* const parent, int ply_from_root, int depth, const Move& move,
+                        const Staged_Move_Order& order);
 
 class Staged_Move_Order
 {
@@ -38,14 +49,18 @@ class Staged_Move_Order
     int next();  // index into moves of the next move to search, -1 when done
 
     private:
+    friend void store_quiet_cutoff(const BB* const, int, int, const Move&, const Staged_Move_Order&);
     void sort_quiets();
 
+    const std::vector<Move>* moves = nullptr;
     const BB* children = nullptr;
     const WEIGHTS* W = nullptr;
     bool white_move = true;
     int order[MAX_ORDERED_MOVES];
     int count = 0, cursor = 0;
+    int killer_begin = 0;                // stage 3 is order[killer_begin..quiet_begin)
     int quiet_begin = 0, quiet_end = 0;  // stage 4 is order[quiet_begin..quiet_end)
+    int quiet_tt_index = -1;             // the TT move, if it is quiet
     bool quiets_sorted = false;
 };
 
