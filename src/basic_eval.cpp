@@ -36,19 +36,37 @@ int piecetable(const BB* const original , const WEIGHTS W)
     EW[0]=1-OW[0];
     EW[1]=1-OW[1];
 
-    for(int piece=0; piece<6; piece++)
+    // Original summed square-by-square (exactly one piece per square), so the
+    // float accumulation order was strictly increasing square index. Summing
+    // grouped by piece type instead is mathematically equivalent but not
+    // bit-identical (float addition isn't associative, and the result gets
+    // truncated to int), so piece_at[] rebuilds the per-square order while
+    // still avoiding the original's 12-branch-per-square scan.
+    int piece_at[64];
+    for(int i=0;i<64;i++) piece_at[i]=-1;
+    uint64_t all_pieces=0;
+    for(int piece=0; piece<12; piece++)
     {
-        int black_table_index = (piece==0) ? 6 : piece; // only pawns get a dedicated black row; other pieces share the white row (see WEIGHTS::piece_table_value_opening[7][64])
-        uint64_t white_bb = original->Board[piece];
-        while(white_bb)
+        uint64_t bb = original->Board[piece];
+        all_pieces |= bb;
+        while(bb)
         {
-            int i=find_and_delete_trailling_1(white_bb);
+            int i=find_and_delete_trailling_1(bb);
+            piece_at[i]=piece;
+        }
+    }
+    while(all_pieces)
+    {
+        int i=find_and_delete_trailling_1(all_pieces);
+        int piece=piece_at[i];
+        if(piece<6)
+        {
             score += W.piece_table_value_opening[piece][i]*OW[1]+W.piece_table_value_endgame[piece][i]*EW[1];
         }
-        uint64_t black_bb = original->Board[piece+6];
-        while(black_bb)
+        else
         {
-            int i=find_and_delete_trailling_1(black_bb);
+            piece-=6;
+            int black_table_index = (piece==0) ? 6 : piece; // only pawns get a dedicated black row; other pieces share the white row (see WEIGHTS::piece_table_value_opening[7][64])
             score -= W.piece_table_value_opening[black_table_index][i]*OW[0]+W.piece_table_value_endgame[black_table_index][i]*EW[0];
         }
     }
