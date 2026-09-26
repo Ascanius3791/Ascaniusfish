@@ -64,15 +64,13 @@ void initialize_rand()
     srand(address);
 }
 
-vector<int> sorting_moves(const BB* const Base, vector<Move> moves, int num, bool WM, const PV_Line* const pv_line =0, int index_of_pv_line_to_compare_against=0, const WEIGHTS& W = WEIGHTS_OG)//returns 0, till end-start-1 ,ordered!
+// Orders the given child indices (into Base, num children) best-first for the
+// side to move; only the listed children are scored.
+void sort_by_sorting_eval(const BB* const Base, int num, vector<int>& indices, bool WM, const WEIGHTS& W)
 {
-    // Create an array of indices [start, end)
-    vector<int> indices(num);
     vector<int> sorting_scores(num);
-    for (int i = 0; i < num; ++i) {
-        indices[i] = i;
-        sorting_scores[i] = sorting_eval(Base + i, W);
-    }
+    for (int idx : indices)
+        sorting_scores[idx] = sorting_eval(Base + idx, W);
 
     sort(indices.begin(), indices.end(), [&sorting_scores, WM](int a, int b)
     {
@@ -80,6 +78,15 @@ vector<int> sorting_moves(const BB* const Base, vector<Move> moves, int num, boo
             ? sorting_scores[a] > sorting_scores[b]
             : sorting_scores[a] < sorting_scores[b];
     });
+}
+
+vector<int> sorting_moves(const BB* const Base, const vector<Move>& moves, int num, bool WM, const PV_Line* const pv_line =0, int index_of_pv_line_to_compare_against=0, const WEIGHTS& W = WEIGHTS_OG)//returns 0, till end-start-1 ,ordered!
+{
+    // Create an array of indices [start, end)
+    vector<int> indices(num);
+    for (int i = 0; i < num; ++i)
+        indices[i] = i;
+    sort_by_sorting_eval(Base, num, indices, WM, W);
     if (pv_line && pv_line->current_lenght !=0)
     {
         Move pv_move = pv_line->moves[index_of_pv_line_to_compare_against];
@@ -159,11 +166,12 @@ PV_Line minimax_tactical(const BB* const original, BB* const wfh, const WEIGHTS&
     auto result = all_moves(original, wfh);
     int number_of_new_moves = std::get<0>(result);
     vector<Move> moves = std::get<1>(result);
-    vector<int> indices = sorting_moves(wfh, moves, number_of_new_moves, original->white_move, nullptr, 0, W);
 
+    // Only the tactical moves get ordered, and only once the stand pat below
+    // hasn't cut off: most nodes here never search a single move.
     const bool is_forced_move = number_of_new_moves==1 && forced_moves_left>0;
     vector<int> tactical_order;
-    for(int idx : indices)
+    for(int idx=0; idx<number_of_new_moves; idx++)
         if(
             is_forced_move ||
             moves[idx].promotion_piece_type!=-1 ||
@@ -216,6 +224,7 @@ PV_Line minimax_tactical(const BB* const original, BB* const wfh, const WEIGHTS&
             beta=min(beta,stand_pat);
         }
     }
+    sort_by_sorting_eval(wfh, number_of_new_moves, tactical_order, original->white_move, W);
     for(int idx : tactical_order)
     {
         PV_Line candidate = minimax_tactical(wfh+idx, wfh+number_of_new_moves, W, alpha, beta, table, forced_moves_left - is_forced_move);
@@ -449,7 +458,20 @@ PV_Line minimax(const BB*const original ,BB* const wfh ,int depth = 0, const WEI
     auto result = all_moves(original,wfh);
     int number_of_new_moves = std::get<0>(result);
     vector<Move> moves = std::get<1>(result);
-    vector<int> indices = sorting_moves(wfh,moves,number_of_new_moves,original->white_move,&tt_hint,0,W);// why on earth would this be slower? its pruning ration is better, by a lot!
+    // The TT move is searched before the other moves are sorted: if it cuts
+    // off, the sort is skipped. sorting_moves() puts it first anyway, so the
+    // search order is unchanged.
+    int tt_move_index = -1;
+    if(is_tt_hint_found && tt_hint.current_lenght>0)
+    for(int i=0;i<number_of_new_moves;i++)
+    if(moves[i]==tt_hint.moves[0])
+    {
+        tt_move_index=i;
+        break;
+    }
+    vector<int> indices;
+    if(tt_move_index<0)
+    indices = sorting_moves(wfh,moves,number_of_new_moves,original->white_move,&tt_hint,0,W);// why on earth would this be slower? its pruning ration is better, by a lot!
     prunable_moves_total+=number_of_new_moves-1;//analizing how efficient pruning is.
     Move best_move;
     const int alpha_0 = alpha, beta_0 = beta;
@@ -457,9 +479,12 @@ PV_Line minimax(const BB*const original ,BB* const wfh ,int depth = 0, const WEI
     pv_line.depth=depth;
     for(int i=0;i<number_of_new_moves;i++)
     {    
+        if(i==1 && tt_move_index>=0)//the TT move didn't cut off
+        indices = sorting_moves(wfh,moves,number_of_new_moves,original->white_move,&tt_hint,0,W);
+        int move_index = (i==0 && tt_move_index>=0) ? tt_move_index : indices[i];
         int depth_to_use=depth-1;
-        Move move =moves[indices[i]];
-        BB* child = wfh+indices[i];
+        Move move =moves[move_index];
+        BB* child = wfh+move_index;
 
         // Would THIS specific move recreate an earlier position (exact repeat),
         // or is it the specific move detect_upcoming_cycle identified as leading
