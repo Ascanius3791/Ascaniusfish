@@ -5,8 +5,6 @@
 #include <algorithm>
 #include <cstdlib>
 
-constexpr int QUEEN_PROMOTION = 4;  // promotion_piece_type of a queen promotion (= queen's board index)
-
 void clear_killer_moves()
 {
     for(int p=0;p<MAX_SEARCH_PLY;p++)
@@ -74,10 +72,25 @@ static int piece_on(const uint64_t Board[12], int offset, int square)
 struct Scored_Capture
 {
     int index;
-    int see;       // stage key; queen promotions get the promotion gain added
+    int see;       // stage key; includes the promotion gain
     int victim;    // MVV-LVA tie-break
     int attacker;
 };
+
+// Material only, in SEE_PIECE_VALUE units: SEE for the key, victim and
+// attacker values for the tie-break.
+static Scored_Capture score_capture(const BB* const parent, const Move& m, int index, bool capture)
+{
+    const bool white_move = parent->white_move;
+    const int own = white_move ? 0 : 6, enemy = white_move ? 6 : 0;
+    Scored_Capture c;
+    c.index = index;
+    c.see = static_exchange_eval(parent->Board, m.from, m.to, white_move, m.is_en_passant, m.promotion_piece_type);
+    int victim_square = m.is_en_passant ? (white_move ? m.to-8 : m.to+8) : m.to;
+    c.victim = capture ? SEE_PIECE_VALUE[piece_on(parent->Board, enemy, victim_square)] : 0;
+    c.attacker = SEE_PIECE_VALUE[piece_on(parent->Board, own, m.from)];
+    return c;
+}
 
 // Best first: higher SEE, then more valuable victim, then less valuable attacker.
 static void sort_captures(Scored_Capture* c, int n)
@@ -90,8 +103,24 @@ static void sort_captures(Scored_Capture* c, int n)
     });
 }
 
+void order_tactical_moves(const BB* const parent, const std::vector<Move>& moves, std::vector<int>& indices)
+{
+    const int n = (int)indices.size();
+    if(n<2)
+    return;
+    Scored_Capture scored[MAX_ORDERED_MOVES];
+    for(int k=0;k<n;k++)
+    {
+        const Move& m = moves[indices[k]];
+        scored[k] = score_capture(parent, m, indices[k], is_capturing_move(parent->Board, m.to, parent->white_move, m.is_en_passant));
+    }
+    sort_captures(scored, n);
+    for(int k=0;k<n;k++)
+    indices[k] = scored[k].index;
+}
+
 void Staged_Move_Order::init(const BB* const parent, const BB* const /*children*/, const std::vector<Move>& moves, int num,
-                             int skip_index, int ply_from_root, const WEIGHTS& W)
+                             int skip_index, int ply_from_root, const WEIGHTS& /*W*/)
 {
     this->moves = &moves;
     white_move = parent->white_move;
@@ -104,8 +133,6 @@ void Staged_Move_Order::init(const BB* const parent, const BB* const /*children*
     int n_good = 0, n_even = 0, n_bad = 0, n_quiet = 0;
     int killer_index[2] = {-1, -1};
     bool has_killers = ply_from_root>=0 && ply_from_root<MAX_SEARCH_PLY;
-    const int own = white_move ? 0 : 6, enemy = white_move ? 6 : 0;
-
     for(int i=0;i<num;i++)
     {
         if(i==skip_index)
@@ -115,17 +142,8 @@ void Staged_Move_Order::init(const BB* const parent, const BB* const /*children*
         bool queen_promotion = m.promotion_piece_type==QUEEN_PROMOTION;
         if(capture || queen_promotion)
         {
-            Scored_Capture c;
-            c.index = i;
-            c.see = capture ? static_exchange_eval(parent->Board, m.from, m.to, white_move, m.is_en_passant, W) : 0;
-            int victim_square = m.is_en_passant ? (white_move ? m.to-8 : m.to+8) : m.to;
-            c.victim = capture ? W.piece_value[piece_on(parent->Board, enemy, victim_square)] : 0;
-            c.attacker = W.piece_value[piece_on(parent->Board, own, m.from)];
-            if(queen_promotion)
-            {
-                c.see += W.piece_value[QUEEN_PROMOTION]-W.piece_value[0];
-                good[n_good++] = c;
-            }
+            Scored_Capture c = score_capture(parent, m, i, capture);
+            if(queen_promotion) good[n_good++] = c;
             else if(c.see>0) good[n_good++] = c;
             else if(c.see==0) even[n_even++] = c;
             else bad[n_bad++] = c;

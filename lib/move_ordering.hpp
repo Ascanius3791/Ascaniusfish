@@ -3,7 +3,8 @@
 #define MOVE_ORDERING_HPP
 // Staged move ordering for minimax(): the moves after the TT move come in the
 // order
-//   1. good captures (SEE > 0) and queen promotions, best first
+//   1. good captures (SEE > 0) and queen promotions, best first (SEE, then MVV-LVA,
+//      all in the fixed SEE_PIECE_VALUE material units)
 //   2. even captures (SEE == 0)
 //   3. killer moves (quiet moves that caused a beta cutoff at this ply)
 //   4. the other quiet moves (and under-promotions), by history score
@@ -33,6 +34,10 @@ inline int quiet_history[2][64][64];
 void clear_killer_moves();  // killers and history, at the start of every search ("go")
 void store_killer_move(int ply_from_root, const Move& move);
 bool is_quiet_move(const BB* const parent, const Move& move);  // no capture, no promotion
+
+// minimax_tactical()'s ordering of its captures and queen promotions (`indices`
+// into moves): pure material - SEE (incl. promotion gain), then MVV-LVA.
+void order_tactical_moves(const BB* const parent, const std::vector<Move>& moves, std::vector<int>& indices);
 
 class Staged_Move_Order;
 // A quiet move cut off at `depth`: it becomes a killer and gains history, the

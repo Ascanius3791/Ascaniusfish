@@ -35,61 +35,60 @@ int main()
 {
     setup();
 
-    // (a) Simple undefended capture: Rd2xNd5. Captured(N)=300 < moving(R)=500, so
-    // Tier 1 doesn't fire; d5 is undefended (only the far-away black king) so Tier 2
-    // returns the captured piece's value directly.
+    // (a) Simple undefended capture: Rd2xNd5. d5 is undefended (the black king
+    // is too far away), so SEE is the knight's value.
     {
         BB parent;
         FEN_to_BB("4k3/8/8/3n4/8/8/3R4/4K3 w - - 0 1", &parent);
         castling_rights(&parent);
         int from = square('d',2), to = square('d',5);
-        int see = static_exchange_eval(parent.Board, from, to, parent.white_move, false, WEIGHTS_OG);
-        expect(see == 300, "(a) expected SEE == 300, got " + std::to_string(see));
-        expect(is_good_capture(&parent, from, to, false, WEIGHTS_OG), "(a) expected a good capture");
+        int see = static_exchange_eval(parent.Board, from, to, parent.white_move, false);
+        expect(see == 3, "(a) expected SEE == 3, got " + std::to_string(see));
+        expect(is_good_capture(&parent, from, to, false), "(a) expected a good capture");
     }
 
     // (b) Losing exchange behind a single defender: Qd2xPd5, defended by the black
-    // pawn on e6. gain=[100,800] folds to -800: queen wins a pawn then is recaptured.
+    // pawn on e6. gain=[1,8] folds to -8: queen wins a pawn then is recaptured.
     {
         BB parent;
         FEN_to_BB("4k3/8/4p3/3p4/8/8/3Q4/4K3 w - - 0 1", &parent);
         castling_rights(&parent);
         int from = square('d',2), to = square('d',5);
-        int see = static_exchange_eval(parent.Board, from, to, parent.white_move, false, WEIGHTS_OG);
-        expect(see == -800, "(b) expected SEE == -800, got " + std::to_string(see));
-        expect(!is_good_capture(&parent, from, to, false, WEIGHTS_OG), "(b) expected a losing capture");
+        int see = static_exchange_eval(parent.Board, from, to, parent.white_move, false);
+        expect(see == -8, "(b) expected SEE == -8, got " + std::to_string(see));
+        expect(!is_good_capture(&parent, from, to, false), "(b) expected a losing capture");
     }
 
     // (c) X-ray revealed by the mover's own departure: Rd3xNd5. White's second rook
     // on d1 is invisible until Rd3 vacates d3; black's Rd8 recaptures, then the
-    // x-rayed Rd1 recaptures. gain=[300,200,300] folds to +300.
+    // x-rayed Rd1 recaptures. gain=[3,2,3] folds to +3.
     {
         BB parent;
         FEN_to_BB("3rk3/8/8/3n4/8/3R4/8/3RK3 w - - 0 1", &parent);
         castling_rights(&parent);
         int from = square('d',3), to = square('d',5);
-        int see = static_exchange_eval(parent.Board, from, to, parent.white_move, false, WEIGHTS_OG);
-        expect(see == 300, "(c) expected SEE == 300, got " + std::to_string(see));
-        expect(is_good_capture(&parent, from, to, false, WEIGHTS_OG), "(c) expected a good capture");
+        int see = static_exchange_eval(parent.Board, from, to, parent.white_move, false);
+        expect(see == 3, "(c) expected SEE == 3, got " + std::to_string(see));
+        expect(is_good_capture(&parent, from, to, false), "(c) expected a good capture");
     }
 
     // (d) Least-valuable-attacker-first ordering matters: Nf3xPe5. Black can
-    // recapture with either Nc6(300) or Qe8(900) - correct play uses the knight
-    // first. gain=[100,200,100,400] folds to -200. Recapturing with the queen first
-    // (a plausible bug) would instead fold to +100, the opposite sign.
+    // recapture with either Nc6(3) or Qe8(9) - correct play uses the knight
+    // first. gain=[1,2,1,4] folds to -2. Recapturing with the queen first
+    // (a plausible bug) would instead fold to +1, the opposite sign.
     {
         BB parent;
         FEN_to_BB("4q1k1/8/2n5/4p3/8/5N2/8/4R1K1 w - - 0 1", &parent);
         castling_rights(&parent);
         int from = square('f',3), to = square('e',5);
-        int see = static_exchange_eval(parent.Board, from, to, parent.white_move, false, WEIGHTS_OG);
-        expect(see == -200, "(d) expected SEE == -200, got " + std::to_string(see));
-        expect(!is_good_capture(&parent, from, to, false, WEIGHTS_OG), "(d) expected a losing capture");
+        int see = static_exchange_eval(parent.Board, from, to, parent.white_move, false);
+        expect(see == -2, "(d) expected SEE == -2, got " + std::to_string(see));
+        expect(!is_good_capture(&parent, from, to, false), "(d) expected a losing capture");
     }
 
-    // (e) En passant: pawn value == pawn value, so Tier 1 always resolves this as a
-    // wash (0) regardless of who's defending - the interesting part is that the
-    // captured pawn is correctly located behind the destination square. Exercised
+    // (e) En passant: d6 is undefended, so SEE wins the pawn (+1) - the
+    // interesting part is that the captured pawn is correctly located behind the
+    // destination square. Exercised
     // through real move generation and both wrapper functions, not hand-picked
     // squares, so a wrong captured-square offset would show up as "not a capture"
     // rather than silently agreeing.
@@ -111,11 +110,41 @@ int main()
         const Move& move = moves[ep_index];
         expect(is_capturing_move(parent.Board, move.to, parent.white_move, true),
                "(e) en passant must be treated as a capture");
-        int see = static_exchange_eval(parent.Board, move.from, move.to, parent.white_move, true, WEIGHTS_OG);
-        expect(see == 0, "(e) expected SEE == 0 for a pawn-for-pawn en passant, got " + std::to_string(see));
-        expect(is_good_capture(&parent, move.from, move.to, true, WEIGHTS_OG), "(e) expected a good (wash) capture");
-        expect(is_good_capture_from_child(&parent, children+ep_index, WEIGHTS_OG),
+        int see = static_exchange_eval(parent.Board, move.from, move.to, parent.white_move, true);
+        expect(see == 1, "(e) expected SEE == 1 for a free en passant pawn, got " + std::to_string(see));
+        expect(is_good_capture(&parent, move.from, move.to, true), "(e) expected a good capture");
+        expect(is_good_capture_from_child(&parent, children+ep_index),
                "(e) is_good_capture_from_child should agree, reconstructing en passant from the board diff");
+    }
+
+    // (f) The king recaptures only as the last piece: Qd2xPd5 with d5 defended
+    // by the black king alone loses the queen (gain=[1,9] folds to -8); add a
+    // white rook on d1 behind the queen and the king can't take back (+1).
+    {
+        BB parent;
+        FEN_to_BB("8/8/4k3/3p4/8/8/3Q4/4K3 w - - 0 1", &parent);
+        castling_rights(&parent);
+        int from = square('d',2), to = square('d',5);
+        int see = static_exchange_eval(parent.Board, from, to, parent.white_move, false);
+        expect(see == -8, "(f) expected SEE == -8 with only the king defending, got " + std::to_string(see));
+        FEN_to_BB("8/8/4k3/3p4/8/8/3Q4/3RK3 w - - 0 1", &parent);
+        castling_rights(&parent);
+        see = static_exchange_eval(parent.Board, from, to, parent.white_move, false);
+        expect(see == 1, "(f) expected SEE == 1 with the x-ray rook behind, got " + std::to_string(see));
+    }
+
+    // (g) Promotion gain: b7xa8=Q wins the rook plus 8 (+13) when a8 is free;
+    // a quiet b8=Q under the Rh8's attack is recaptured: gain=[8,9] folds to -1.
+    {
+        BB parent;
+        FEN_to_BB("r3k3/1P6/8/8/8/8/8/4K3 w - - 0 1", &parent);
+        castling_rights(&parent);
+        int see = static_exchange_eval(parent.Board, square('b',7), square('a',8), parent.white_move, false, QUEEN_PROMOTION);
+        expect(see == 13, "(g) expected SEE == 13 for bxa8=Q, got " + std::to_string(see));
+        FEN_to_BB("7r/1P6/8/8/8/8/k7/4K3 w - - 0 1", &parent);
+        castling_rights(&parent);
+        see = static_exchange_eval(parent.Board, square('b',7), square('b',8), parent.white_move, false, QUEEN_PROMOTION);
+        expect(see == -1, "(g) expected SEE == -1 for a hanging b8=Q, got " + std::to_string(see));
     }
 
     std::cout << "see_probe passed\n";
