@@ -6,17 +6,18 @@
 //   1. good captures (SEE > 0) and queen promotions, best first
 //   2. even captures (SEE == 0)
 //   3. killer moves (quiet moves that caused a beta cutoff at this ply)
-//   4. the other quiet moves (and under-promotions), sorted by sorting_eval()
+//   4. the other quiet moves (and under-promotions), by history score
 //   5. bad captures (SEE < 0), least bad first
-// Stages 1-3 only cost a bit test per move and a SEE per capture. The
-// expensive sorting_eval() of stage 4 runs only once the search actually
-// reaches stage 4, i.e. when nothing before it cut off.
+// No stage evaluates a position: stages 1-3 cost a bit test per move and a
+// SEE per capture, stage 4 a table lookup per move. Stage 4 is sorted only
+// once the search reaches it, i.e. when nothing before it cut off.
+// (sorting_eval() for stage 4 at remaining depth >= 2..5 saved no nodes at
+// bench depth 7, see #10.)
 #include "Bitboards.hpp"
 #include "Weights.hpp"
 #include "Settings.hpp"
 #include "move_generation.hpp"
 #include "see.hpp"
-#include "basic_eval.hpp"
 #include <vector>
 
 constexpr int MAX_ORDERED_MOVES = 256;  // more than the 218 legal moves any position can have
@@ -53,8 +54,6 @@ class Staged_Move_Order
     void sort_quiets();
 
     const std::vector<Move>* moves = nullptr;
-    const BB* children = nullptr;
-    const WEIGHTS* W = nullptr;
     bool white_move = true;
     int order[MAX_ORDERED_MOVES];
     int count = 0, cursor = 0;

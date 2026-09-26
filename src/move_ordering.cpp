@@ -90,12 +90,10 @@ static void sort_captures(Scored_Capture* c, int n)
     });
 }
 
-void Staged_Move_Order::init(const BB* const parent, const BB* const children, const std::vector<Move>& moves, int num,
+void Staged_Move_Order::init(const BB* const parent, const BB* const /*children*/, const std::vector<Move>& moves, int num,
                              int skip_index, int ply_from_root, const WEIGHTS& W)
 {
     this->moves = &moves;
-    this->children = children;
-    this->W = &W;
     white_move = parent->white_move;
     count = cursor = 0;
     quiets_sorted = false;
@@ -156,13 +154,12 @@ void Staged_Move_Order::init(const BB* const parent, const BB* const children, c
 void Staged_Move_Order::sort_quiets()
 {
     quiets_sorted = true;
-    int score[MAX_ORDERED_MOVES];
-    for(int k=quiet_begin;k<quiet_end;k++)
-    score[order[k]] = sorting_eval(children+order[k], *W);
-    const bool wm = white_move;
-    std::sort(order+quiet_begin, order+quiet_end, [&score, wm](int a, int b)
+    const int (&history)[64][64] = quiet_history[white_move];
+    const std::vector<Move>& m = *moves;
+    // Stable: moves without history keep the move generator's order.
+    std::stable_sort(order+quiet_begin, order+quiet_end, [&history, &m](int a, int b)
     {
-        return wm ? score[a]>score[b] : score[a]<score[b];
+        return history[m[a].from][m[a].to] > history[m[b].from][m[b].to];
     });
 }
 
