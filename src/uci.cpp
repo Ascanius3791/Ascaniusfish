@@ -128,6 +128,7 @@ UCI_Engine::UCI_Engine()
     path_history = new BB[MAX_SEARCH_PLY];
     pv_buf = new BB[256];
     cycle_table = new CuckooCycleTable;
+    tm = nullptr;
     BB start;
     uci_parse_fen(UCI_STARTPOS, start);
     game.assign(1, start);
@@ -141,6 +142,7 @@ UCI_Engine::~UCI_Engine()
     delete[] path_history;
     delete[] pv_buf;
     delete cycle_table;
+    delete tm;
 }
 
 void UCI_Engine::send(const std::string& line)
@@ -291,17 +293,15 @@ void UCI_Engine::handle_go(const std::vector<std::string>& tokens)
     if(limits.depth==0 && limits.movetime_ms==0 && !clocked)
     limits.infinite = true;  // bare "go" searches until "stop"
 
-    // Deadline: movetime, or a simple share of the clock until M4 brings
-    // real time management.
+    // Deadline: movetime, or the time manager's hard limit on a clock.
     long long budget_ms = limits.movetime_ms;
+    delete tm;
+    tm = nullptr;
     if(clocked && budget_ms==0)
     {
         bool white = game.back().white_move;
-        long long time = std::max(0LL, white ? limits.wtime : limits.btime);
-        long long inc = white ? limits.winc : limits.binc;
-        long long moves_left = limits.movestogo>0 ? limits.movestogo+1 : 30;
-        budget_ms = time/moves_left + inc*3/4;
-        budget_ms = std::max(10LL, std::min(budget_ms, time-50));
+        tm = new TimeManager(game.back(), white ? limits.wtime : limits.btime, white ? limits.winc : limits.binc, limits.movestogo);
+        budget_ms = tm->hard_ms();
     }
     search_deadline_ns.store(budget_ms>0 && !limits.infinite ? start_ns + budget_ms*1000000LL : 0);
     stop_search_flag.store(false);
@@ -331,6 +331,8 @@ void UCI_Engine::search(UCI_Limits limits, long long start_ns)
     int ply = seed_count-1;
 
     int max_depth = limits.depth>0 ? std::min(limits.depth, UCI_MAX_DEPTH) : UCI_MAX_DEPTH;
+    if(n==1 && tm)
+    max_depth = 1;  // forced move: keep the clock, depth 1 only for the score
     long long nodes_before = search_nodes;
     for(int d=1; d<=max_depth; d++)
     {
@@ -364,10 +366,17 @@ void UCI_Engine::search(UCI_Limits limits, long long start_ns)
         bool proven_mate = pv.eval <= INT_MIN + max_mating_seq || pv.eval >= INT_MAX - max_mating_seq;
         if(proven_mate && !limits.infinite)
         break;
-        // On a clock, don't start an iteration that likely can't finish.
-        long long deadline = search_deadline_ns.load();
-        if(deadline && !limits.movetime_ms && steady_now_ns()-start_ns > (deadline-start_ns)/2)
-        break;
+        // On a clock, λ is updated with every new PV; the next iteration
+        // starts only if it is expected to finish within the soft limit.
+        if(tm)
+        {
+            tm->iteration_done(d, pv, elapsed_ms);
+            char buf[96];
+            std::snprintf(buf, sizeof buf, "info string tm lambda %.3f soft %lld hard %lld", tm->lambda(), tm->soft_ms(), tm->hard_ms());
+            send(buf);
+            if(!tm->start_next_iteration((steady_now_ns()-start_ns)/1000000))
+            break;
+        }
     }
 
     while(limits.infinite && !stop_search_flag.load())

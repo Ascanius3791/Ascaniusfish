@@ -4,6 +4,7 @@
 
 #include "../ascaniusfish_2.hpp"
 #include "search_control.hpp"
+#include "time_manager.hpp"
 #include <string>
 #include <vector>
 #include <mutex>
@@ -55,6 +56,7 @@ class UCI_Engine
     BB* path_history;   // [MAX_SEARCH_PLY], repetition context for minimax()
     BB* pv_buf;         // scratch for walking the PV / applying moves
     CuckooCycleTable* cycle_table;
+    TimeManager* tm;       // set by "go" on a clock (without movetime), else nullptr
     std::vector<BB> game;  // root FEN position followed by every position after "moves"
 
     std::thread search_thread;
