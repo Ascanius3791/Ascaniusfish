@@ -151,7 +151,7 @@ constexpr int max_non_king_pieces = 30;
 
 // Dedicated tactical/quiescence-style leaf search, invoked from minimax() when
 // depth==0 (replacing the old direct eval() leaf). All legal moves are generated;
-// only "tactical" moves (for now: good captures per is_good_capture()) are explored
+// only "tactical" moves (captures per is_good_capture(), queen promotions) are explored
 // further, everything else is discarded. No lookup-table probe/insert during the
 // recursion itself (not worth it at this granularity) - the lookup table is only
 // consulted, read-only, at a genuinely quiet leaf (no tactical moves available),
@@ -175,8 +175,8 @@ PV_Line minimax_tactical(const BB* const original, BB* const wfh, const WEIGHTS&
     for(int idx=0; idx<number_of_new_moves; idx++)
         if(
             is_forced_move ||
-            moves[idx].promotion_piece_type!=-1 ||
-            is_good_capture(original, moves[idx].from, moves[idx].to, moves[idx].is_en_passant, W)
+            moves[idx].promotion_piece_type==QUEEN_PROMOTION ||
+            (moves[idx].promotion_piece_type==-1 && is_good_capture(original, moves[idx].from, moves[idx].to, moves[idx].is_en_passant, W))
             )
         tactical_order.push_back(idx);
 
@@ -225,7 +225,7 @@ PV_Line minimax_tactical(const BB* const original, BB* const wfh, const WEIGHTS&
             beta=min(beta,stand_pat);
         }
     }
-    sort_by_sorting_eval(wfh, number_of_new_moves, tactical_order, original->white_move, W);
+    order_tactical_moves(original, moves, tactical_order);
     for(int idx : tactical_order)
     {
         PV_Line candidate = minimax_tactical(wfh+idx, wfh+number_of_new_moves, W, alpha, beta, table, forced_moves_left - is_forced_move);
