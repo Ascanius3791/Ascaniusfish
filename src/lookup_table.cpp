@@ -3,6 +3,7 @@
 #define LOOKUP_TABLE_CPP
 
 #include "../lib/lookup_table.hpp"
+#include "../lib/tt_stats.hpp"
 #include <fstream>
 #include <cstdint>
 
@@ -88,6 +89,7 @@
 
         if(fill_count_for_bucket==0)
         {
+            TT_STATS_HOOK(tt_stats::on_probe(zobrist_hash, false, requestes_depth));
             return TT_readout();//if the board is not found, we cannot make further conclusions
         }
         TT_readout readout;
@@ -106,6 +108,7 @@
                 number_of_succ_readouts++;
             }
         }
+        TT_STATS_HOOK(tt_stats::on_probe(zobrist_hash, readout.is_found, requestes_depth));
         return readout;//if the board is not found, we cannot make further conclusions
     }
 
@@ -148,15 +151,21 @@
                 }
                 if(victim_index ==-1)
                 {
+                    TT_STATS_HOOK(if(!is_already_in_table) tt_stats::on_discard(new_entry, tt_stats::REJECTED));
                     return;//the new entry is the least valuable, so we do not add it to the table
                 }
                 if(is_already_in_table)
                 {
                     return;//the new entry is already in the table, so we do not add it again
                 }
+                TT_STATS_HOOK(tt_stats::on_store(new_entry));
                 if(fill_count_for_bucket<bucket_size)
                 {
                     fill_count[hash]++;
+                }
+                else
+                {
+                    TT_STATS_HOOK(tt_stats::on_discard(bucket[victim_index], tt_stats::EVICTED));
                 }
                 bucket[victim_index]=new_entry;
             }
@@ -195,6 +204,7 @@
         number_of_inserions=0;
         number_of_succ_readouts=0;
         number_of_attemted_readouts=0;
+        TT_STATS_HOOK(tt_stats::on_reset());
     };
 
     template<int EXPONENT_FOR_SIZE, int BUCKET_SIZE>
