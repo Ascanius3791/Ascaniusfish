@@ -23,6 +23,7 @@
 // here blocks.
 #ifndef GUI_SESSION_HPP
 #define GUI_SESSION_HPP
+#include "analysis_store.hpp"
 #include "engine_link.hpp"
 #include "json.hpp"
 #include "move_tree.hpp"
@@ -111,6 +112,17 @@ class Session
     Search_Info analysis;
     std::vector<std::string> analysis_uci, analysis_san;   // its PV, legal from here, both ways
 
+    // What earlier analyses of this game found, per position, so arriving back
+    // at one shows its eval before the engine has answered again
+    // (gui/analysis_store.hpp). `analysis_stored` says the result on show came
+    // from there rather than from the search running now, and
+    // `analysis_live_depth` is how far that search has got while a deeper kept
+    // result is still the one being shown.
+    Analysis_Store analysis_store;
+    Position_Key analysis_key{};
+    bool analysis_stored = false;
+    int analysis_live_depth = 0;
+
     // Watch mode. Ascaniusfish against itself, one engine process per side so
     // the two have their own transposition tables. `running` plays the game on
     // move after move; `step` is one move and then a pause. Pausing clears
@@ -121,6 +133,17 @@ class Session
     bool watch_step = false;
 
     Search_Kind searching = Search_Kind::NONE;
+
+    // A serial on every state this session hands out, so the page can tell two
+    // of them apart in time. A move is answered with the state *before* the new
+    // search has started, and the first iteration of that search can be pushed
+    // over SSE a millisecond later — inside the turn the browser spends parsing
+    // the answer it is still holding. Whichever the page applies last wins, so
+    // without this it can end up showing the older one and waiting for the next
+    // iteration to be told again (#23). `state_json()` is the one place a state
+    // leaves here, so counting there orders emissions, which is the order that
+    // matters; it never resets, so an SSE reconnect cannot go backwards.
+    mutable long long state_serial = 0;
 
     bool thinking() const  { return searching==Search_Kind::PLAY; }
     bool watching() const  { return searching==Search_Kind::WATCH; }
@@ -257,35 +280,35 @@ class Session
         return true;
     }
 
-    // Forgets the analysis. Called by every position change here and by the
-    // server whenever it stops a search, so the line the page draws is always
-    // the line for the position the page draws.
+    // Forgets the running analysis and puts the position now on the board back
+    // up from the store if it is in there. Called by every position change here
+    // and by the server whenever it stops a search, so the line the page draws
+    // is always a line for the position the page draws — the live one while a
+    // search is on it, a kept one otherwise.
     void clear_analysis()
     {
-        analysis_valid = false;
-        analysis_finished = false;
-        analysis_uci.clear();
-        analysis_san.clear();
+        remember_analysis();
+        drop_analysis();
+        recall_analysis();
     }
 
-    // Records one analysis iteration. The engine gives its PV in UCI; it is
-    // replayed from the current position to get SAN, and a stale TT tail that
-    // is not legal here simply ends the line rather than being shown.
+    // A new game: what its analyses found goes with it, store included.
+    void forget_analysis()
+    {
+        drop_analysis();
+        analysis_store.clear();
+    }
+
+    // Records one analysis iteration. A kept result deeper than the search has
+    // got stays up — the depth shown never goes backwards — and the search
+    // takes over as soon as it reaches that depth.
     void set_analysis(const Search_Info& info)
     {
-        analysis = info;
-        analysis_valid = true;
-        analysis_uci.clear();
-        analysis_san.clear();
-        Game walk;
-        walk.start(tree.position(), tree.halfmove_clock(), tree.fullmove());
-        for(const std::string& uci : info.pv)
-        {
-            if(!walk.play(uci))
-            break;
-            analysis_uci.push_back(uci);
-            analysis_san.push_back(walk.san_moves.back());
-        }
+        analysis_live_depth = info.depth;
+        if(analysis_valid && analysis_stored && info.depth<analysis.depth)
+        return;
+        show_analysis(info);
+        analysis_stored = false;
     }
 
     // Steps the board along a line of UCI moves, which is what clicking a move
@@ -451,7 +474,7 @@ class Session
         engine_error.clear();
         live_valid = false;
         watch_pause();
-        clear_analysis();
+        forget_analysis();
         return true;
     }
 
@@ -464,6 +487,7 @@ class Session
 
         json::Out o;
         o.obj();
+        o.key("seq").num(++state_serial);
         o.key("id").str(id);
         o.key("mode").str(mode_name(mode));
         o.key("orientation").str(flipped ? "black" : "white");
@@ -718,6 +742,61 @@ class Session
         o.end_obj();
     }
 
+    // Everything about the analysis on show, gone. Not the store — the position
+    // it was made in may well be come back to.
+    void drop_analysis()
+    {
+        analysis_valid = false;
+        analysis_finished = false;
+        analysis_stored = false;
+        analysis_live_depth = 0;
+        analysis_uci.clear();
+        analysis_san.clear();
+    }
+
+    // Puts what the analysis reached into the store, under the position it was
+    // made in rather than the one the cursor is on now: this is called after the
+    // move that moved away from it. A result that came out of the store is
+    // already in there.
+    void remember_analysis()
+    {
+        if(analysis_valid && !analysis_stored)
+        analysis_store.put(analysis_key, analysis);
+    }
+
+    // The kept result for the position now on the board, if there is one.
+    void recall_analysis()
+    {
+        Search_Info found;
+        if(!analysis_store.get(tree.current().key, found))
+        return;
+        show_analysis(found);
+        analysis_stored = true;
+    }
+
+    // Shows a result for the position on the board. The engine gives its PV in
+    // UCI; it is replayed from here to get SAN, and a tail that is not legal
+    // here — a stale TT line, or a kept line from a transposition — simply ends
+    // the line rather than being shown. The key is kept with it, so the result
+    // can only ever be filed under the position it belongs to.
+    void show_analysis(const Search_Info& info)
+    {
+        analysis = info;
+        analysis_valid = true;
+        analysis_key = tree.current().key;
+        analysis_uci.clear();
+        analysis_san.clear();
+        Game walk;
+        walk.start(tree.position(), tree.halfmove_clock(), tree.fullmove());
+        for(const std::string& uci : info.pv)
+        {
+            if(!walk.play(uci))
+            break;
+            analysis_uci.push_back(uci);
+            analysis_san.push_back(walk.san_moves.back());
+        }
+    }
+
     // The analysis, as the page draws it. Unlike every other score here this
     // one is white's view whichever side is to move: an eval bar that flipped
     // with the mover would swing a full board width on every move.
@@ -738,6 +817,10 @@ class Session
                    .key("value").num(tree.position().white_move ? value : -value)
              .end_obj();
         }
+        // Whether this is a kept result and how far the search behind it has
+        // got: while it is behind, the page marks the depth as not caught up.
+        o.key("stored").boolean(analysis_stored);
+        o.key("liveDepth").num(analysis_live_depth);
         o.key("line").arr();
         for(size_t i=0;i<analysis_san.size();i++)
         o.obj().key("uci").str(analysis_uci[i]).key("san").str(analysis_san[i]).end_obj();
@@ -755,7 +838,7 @@ class Session
         engine_error.clear();
         live_valid = false;
         watch_pause();
-        clear_analysis();
+        forget_analysis();
         tree.start(start_pos, start_halfmove, start_fullmove);
         start_fen = tree.fen();
     }

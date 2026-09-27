@@ -126,9 +126,20 @@ When editing engine internals, `lib/*.hpp` is the declaration/interface layer an
   `Search_Kind` says how to read its answer: a `PLAY` or `WATCH` search ends in a move on the
   board, an `ANALYSIS` search only in a line to look at. Every position change
   calls `clear_analysis()` *before* the page is told, so no frame can carry the previous
-  position's eval. `game_serial()` counts the games the session has held — it changes on a
+  position's eval; that call also files what the analysis reached in the
+  `Analysis_Store` and puts the new position's kept result up, so `analysis` is either the
+  live search's or a kept one and never nothing that has been looked at. `analysis_stored`
+  says which, and `analysis_live_depth` how far a search still behind a deeper kept result
+  has got (both go to the page as `stored`/`liveDepth`). `game_serial()` counts the games the session has held — it changes on a
   reset, a FEN or a loaded PGN and never on a move — which is what decides whether an engine
   needs a `ucinewgame` before it is asked anything.
+- `gui/analysis_store.hpp` — what the analysis has already found in this game, so coming back
+  to a position shows its eval, depth and line at once instead of an empty bar (#24). Fixed
+  1024 slots, direct-mapped and **keyed by the position** (`Position_Key`, not a node id), so a
+  transposition or the same position down a side line is the same entry and an entry can only
+  ever be handed back for the position it was made in. Deeper wins for one position, and any
+  other position simply takes the slot; a new game, a FEN or a loaded PGN clears the lot
+  (`Session::forget_analysis()`). Memory only. `diagnostics/analysis_store_test.cpp` covers it.
 - `gui/engine_link.hpp` — the UCI client of Play, Watch and Analyse mode: a `Go_Limits` (depth,
   movetime, or `Go_Limits::analysis()` = `go infinite` for Analyse;
   `wtime`/`btime`/`winc`/`binc` fields already there for M4), a `Search_Request`, and an

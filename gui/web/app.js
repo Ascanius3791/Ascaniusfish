@@ -251,7 +251,19 @@ const OUTCOME_TEXT = {
   draw: 'Draw',
 };
 
+// Every state the server hands out is numbered (`seq`), and states reach the
+// page from two places at once: the answer to a request and the SSE stream. The
+// answer to a move is built before the new search has started, while its first
+// iteration can be pushed a millisecond later — inside the turn this page spends
+// on `res.json()`. So the older state can be the one that arrives last, and
+// applying it would drop a line the page had already been given and leave the
+// panel empty until the next iteration, seconds later (#23). Numbers decide it
+// instead of arrival order.
+let appliedSeq = -1;
+
 function apply(next) {
+  if (typeof next.seq === 'number' && next.seq <= appliedSeq) return;
+  appliedSeq = typeof next.seq === 'number' ? next.seq : appliedSeq;
   const first = state === null;
   state = next;
   render(next);
@@ -421,13 +433,22 @@ function renderAnalysis(s) {
 
 function analysisStats(s) {
   const a = s.analysis;
-  if (a.error) return `Engine: ${a.error}`;
-  if (!a.on) return 'The engine is off.';
-  if (s.outcome.state !== 'ongoing') return 'The game is over — nothing to search.';
   const search = a.search;
-  if (!search) return 'Starting the search\u2026';
+  if (a.error) return `Engine: ${a.error}`;
+  if (!search) {
+    if (!a.on) return 'The engine is off.';
+    if (s.outcome.state !== 'ongoing') return 'The game is over — nothing to search.';
+    return 'Starting the search\u2026';
+  }
+  // A kept result from an earlier visit to this position (search.stored) says so
+  // beside its depth, and while the search running now is behind it, how far it
+  // has got. The marker goes when the live search reaches that depth.
+  const behind = a.running && search.liveDepth < search.depth;
+  const depth = search.stored
+    ? `depth ${search.depth} saved` + (behind ? `, search at ${search.liveDepth}` : '')
+    : `depth ${search.depth}`;
   const nps = search.nps ? `${Math.round(search.nps / 1000).toLocaleString()} knps` : '';
-  return [`depth ${search.depth}`, `${search.nodes.toLocaleString()} nodes`, nps]
+  return [depth, `${search.nodes.toLocaleString()} nodes`, nps]
     .filter(Boolean).join(' \u00b7 ');
 }
 
@@ -609,7 +630,12 @@ function connect() {
     setLink('live', 'live');
     apply(JSON.parse(event.data));
   });
-  events.addEventListener('open', () => setLink('live', 'live'));
+  // A fresh stream may be a restarted server, whose numbering starts over;
+  // nothing is in flight at that moment, so there is no order left to keep.
+  events.addEventListener('open', () => {
+    appliedSeq = -1;
+    setLink('live', 'live');
+  });
   events.addEventListener('error', () => setLink('reconnecting…', 'down'));
 }
 
