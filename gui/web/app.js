@@ -20,18 +20,42 @@ const sessionId = new URLSearchParams(location.search).get('id') || 'main';
 const el = id => document.getElementById(id);
 
 let state = null;              // last state the server sent
-let pendingPromotion = null;   // {orig, dest} while the chooser is open
+let pendingPromotion = null;   // {orig, dest, color, queued?} while the chooser is open
+
+// Moves queued while the engine thinks (#26): played one at a time as its own real
+// move lands, so the server is never asked to accept a move mid-search. `movable.color`
+// stays the human's colour even while thinking (see render()), so turnColor differs
+// from it and chessground routes the drag into its premove path instead of `onUserMove`;
+// we take over from there — one premove slot isn't enough for a queue, so each one is
+// captured into `queue` and replayed locally instead of left for chessground to hold.
+let queue = [];
+let queueSending = false;      // true while the front of the queue is in flight
+let lastBoardKey = null;       // (fen, queue) last actually drawn, so an unrelated
+                                // render (a search depth ticking up) doesn't re-set the
+                                // position and animate it away from the queue and back
 
 const board = Chessground(el('board'), {
   orientation: 'white',
   coordinates: true,
   autoCastle: true,            // move the rook along locally; the server confirms it anyway
+  disableContextMenu: true,    // a right-click drops the queue instead (see below)
   highlight: { lastMove: true, check: true },
   animation: { enabled: false, duration: 180 },   // the first state is a jump, not a move
   draggable: { showGhost: true },
   movable: { free: false, color: 'both', showDests: true, events: { after: onUserMove } },
+  premovable: { enabled: true, showDests: true, events: { set: onPremoveSet } },
   drawable: { enabled: true },
 });
+
+// A right-click always means "forget the queue", never "start drawing" — capture phase
+// so this runs before chessground's own listener on the same element.
+el('board').addEventListener('pointerdown', event => {
+  if (event.button === 2 && queue.length) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    clearQueue();
+  }
+}, true);
 
 // ---------------------------------------------------------------- server calls
 
@@ -72,14 +96,31 @@ async function nudge(path, body) {
 // Nearest square first: the promotion square itself, then stepping away from
 // the edge along the file.
 const PROMOTION_PIECES = [['q', 'queen'], ['r', 'rook'], ['b', 'bishop'], ['n', 'knight']];
+const PROMO_ROLE = Object.fromEntries(PROMOTION_PIECES);
 
 function onUserMove(orig, dest) {
   if (state && state.promotions.includes(orig + dest)) {
-    pendingPromotion = { orig, dest };
+    pendingPromotion = { orig, dest, color: state.turn };
     openPromotion();
     return;
   }
   command('/api/move', { uci: orig + dest });
+}
+
+// Fires instead of `onUserMove` when the piece dragged is the human's own but it is
+// not really their move (see the `premovable` config above) — this is a queue entry,
+// not a move to send. chessground would hold it as its own single premove; we take it
+// over immediately so a second one can be queued on top of it.
+function onPremoveSet(orig, dest) {
+  const piece = board.state.pieces.get(orig);
+  board.cancelPremove();
+  if (!piece) return;
+  if (piece.role === 'pawn' && (dest[1] === '1' || dest[1] === '8')) {
+    pendingPromotion = { orig, dest, color: piece.color, queued: true };
+    openPromotion();
+    return;
+  }
+  enqueueMove(orig, dest, '');
 }
 
 // Lays the four pieces over the destination file, in board orientation. A
@@ -93,7 +134,7 @@ function openPromotion() {
   box.replaceChildren();
   PROMOTION_PIECES.forEach(([code, role], i) => {
     const piece = document.createElement('piece');
-    piece.className = `${role} ${state.turn}`;
+    piece.className = `${role} ${pendingPromotion.color}`;
     piece.style.top = `${(row + step * i) * 12.5}%`;
     piece.style.left = `${col * 12.5}%`;
     piece.dataset.piece = code;
@@ -118,7 +159,101 @@ function finishPromotion(piece) {
   el('promotion').replaceChildren();
   if (!move) return;
   if (!piece) return render(state);   // cancelled: put the pawn back
-  command('/api/move', { uci: move.orig + move.dest + piece });
+  if (move.queued) enqueueMove(move.orig, move.dest, piece);
+  else command('/api/move', { uci: move.orig + move.dest + piece });
+}
+
+// ------------------------------------------------------------------- move queue
+
+// Queues one more move. The queue is replayed onto the board by render()'s
+// replayQueue(), not here, so a promotion resolved mid-queue and a move dropped
+// straight in end up drawn the same way.
+function enqueueMove(orig, dest, promo) {
+  queue.push({ orig, dest, promo });
+  render(state);
+}
+
+function clearQueue() {
+  if (!clearQueueSilently()) return;
+  render(state);
+}
+
+// The same, for callers about to render anyway (a command's own response will).
+function clearQueueSilently() {
+  if (queue.length === 0) return false;
+  queue = [];
+  board.cancelPremove();
+  return true;
+}
+
+// Whether the queue is still worth anything: only in Play mode, only while the game
+// goes on. render() calls this on every state so a checkmate, a resignation or a mode
+// switch drops the queue as soon as its own new state arrives, with no extra wiring.
+function queueValidFor(s) {
+  return s.mode === 'play' && s.outcome.state === 'ongoing';
+}
+
+// A move once it's actually the human's turn: sent for real, and only then — the
+// server must never be asked to accept a move mid-search (#26). Checked against the
+// position's own dests first, so an entry that turned out illegal is simply dropped,
+// not sent for the server to refuse.
+function advanceQueue(s) {
+  if (queueSending || queue.length === 0 || !queueValidFor(s)) return;
+  if (s.play.thinking || s.turn !== s.play.humanColor) return;
+  const mv = queue[0];
+  const legal = (s.dests[mv.orig] || []).includes(mv.dest) &&
+                (!mv.promo || s.promotions.includes(mv.orig + mv.dest));
+  if (!legal) {
+    queue = [];
+    board.cancelPremove();
+    return;
+  }
+  queueSending = true;
+  post('/api/move', { uci: mv.orig + mv.dest + mv.promo })
+    .then(after => {
+      queue.shift();
+      queueSending = false;
+      apply(after);
+    })
+    .catch(err => {
+      queue = [];
+      queueSending = false;
+      showMessage(err.message);
+      render(state);
+    });
+}
+
+function queueKey() {
+  return queue.map(mv => mv.orig + mv.dest + mv.promo).join(',');
+}
+
+// Draws the queue on top of whatever render() just set the board to: each move is
+// actually played locally (chessground's own `move`, plus the rook or the captured
+// pawn for a castle or an en-passant queued mid-chain) so "the position after them" is
+// what is on screen, and an arrow over each one is what marks it as not really played.
+function replayQueue() {
+  for (const mv of queue) applyQueuedMoveVisually(mv);
+  board.setAutoShapes(queue.map(mv => ({ orig: mv.orig, dest: mv.dest, brush: 'yellow' })));
+}
+
+function fileIndex(square) {
+  return 'abcdefgh'.indexOf(square[0]);
+}
+
+function applyQueuedMoveVisually(mv) {
+  const piece = board.state.pieces.get(mv.orig);
+  if (!piece) return;
+  const wasOccupied = board.state.pieces.has(mv.dest);
+  board.move(mv.orig, mv.dest);
+  if (mv.promo) {
+    board.setPieces(new Map([[mv.dest, { role: PROMO_ROLE[mv.promo], color: piece.color }]]));
+  } else if (piece.role === 'king' && Math.abs(fileIndex(mv.orig) - fileIndex(mv.dest)) === 2) {
+    const rank = mv.orig[1];
+    const kingside = fileIndex(mv.dest) > fileIndex(mv.orig);
+    board.move((kingside ? 'h' : 'a') + rank, (kingside ? 'f' : 'd') + rank);
+  } else if (piece.role === 'pawn' && mv.orig[0] !== mv.dest[0] && !wasOccupied) {
+    board.setPieces(new Map([[mv.dest[0] + mv.orig[1], undefined]]));
+  }
 }
 
 el('promotion').addEventListener('click', event => {
@@ -126,23 +261,25 @@ el('promotion').addEventListener('click', event => {
   finishPromotion(piece ? piece.dataset.piece : '');
 });
 
-el('new').addEventListener('click', () => command('/api/reset', {}));
-el('undo').addEventListener('click', () => command('/api/undo', {}));
+el('new').addEventListener('click', () => { clearQueueSilently(); command('/api/reset', {}); });
+el('undo').addEventListener('click', () => { clearQueueSilently(); command('/api/undo', {}); });
 el('flip').addEventListener('click', () => command('/api/flip', {}));
 el('resign').addEventListener('click', () => command('/api/resign', {}));
 
 el('sides').addEventListener('click', event => {
   const button = event.target.closest('button');
-  if (button) command('/api/play', { side: button.dataset.side });
+  if (button) { clearQueueSilently(); command('/api/play', { side: button.dataset.side }); }
 });
 
 el('limit-form').addEventListener('submit', event => {
   event.preventDefault();
+  clearQueueSilently();
   command('/api/play', { kind: el('limit-kind').value, value: Number(el('limit-value').value) });
 });
 
 el('fen-form').addEventListener('submit', event => {
   event.preventDefault();
+  clearQueueSilently();
   command('/api/fen', { fen: el('fen').value.trim() });
 });
 
@@ -192,24 +329,25 @@ document.addEventListener('pointerdown', event => {
 
 el('modes').addEventListener('click', event => {
   const button = event.target.closest('button');
-  if (button) command('/api/mode', { mode: button.dataset.mode });
+  if (button) { clearQueueSilently(); command('/api/mode', { mode: button.dataset.mode }); }
 });
 
 el('nav').addEventListener('click', event => {
   const button = event.target.closest('button');
-  if (button) nudge('/api/nav', { where: button.dataset.nav });
+  if (button) { clearQueueSilently(); nudge('/api/nav', { where: button.dataset.nav }); }
 });
 
 el('moves').addEventListener('click', event => {
   const button = event.target.closest('.move');
-  if (button) command('/api/goto', { node: Number(button.dataset.node) });
+  if (button) { clearQueueSilently(); command('/api/goto', { node: Number(button.dataset.node) }); }
 });
 
-el('promote').addEventListener('click', () => command('/api/promote', {}));
-el('delete-move').addEventListener('click', () => command('/api/delete', {}));
+el('promote').addEventListener('click', () => { clearQueueSilently(); command('/api/promote', {}); });
+el('delete-move').addEventListener('click', () => { clearQueueSilently(); command('/api/delete', {}); });
 
 el('pgn-form').addEventListener('submit', event => {
   event.preventDefault();
+  clearQueueSilently();
   command('/api/pgn', { pgn: el('pgn').value });
 });
 
@@ -233,12 +371,14 @@ const NAV_KEYS = {
 document.addEventListener('keydown', event => {
   if (event.key === 'Escape' && pendingPromotion) return finishPromotion('');
   if (event.key === 'Escape' && !el('settings').hidden) return openSettings(false);
+  if (event.key === 'Escape' && queue.length) return clearQueue();
   // A shortcut must never fire into a FEN or a PGN being typed: there Home,
   // End and the arrows are the text field's own.
   if (typingSomewhere() || event.ctrlKey || event.metaKey || event.altKey) return;
   const where = NAV_KEYS[event.key];
   if (!where) return;
   event.preventDefault();
+  clearQueueSilently();
   nudge('/api/nav', { where });
 });
 
@@ -281,6 +421,7 @@ function apply(next) {
   appliedSeq = typeof next.seq === 'number' ? next.seq : appliedSeq;
   const first = state === null;
   state = next;
+  advanceQueue(next);   // may send the front of the queue for real, before it is drawn
   render(next);
   // Animating from chessground's default start position into the real one on
   // page load looks like a move that never happened; animate from here on.
@@ -290,23 +431,42 @@ function apply(next) {
 function render(s) {
   const playing = s.mode === 'play';
   const over = s.outcome.state !== 'ongoing';
-  // In Play mode only your own pieces may move, and only while the engine is
-  // not thinking — a move made mid-search would be answered for the wrong
-  // position. In Watch mode the board is yours whenever neither engine is
-  // thinking. Elsewhere both colours are free.
+  if (!queueValidFor(s)) clearQueueSilently();
+  // In Play mode your pieces stay yours even while the engine thinks, so they can
+  // still be picked up: turnColor then differs from movable.color and chessground
+  // treats the drag as a premove instead of a move (#26), rather than the board
+  // freezing. The server is still the only thing that ever plays a move on its own
+  // turn — a direct move attempted out of turn is refused there as before. In Watch
+  // mode the board is yours whenever neither engine is thinking. Elsewhere both
+  // colours are free.
   const movableColor = over ? undefined
-                      : playing ? (s.play.thinking ? undefined : s.play.humanColor)
+                      : playing ? s.play.humanColor
                       : s.mode === 'watch' ? (s.watch.thinking ? undefined : 'both')
                       : 'both';
 
-  board.set({
-    fen: s.fen.split(' ')[0],
-    orientation: s.orientation,
-    turnColor: s.turn,
-    lastMove: s.lastMove || null,
-    check: s.check || false,
-    movable: { color: movableColor, dests: movableColor ? destsMap(s.dests) : new Map() },
-  });
+  // Setting the same fen again would be a no-op for chessground's own diffing, but
+  // replaying the queue on top of it is not free, and doing that on every state a
+  // running search pushes (only its depth/score changed, not the position) would
+  // fight chessground's animation right back to the real squares and out to the
+  // queued ones each time. Only touch the board when what it should show changed.
+  const boardKey = s.fen + '\u0000' + queueKey();
+  if (boardKey !== lastBoardKey) {
+    lastBoardKey = boardKey;
+    board.set({
+      fen: s.fen.split(' ')[0],
+      orientation: s.orientation,
+      turnColor: s.turn,
+      lastMove: s.lastMove || null,
+      check: s.check || false,
+      movable: { color: movableColor, dests: movableColor ? destsMap(s.dests) : new Map() },
+    });
+    replayQueue();
+  } else {
+    board.set({
+      orientation: s.orientation,
+      movable: { color: movableColor, dests: movableColor ? destsMap(s.dests) : new Map() },
+    });
+  }
 
   for (const button of el('modes').children)
     button.classList.toggle('active', button.dataset.mode === s.mode);
