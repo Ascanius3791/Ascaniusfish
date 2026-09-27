@@ -16,9 +16,11 @@
 //
 // In Play mode a session also knows which colour the engine has, how it is
 // asked to think (gui/engine_link.hpp) and what each of its searches found; in
-// Analyse mode it holds the running analysis of the position now on the board.
-// Starting and reading those searches is the server's job (gui_server.cpp);
-// this file only holds the state they produce, so nothing here blocks.
+// Analyse mode it holds the running analysis of the position now on the board;
+// in Watch mode it holds the two sides' settings and whether the self-play game
+// is running. Starting and reading those searches is the server's job
+// (gui_server.cpp); this file only holds the state they produce, so nothing
+// here blocks.
 #ifndef GUI_SESSION_HPP
 #define GUI_SESSION_HPP
 #include "engine_link.hpp"
@@ -31,15 +33,16 @@
 #include <sstream>
 #include <string>
 
-// Which of the GUI's modes a session is in. Watch — Ascaniusfish against
-// itself — is still selector-only; Analyse is free play plus a live analysis,
-// Play is a game against the engine.
+// Which of the GUI's modes a session is in. Analyse is free play plus a live
+// analysis, Play is a game against the engine, Watch is Ascaniusfish against
+// itself with a setting per side.
 enum class Mode { ANALYSE, PLAY, WATCH };
 
-// What the one engine process of a session is busy with. A session runs at
-// most one search, so this says how to read its answer: a PLAY search ends in
-// a move on the board, an ANALYSIS search only ever in a line to look at.
-enum class Search_Kind { NONE, PLAY, ANALYSIS };
+// What a session's engines are busy with. A session runs at most one search at
+// a time — in Watch mode the two sides think in turn, never together — so this
+// says how to read its answer: a PLAY or WATCH search ends in a move on the
+// board, an ANALYSIS search only ever in a line to look at.
+enum class Search_Kind { NONE, PLAY, WATCH, ANALYSIS };
 
 inline const char* mode_name(Mode m)
 {
@@ -108,10 +111,34 @@ class Session
     Search_Info analysis;
     std::vector<std::string> analysis_uci, analysis_san;   // its PV, legal from here, both ways
 
+    // Watch mode. Ascaniusfish against itself, one engine process per side so
+    // the two have their own transposition tables. `running` plays the game on
+    // move after move; `step` is one move and then a pause. Pausing clears
+    // `running` without touching the search that is out: the move being thought
+    // about is still played, which is what "after the current move" means.
+    Go_Limits watch_limits[2];   // [0] white, [1] black
+    bool watch_running = false;
+    bool watch_step = false;
+
     Search_Kind searching = Search_Kind::NONE;
 
     bool thinking() const  { return searching==Search_Kind::PLAY; }
+    bool watching() const  { return searching==Search_Kind::WATCH; }
     bool analysing() const { return searching==Search_Kind::ANALYSIS; }
+
+    // The colour to move at the cursor: which engine Watch mode asks next, and
+    // whose view an arriving score is in.
+    bool white_to_move() const { return tree.position().white_move; }
+
+    // Whether the cursor is at the end of its line, which is the only place an
+    // engine plays from — stepping back to look around is not a move request.
+    bool at_tip() const { return tree.at_tip(); }
+
+    // Which game the position belongs to. It changes whenever the game itself
+    // is replaced — a reset, a FEN, a loaded PGN — and never when a move is
+    // played, so it is exactly the question "does this engine still know the
+    // game it is being asked about, or does it need a ucinewgame?".
+    int game_serial() const { return serial; }
 
     explicit Session(const std::string& id = "main") : id(id)
     {
@@ -292,6 +319,29 @@ class Session
         return true;
     }
 
+    // Whether Watch mode wants a move thought about: the game is running (or
+    // one step was asked for), the cursor is at the end of the line — stepping
+    // back to look at an earlier position is not a request to play there — and
+    // the game is not over.
+    bool watch_to_move() const
+    {
+        std::string reason;
+        return mode==Mode::WATCH && (watch_running || watch_step) && tree.at_tip()
+            && engine_error.empty() && result(reason)==Outcome::ONGOING;
+    }
+
+    // The limits the side to move plays under.
+    const Go_Limits& watch_limits_now() const { return watch_limits[white_to_move() ? 0 : 1]; }
+
+    // Stops the self-play game where it is. Everything that moves the position
+    // out from under the engines calls this, so a game never plays on into a
+    // position nobody asked for.
+    void watch_pause()
+    {
+        watch_running = false;
+        watch_step = false;
+    }
+
     // Whether Analyse mode wants a search running: the toggle is on, the
     // engine is alive, and the position is one that still has moves.
     bool analysis_wanted() const
@@ -392,6 +442,7 @@ class Session
         if(!loaded.load_pgn(text, error))
         return false;
         tree = loaded;
+        serial++;
         start_pos = tree.root_position();
         start_halfmove = tree.start_halfmove_clock();
         start_fullmove = tree.start_fullmove_number();
@@ -399,6 +450,7 @@ class Session
         resigned = false;
         engine_error.clear();
         live_valid = false;
+        watch_pause();
         clear_analysis();
         return true;
     }
@@ -502,6 +554,28 @@ class Session
         o.null();
         o.end_obj();
 
+        // Watch mode: the two sides' settings, whether the game is running, and
+        // the search the side to move has got so far. Like the Play panel it is
+        // sent in every mode, so the settings can be set up before starting.
+        o.key("watch").obj();
+        o.key("running").boolean(watch_running);
+        o.key("stepping").boolean(watch_step);
+        o.key("thinking").boolean(watching());
+        o.key("mover").str(white_to_move() ? "white" : "black");
+        o.key("atTip").boolean(tree.at_tip());
+        o.key("error").str(engine_error);
+        for(int side=0;side<2;side++)
+        o.key(side==0 ? "white" : "black").obj()
+            .key("kind").str(watch_limits[side].kind())
+            .key("value").num(watch_limits[side].value())
+         .end_obj();
+        o.key("search");
+        if(watching() && live_valid)
+        write_search(o, live);
+        else
+        o.null();
+        o.end_obj();
+
         // Analyse mode's live search. "search" is null unless there is a line
         // for exactly this position, so the page has nothing stale to draw.
         o.key("analysis").obj();
@@ -525,6 +599,7 @@ class Session
     int start_halfmove = 0, start_fullmove = 1;
     std::string start_fen;                 // FEN of the position the game starts from
     bool resigned = false, resigned_white = false;
+    int serial = 0;                        // bumped whenever the game itself is replaced
 
     // The tags an exported game carries. In Play mode the names say who had
     // which colour, which is the only thing this session knows about them.
@@ -536,6 +611,8 @@ class Session
             t.white = human_white ? "Human" : "Ascaniusfish";
             t.black = human_white ? "Ascaniusfish" : "Human";
         }
+        else if(mode==Mode::WATCH)
+        t.white = t.black = "Ascaniusfish";
         std::string reason;
         Outcome outcome = result(reason);
         t.result = outcome==Outcome::WHITE_WINS ? "1-0" :
@@ -670,12 +747,14 @@ class Session
 
     void set_start(const BB& pos, int halfmove, int fullmove)
     {
+        serial++;
         start_pos = pos;
         start_halfmove = halfmove;
         start_fullmove = fullmove;
         resigned = false;
         engine_error.clear();
         live_valid = false;
+        watch_pause();
         clear_analysis();
         tree.start(start_pos, start_halfmove, start_fullmove);
         start_fen = tree.fen();

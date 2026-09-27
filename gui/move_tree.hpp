@@ -22,6 +22,8 @@
 #include "../tools/game_rules.hpp"
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
+#include <cstdlib>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -444,10 +446,32 @@ class Move_Tree
 
     std::string move_text(int id) const
     {
-        std::string text = nodes[id].san;
-        if(!nodes[id].comment.empty())
-        text += " {" + nodes[id].comment + "}";
+        const Tree_Node& node = nodes[id];
+        std::string text = node.san, note = note_text(node.note);
+        if(!node.comment.empty())
+        note += (note.empty() ? "" : " ") + node.comment;
+        if(!note.empty())
+        text += " {" + note + "}";
         return text;
+    }
+
+    // What an engine's search found, written the way tools/gui_match.cpp writes
+    // it: "{+0.35/7 10.00s}", the score in white's view, the depth reached and
+    // the time taken. Without this a downloaded game would keep the moves and
+    // lose everything the engines thought about them. It reads back as an
+    // ordinary PGN comment, so a round trip through a file keeps the text.
+    static std::string note_text(const Move_Note& note)
+    {
+        if(!note.from_engine || note.score_kind.empty())
+        return "";
+        long long value = std::atoll(note.score_value.c_str());
+        char buf[64];
+        if(note.score_kind=="mate")
+        std::snprintf(buf, sizeof buf, "%sM%lld/%d %.2fs", value<0 ? "-" : "+",
+                      value<0 ? -value : value, note.depth, note.time_ms/1000.0);
+        else
+        std::snprintf(buf, sizeof buf, "%+.2f/%d %.2fs", value/100.0, note.depth, note.time_ms/1000.0);
+        return buf;
     }
 
     // Movetext words are separated by a space, except that nothing follows an
@@ -545,7 +569,7 @@ class Move_Tree
                     return false;
                 }
                 if(cursor>0)
-                nodes[cursor].comment = trim(text.substr(i+1, end-i-1));
+                nodes[cursor].comment = one_line(text.substr(i+1, end-i-1));
                 i = end+1;
                 continue;
             }
@@ -662,6 +686,21 @@ class Move_Tree
         if(a==std::string::npos)
         return std::string();
         return s.substr(a, s.find_last_not_of(" \t\r\n")-a+1);
+    }
+
+    // A comment as one line: every run of whitespace becomes a single space.
+    // A comment long enough to be wrapped by the exporter comes back with a
+    // newline inside it, and writing that newline out again would wrap the
+    // next export differently — so a game would not survive two round trips.
+    static std::string one_line(const std::string& s)
+    {
+        std::string out;
+        for(char c : trim(s))
+        if(!isspace((unsigned char)c))
+        out += c;
+        else if(!out.empty() && out.back()!=' ')
+        out += ' ';
+        return out;
     }
 
     // A FEN's clock fields (5 and 6); the same reading Session does of a FEN

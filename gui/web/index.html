@@ -72,6 +72,40 @@
       the current game started from.</p>
     </section>
 
+    <section class="panel" id="watch-panel" hidden>
+      <h2>Ascaniusfish v Ascaniusfish</h2>
+      <p id="watch-state" class="engine"></p>
+      <div class="controls">
+        <button id="watch-run"></button>
+        <button id="watch-step" title="Play one move, then pause">Step</button>
+      </div>
+      <form class="field watch-side" data-side="white" autocomplete="off">
+        <span class="label">White thinks</span>
+        <div class="controls">
+          <select class="watch-kind" aria-label="White search limit">
+            <option value="depth">to depth</option>
+            <option value="movetime">for ms</option>
+          </select>
+          <input class="watch-value" type="number" min="1" step="1" aria-label="White limit value">
+          <button type="submit">Apply</button>
+        </div>
+      </form>
+      <form class="field watch-side" data-side="black" autocomplete="off">
+        <span class="label">Black thinks</span>
+        <div class="controls">
+          <select class="watch-kind" aria-label="Black search limit">
+            <option value="depth">to depth</option>
+            <option value="movetime">for ms</option>
+          </select>
+          <input class="watch-value" type="number" min="1" step="1" aria-label="Black limit value">
+          <button type="submit">Apply</button>
+        </div>
+      </form>
+      <p class="note">A setting applies from the next move on, so you can change
+      it without stopping the game. Load a FEN below to start from a position of
+      your own — the side to move in it plays first.</p>
+    </section>
+
     <section class="panel" id="analysis-panel" hidden>
       <h2>Analysis</h2>
       <div class="analysis-head">

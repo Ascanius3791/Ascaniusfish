@@ -104,25 +104,32 @@ When editing engine internals, `lib/*.hpp` is the declaration/interface layer an
   is the cursor's six moves (back/forward/start/end, and prev/next between siblings).
   `load_pgn()` reads a move by naming every legal move with the same `san()` the exporter uses
   and comparing, so import and export cannot drift apart; it handles nested variations, NAGs,
-  `{}`/`;` comments and a `FEN`/`SetUp` tag. `diagnostics/move_tree_pgn_test.cpp` covers all of
+  `{}`/`;` comments and a `FEN`/`SetUp` tag. An engine move's `Move_Note` is exported as the
+  comment `{+0.35/7 10.00s}`, the same shape `tools/gui_match.cpp` writes, so a downloaded game
+  keeps what the searches found; a comment read back is collapsed to one line, or the newline
+  the exporter's wrapping put inside it would re-wrap the next export differently. `diagnostics/move_tree_pgn_test.cpp` covers all of
   it, including a Lichess-shaped study PGN.
 - `gui/session.hpp` — a `Session` is one game (a `Move_Tree`), a `Mode` and a board orientation;
-  `Sessions` maps ids to them, so Watch mode can later hold two games.
+  `Sessions` maps ids to them, so two browser tabs can hold two independent games.
   **"The position" is the cursor, not the end of the game**: legal moves, FEN, the result, the
   repetition count and the moves handed to the engine all follow it, which is what makes the
   analysis search follow it too. `state_json()` is the one thing the page renders from: FEN,
   `dests` per square, `promotions`, legal moves with SAN, the whole tree flat (every live node
   with its parent, children, SAN, move number and engine note) plus `cursor` and the
-  `can{Back,Forward,Prev,Next,Promote}` flags, the game as PGN, `Outcome`, and the Play and
-  Analysis panels' state. Play adds the resolved human colour, the `Go_Limits`,
-  a resignation and whether a search is running; Analyse adds the toggle and the running
-  search's depth/nodes/nps, its score **in white's view** (`uci_score()` is the mover's, so
-  `write_analysis()` negates it for black) and its PV in both UCI and SAN. A session runs at
-  most one search, and `Search_Kind` says how to read its answer — a `PLAY` search ends in a
-  move on the board, an `ANALYSIS` search only in a line to look at. Every position change
+  `can{Back,Forward,Prev,Next,Promote}` flags, the game as PGN, `Outcome`, and the Play, Watch
+  and Analysis panels' state. Play adds the resolved human colour, the `Go_Limits`,
+  a resignation and whether a search is running; Watch adds a `Go_Limits` per side, whether the
+  self-play game is running or stepping, and which side is thinking; Analyse adds the toggle and
+  the running search's depth/nodes/nps, its score **in white's view** (`uci_score()` is the
+  mover's, so `write_analysis()` negates it for black) and its PV in both UCI and SAN. A session
+  runs at most one search — in Watch mode the two sides think in turn, never together — and
+  `Search_Kind` says how to read its answer: a `PLAY` or `WATCH` search ends in a move on the
+  board, an `ANALYSIS` search only in a line to look at. Every position change
   calls `clear_analysis()` *before* the page is told, so no frame can carry the previous
-  position's eval.
-- `gui/engine_link.hpp` — the UCI client of Play and Analyse mode: a `Go_Limits` (depth,
+  position's eval. `game_serial()` counts the games the session has held — it changes on a
+  reset, a FEN or a loaded PGN and never on a move — which is what decides whether an engine
+  needs a `ucinewgame` before it is asked anything.
+- `gui/engine_link.hpp` — the UCI client of Play, Watch and Analyse mode: a `Go_Limits` (depth,
   movetime, or `Go_Limits::analysis()` = `go infinite` for Analyse;
   `wtime`/`btime`/`winc`/`binc` fields already there for M4), a `Search_Request`, and an
   `Engine_Link` that drives one `./ascaniusfish_uci` (`tools/uci_engine.hpp`) on a worker
@@ -130,6 +137,12 @@ When editing engine internals, `lib/*.hpp` is the declaration/interface layer an
   does `Http_Server::wake()` (a self-pipe), and the poll loop's `on_tick` picks the answer up.
   So a search never blocks a request — page loads, `flip`, `undo` and mode switches are all
   answered while the engine thinks, and every iteration's depth/score is pushed over SSE.
+  `gui_server.cpp` keeps up to **three** links per session (`Engine_Set`): one for Play and
+  Analyse, one per side for Watch, each started on the first search it is asked for. A link the
+  session's mode cannot use is let go on the next tick, and so is every link of a session no
+  page has been watching for 5 s — the self-play game is paused and the analysis toggle goes
+  off first. Each process holds ~140 MB of tables, so leaving an idle pair around would eat the
+  room this repo keeps for running several engines at once.
 - `gui/json.hpp` — a JSON writer that inserts the commas, plus a flat-object parser for request bodies.
 - `gui/web/` — `index.html`/`app.js`/`style.css` are ours; `gui/web/vendor/` holds chessground
   (GPL-3, see its `README.md`), upstream's own prebuilt ESM bundle plus CSS with the board and
@@ -138,9 +151,13 @@ When editing engine internals, `lib/*.hpp` is the declaration/interface layer an
 **The server owns the position and the page owns nothing** — reloading the browser is just another
 `GET /api/state`. All chess logic stays in C++; the JS is presentation only. Routes:
 `GET /api/state`, `GET /api/events` (SSE),
-`POST /api/{move,fen,reset,undo,resign,play,mode,flip,analyse,line}`, all taking `id` (default
-`main`). `POST /api/play` carries the Play settings (`side` = white/black/random, `kind` =
-depth/movetime, `value`); applying them starts a new game, since a colour cannot change mid-game.
+`POST /api/{move,fen,reset,undo,resign,play,watch,mode,flip,analyse,line}`, all taking `id`
+(default `main`). `POST /api/play` carries the Play settings (`side` = white/black/random,
+`kind` = depth/movetime, `value`); applying them starts a new game, since a colour cannot change
+mid-game. `POST /api/watch` carries both a side's setting (`side` = white/black plus
+`kind`/`value`, which applies from the next move and does *not* stop the game) and a run control
+(`action` = start/pause/step). Pause is deliberately **not** an abort: the move being thought
+about is finished and played, which is what "after the current move" means.
 `POST /api/analyse` is the engine on/off toggle; `POST /api/line` walks the board along a
 space-separated list of UCI `moves` (all of them or none), which is what clicking a move in the
 analysis line does — the page sends the moves it drew rather than an index, so a deeper iteration
@@ -165,10 +182,14 @@ misses checks instead of crashing.
 The mode selector shows Analyse / Play / Watch. Analyse is free play, FEN setup and a live
 `go infinite` analysis of whatever is on the board — an eval bar beside the board, the score,
 depth/nodes/nps and the best line in SAN; Play is a full game against `./ascaniusfish_uci`
-(`engine=` picks a different binary); Watch is still selector-only. The analysis toggle starts
+(`engine=` picks a different binary); Watch is Ascaniusfish against itself, two processes with a
+depth or movetime each, started/paused/stepped from the panel and reviewable in the move tree
+afterwards with every move's eval and reached depth. It plays only from the **end of a line**,
+like Play, so stepping back into the game pauses it. The analysis toggle starts
 **off**: a `go infinite` search holds a core for as long as it runs, and this repo deliberately
 leaves room for several engine processes at once. `main()` ignores `SIGPIPE` — an engine that died must be a message on the page,
-not the end of the server.
+not the end of the server — and takes `SIGINT`/`SIGTERM` as "leave through `main()`", which
+aborts every search and quits the engines rather than orphaning them.
 
 ### Python GUI bridge
 `lib/python_communication.hpp` / `src/python_communication.cpp` opens `display_board.py` as a subprocess via `popen` (piping UCI move strings to its stdin) so the C++ engine can drive a tkinter/pygame board with sound effects. Separately, `read_from_last_move()` (`ascaniusfish_2.hpp`) and `display_board.py`'s `write_to_last_move_file()` coordinate human-vs-engine play through the shared file `last_move.txt`, polling every 200ms; the color suffix (`ww`/`bb`) written after the move string is a same-color echo used to signal "no new move yet". Treat `last_move.txt` as ephemeral IPC state, not data to commit meaningfully.

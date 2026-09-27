@@ -17,6 +17,7 @@
 #define GUI_HTTP_SERVER_HPP
 #include <algorithm>
 #include <cerrno>
+#include <csignal>
 #include <cstdio>
 #include <cstring>
 #include <fcntl.h>
@@ -231,9 +232,13 @@ class Http_Server
         return n;
     }
 
+    // Set from a signal handler to end run(), so Ctrl-C leaves through main()
+    // and the engine processes are told to quit rather than orphaned.
+    volatile sig_atomic_t stopping = 0;
+
     void run()
     {
-        for(;;)
+        while(!stopping)
         poll_once(30000);
     }
 

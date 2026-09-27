@@ -152,6 +152,21 @@ el('copy-fen').addEventListener('click', () => {
   showMessage('FEN copied.');
 });
 
+for (const form of document.querySelectorAll('.watch-side'))
+  form.addEventListener('submit', event => {
+    event.preventDefault();
+    command('/api/watch', {
+      side: form.dataset.side,
+      kind: form.querySelector('.watch-kind').value,
+      value: Number(form.querySelector('.watch-value').value),
+    });
+  });
+
+el('watch-run').addEventListener('click', () => {
+  if (state) command('/api/watch', { action: state.watch.running ? 'pause' : 'start' });
+});
+el('watch-step').addEventListener('click', () => command('/api/watch', { action: 'step' }));
+
 el('analysis-toggle').addEventListener('click', () => {
   if (state) command('/api/analyse', { on: !state.analysis.on });
 });
@@ -225,7 +240,9 @@ const MODE_NOTES = {
            'with the arrow keys. A move played from an earlier position starts a side line. ' +
            'Turn the engine on to see its eval and its best line for whatever is on the board.',
   play:    'You against Ascaniusfish. Load a FEN to start from a position of your own.',
-  watch:   'Watching Ascaniusfish play itself is not wired up yet — the board below is still free play.',
+  watch:   'Ascaniusfish against itself, one engine process per side. Start plays the game on; ' +
+           'Pause takes effect after the move being thought about, and Step plays exactly one. ' +
+           'Stepping back into the game pauses it — the engines only ever play from the end of a line.',
 };
 
 const OUTCOME_TEXT = {
@@ -248,9 +265,11 @@ function render(s) {
   const over = s.outcome.state !== 'ongoing';
   // In Play mode only your own pieces may move, and only while the engine is
   // not thinking — a move made mid-search would be answered for the wrong
-  // position. Elsewhere both colours are free.
+  // position. In Watch mode the board is yours whenever neither engine is
+  // thinking. Elsewhere both colours are free.
   const movableColor = over ? undefined
                       : playing ? (s.play.thinking ? undefined : s.play.humanColor)
+                      : s.mode === 'watch' ? (s.watch.thinking ? undefined : 'both')
                       : 'both';
 
   board.set({
@@ -273,6 +292,7 @@ function render(s) {
   el('resign').disabled = over;
 
   renderPlayPanel(s);
+  renderWatchPanel(s);
   renderAnalysis(s);
 
   // Leave a FEN or a PGN the user is in the middle of typing alone.
@@ -322,6 +342,50 @@ function scoreText(score) {
   if (!score) return '';
   if (score.kind === 'mate') return '#' + score.value;
   return (score.value >= 0 ? '+' : '') + (score.value / 100).toFixed(2);
+}
+
+// ----------------------------------------------------------------- watch panel
+
+function renderWatchPanel(s) {
+  const w = s.watch;
+  el('watch-panel').hidden = s.mode !== 'watch';
+  if (s.mode !== 'watch') return;
+
+  for (const form of document.querySelectorAll('.watch-side')) {
+    const limit = w[form.dataset.side];
+    const kind = form.querySelector('.watch-kind');
+    const value = form.querySelector('.watch-value');
+    // Don't fight a value being typed or a select being opened.
+    if (document.activeElement !== kind) kind.value = limit.kind;
+    if (document.activeElement !== value) value.value = limit.value;
+  }
+
+  const over = s.outcome.state !== 'ongoing';
+  // Start and Step only make sense at the end of a line, which is the only
+  // place the engines play from; the server refuses them anywhere else.
+  el('watch-run').textContent = w.running ? 'Pause' : 'Start';
+  el('watch-run').disabled = !w.running && (over || !w.atTip);
+  el('watch-step').disabled = w.running || w.thinking || over || !w.atTip;
+
+  el('watch-state').textContent = watchLine(s);
+  el('watch-state').classList.toggle('bad', !!w.error);
+  el('watch-state').classList.toggle('thinking', w.thinking && !w.error);
+}
+
+function watchLine(s) {
+  const w = s.watch;
+  if (w.error) return `Engine: ${w.error}`;
+  if (s.outcome.state !== 'ongoing') return 'The game is over.';
+  const mover = w.mover === 'white' ? 'White' : 'Black';
+  if (w.thinking) {
+    const search = w.search;
+    if (!search) return `${mover} is thinking\u2026`;
+    const score = scoreText(search.score);
+    return `${mover} is thinking\u2026 depth ${search.depth}` + (score ? `, ${score}` : '');
+  }
+  if (!w.atTip) return 'Paused \u2014 go to the end of the line to play on.';
+  if (w.running || w.stepping) return `Starting ${mover}\u2026`;
+  return `Paused \u2014 ${mover} to move.`;
 }
 
 // ------------------------------------------------------------------- analysis

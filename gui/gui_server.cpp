@@ -14,11 +14,14 @@
 //   fen=<fen>      starting position of the "main" session
 //   engine=...     the UCI binary Play mode drives (default ./ascaniusfish_uci)
 //
-// Play and Analyse mode make this a UCI client of ./ascaniusfish_uci
+// Play, Analyse and Watch mode make this a UCI client of ./ascaniusfish_uci
 // (gui/engine_link.hpp): the search runs on a worker thread, so a request never
 // waits for it and the SSE stream carries the thinking indicator, the engine's
 // move and — in Analyse mode — every iteration of a "go infinite" search on the
-// position now on the board. Watch mode is still selector-only.
+// position now on the board. Watch mode drives two of those processes, one per
+// side, and plays them against each other; when the last page watching a
+// session goes away its game is paused and its engines are let go, so a closed
+// tab never leaves two searches running for nobody.
 #include "http_server.hpp"
 #include "session.hpp"
 
@@ -39,27 +42,42 @@ static Http_Server server;
 static std::string web_root;
 static std::string engine_path = ENGINE_PATH;
 
-// One engine process per session, started on the first search it is asked for,
-// plus the token of the search that session is still waiting for — an aborted
-// search's bestmove arrives all the same and is dropped by its token.
-struct Engine_Slot
+// A session's engine processes. Play and Analyse share one; Watch needs one
+// per side, so the two self-play engines keep their own transposition tables
+// and neither of them is also the analysis engine. Each starts on the first
+// search it is asked for, so a session that never watches never forks the two
+// extra processes.
+enum { SLOT_SOLO = 0, SLOT_WHITE = 1, SLOT_BLACK = 2, N_SLOTS = 3 };
+
+struct Engine_Set
 {
-    Engine_Link link;
-    long long awaiting = 0;
+    std::unique_ptr<Engine_Link> links[N_SLOTS];
+    int active = -1;                         // the slot whose search is running
+    long long awaiting = 0;                  // its token; an aborted search's answer is dropped
+    int slot_game[N_SLOTS] = {-1, -1, -1};   // the game each slot last searched in
+    long long alone_since = 0;               // when the last page left; 0 while one is watching
 };
 
-static std::map<std::string, std::unique_ptr<Engine_Slot>> engines;
+static std::map<std::string, std::unique_ptr<Engine_Set>> engines;
 
-static Engine_Slot& engine_of(const Session& session)
+static Engine_Set& engines_of(const Session& session)
 {
-    std::unique_ptr<Engine_Slot>& slot = engines[session.id];
-    if(!slot)
+    std::unique_ptr<Engine_Set>& set = engines[session.id];
+    if(!set)
+    set.reset(new Engine_Set);
+    return *set;
+}
+
+static Engine_Link& link_of(Engine_Set& set, int slot)
+{
+    std::unique_ptr<Engine_Link>& link = set.links[slot];
+    if(!link)
     {
-        slot.reset(new Engine_Slot);
-        slot->link.path = engine_path;
-        slot->link.on_update = [] { server.wake(); };   // the only cross-thread call there is
+        link.reset(new Engine_Link);
+        link->path = engine_path;
+        link->on_update = [] { server.wake(); };   // the only cross-thread call there is
     }
-    return *slot;
+    return *link;
 }
 
 // Pushes the current position to every page watching this session.
@@ -69,41 +87,57 @@ static void broadcast(Session& session)
 }
 
 // Stops a running search and forgets its answer, for anything that changes the
-// position under the engine: a new game, a FEN, a take back, a mode switch.
+// position under the engine: a new game, a FEN, a take back, a mode switch. A
+// self-play game is stopped too — the engines were thinking about a position
+// that is no longer the one on the board, and playing on from wherever the
+// board ended up is not what anyone asked for.
 static void abort_search(Session& session)
 {
-    Engine_Slot& slot = engine_of(session);
-    slot.link.abort();
-    slot.awaiting = 0;
+    Engine_Set& set = engines_of(session);
+    if(set.active>=0 && set.links[set.active])
+    set.links[set.active]->abort();
+    set.active = -1;
+    set.awaiting = 0;
     session.searching = Search_Kind::NONE;
     session.live_valid = false;
+    session.watch_pause();
     session.clear_analysis();
 }
 
-// Asks the engine for whatever this session now wants thought about: its move
-// in Play mode, the position on the board in Analyse mode. Returns at once; the
-// answer arrives through on_tick. False when nothing is wanted, or when the
-// engine is still finishing an aborted search — on_tick tries again as soon as
-// that one's bestmove turns up.
+// Asks an engine for whatever this session now wants thought about: its move in
+// Play mode, the side to move's in Watch mode, the position on the board in
+// Analyse mode. Returns at once; the answer arrives through on_tick. False when
+// nothing is wanted, or when the engine is still finishing an aborted search —
+// on_tick tries again as soon as that one's bestmove turns up.
 static bool maybe_start_search(Session& session)
 {
-    Engine_Slot& slot = engine_of(session);
+    Engine_Set& set = engines_of(session);
     if(session.searching!=Search_Kind::NONE)
     return false;
     Search_Kind kind = session.engine_to_move() && session.engine_error.empty() ? Search_Kind::PLAY
+                     : session.watch_to_move() ? Search_Kind::WATCH
                      : session.analysis_wanted() ? Search_Kind::ANALYSIS
                      : Search_Kind::NONE;
     if(kind==Search_Kind::NONE)
     return false;
+    int slot = kind!=Search_Kind::WATCH ? SLOT_SOLO
+             : session.white_to_move()  ? SLOT_WHITE : SLOT_BLACK;
     Search_Request request;
     request.start_fen = session.root_fen();
     request.moves = session.moves();
-    request.limits = kind==Search_Kind::PLAY ? session.limits : Go_Limits::analysis();
-    request.new_game = session.moves().empty();
-    long long token = slot.link.start_search(request);
+    request.limits = kind==Search_Kind::PLAY  ? session.limits
+                   : kind==Search_Kind::WATCH ? session.watch_limits_now()
+                   : Go_Limits::analysis();
+    // A "ucinewgame" only when this engine has not seen this game before: in
+    // Watch mode each side's process meets the game once, and in Analyse mode
+    // moving around a game is not a reason to throw its table away.
+    request.new_game = set.slot_game[slot]!=session.game_serial();
+    long long token = link_of(set, slot).start_search(request);
     if(!token)
     return false;
-    slot.awaiting = token;
+    set.slot_game[slot] = session.game_serial();
+    set.active = slot;
+    set.awaiting = token;
     session.searching = kind;
     session.live_valid = false;
     return true;
@@ -113,9 +147,12 @@ static bool maybe_start_search(Session& session)
 // poll loop, never from the worker thread.
 static void collect_search(Session& session)
 {
-    Engine_Slot& slot = engine_of(session);
+    Engine_Set& set = engines_of(session);
+    if(set.active<0 || !set.links[set.active])
+    return;
+    Engine_Link& link = *set.links[set.active];
     Search_Info progress;
-    if(session.searching!=Search_Kind::NONE && slot.link.take_progress(progress))
+    if(session.searching!=Search_Kind::NONE && link.take_progress(progress))
     {
         if(session.analysing())
         session.set_analysis(progress);
@@ -128,17 +165,19 @@ static void collect_search(Session& session)
     }
 
     Search_Result result;
-    if(!slot.link.take_result(result))
+    if(!link.take_result(result))
     return;
-    if(result.token!=slot.awaiting)
+    if(result.token!=set.awaiting)
     return;                          // an aborted search's answer: not wanted any more
     Search_Kind kind = session.searching;
-    slot.awaiting = 0;
+    set.active = -1;
+    set.awaiting = 0;
     session.searching = Search_Kind::NONE;
     session.live_valid = false;
     if(!result.error.empty())
     {
         session.engine_error = result.error;
+        session.watch_pause();       // a self-play game cannot go on without both engines
         session.clear_analysis();
         broadcast(session);
         return;
@@ -152,13 +191,70 @@ static void collect_search(Session& session)
         broadcast(session);
         return;
     }
-    bool engine_is_white = !session.human_white;
+    bool mover_was_white = session.white_to_move();
     std::string error;
     if(!session.play(result.bestmove, error))
-    session.engine_error = "the engine answered " + result.bestmove + " — " + error;
-    else
-    session.annotate_last(result.info, engine_is_white);
+    {
+        session.engine_error = "the engine answered " + result.bestmove + " — " + error;
+        session.watch_pause();
+        broadcast(session);
+        return;
+    }
+    session.annotate_last(result.info, mover_was_white);
+    if(kind==Search_Kind::WATCH)
+    {
+        // One step is one move: whatever it found, the game pauses here. A game
+        // that just ended pauses too, so the button reads "Start" again.
+        session.watch_step = false;
+        std::string reason;
+        if(session.result(reason)!=Outcome::ONGOING)
+        session.watch_running = false;
+    }
     broadcast(session);
+}
+
+// A closed tab must not leave engines thinking. Once no page has been on a
+// session's stream for this long, its self-play game is paused, its analysis
+// toggle goes off, and all its engine processes are let go; opening the page
+// again starts them back up. The grace period is what keeps a page reload —
+// which drops the stream for a moment — from counting as leaving.
+constexpr long long ENGINE_IDLE_MS = 5000;
+
+// Which engines the session's mode can still use. An engine this says nothing
+// about is a process sitting on a transposition table for no one, so it goes:
+// the Watch pair left behind by a switch back to Analyse is a few hundred MB
+// of the room this repo deliberately keeps for running several engines at once.
+static bool slot_wanted(const Session& session, int slot)
+{
+    if(session.mode==Mode::WATCH)
+    return slot==SLOT_WHITE || slot==SLOT_BLACK;
+    return slot==SLOT_SOLO;
+}
+
+static void release_idle_engines(const std::string& id, Session& session)
+{
+    Engine_Set& set = engines_of(session);
+    if(server.subscribers(id)>0)
+    set.alone_since = 0;
+    else if(!set.alone_since)
+    set.alone_since = now_ms();
+    bool abandoned = set.alone_since && now_ms()-set.alone_since>=ENGINE_IDLE_MS;
+
+    // Nobody is watching: stop whatever is thinking first. Its bestmove still
+    // has to arrive before the worker is idle, so the processes themselves go
+    // on a later tick, through the loop below.
+    if(abandoned && (session.watch_running || session.watch_step || session.analysis_on || set.active>=0))
+    {
+        session.analysis_on = false;
+        abort_search(session);
+        return;
+    }
+    for(int slot=0;slot<N_SLOTS;slot++)
+    if(set.links[slot] && (abandoned || !slot_wanted(session, slot)) && !set.links[slot]->searching_now())
+    {
+        set.links[slot].reset();     // ~Engine_Link joins its idle worker and quits the process
+        set.slot_game[slot] = -1;    // a new process knows no game: it gets a "ucinewgame"
+    }
 }
 
 // Every session with something in flight, once per poll iteration. The ids are
@@ -174,6 +270,7 @@ static void collect_all()
         collect_search(session);
         if(maybe_start_search(session))
         broadcast(session);   // a search that had to wait for the last one
+        release_idle_engines(id, session);
     }
 }
 
@@ -234,6 +331,43 @@ static bool read_web_file(const std::string& path, std::string& out)
     buffer << file.rdbuf();
     out = buffer.str();
     return true;
+}
+
+// A depth/movetime setting out of a request body, as both the Play and the
+// Watch panel send it. Returns false and fills `error` if it is out of range;
+// leaves `limits` alone when the body carries no "kind" at all.
+static bool read_limits(const std::map<std::string, std::string>& body, Go_Limits& limits, std::string& error)
+{
+    auto kind = body.find("kind");
+    if(kind==body.end())
+    return true;
+    auto value = body.find("value");
+    long long n = value==body.end() ? 0 : std::atoll(value->second.c_str());
+    if(kind->second=="depth")
+    {
+        if(n<1 || n>MAX_DEPTH)
+        {
+            error = "depth must be 1 to " + std::to_string(MAX_DEPTH);
+            return false;
+        }
+        limits = Go_Limits();
+        limits.depth = (int)n;
+        return true;
+    }
+    if(kind->second=="movetime")
+    {
+        if(n<1 || n>MAX_MOVETIME_MS)
+        {
+            error = "move time must be 1 to " + std::to_string(MAX_MOVETIME_MS) + " ms";
+            return false;
+        }
+        limits = Go_Limits();
+        limits.depth = 0;
+        limits.movetime_ms = n;
+        return true;
+    }
+    error = "kind must be depth or movetime";
+    return false;
 }
 
 // The session a request is about; "?id=" / "id" in the body, default "main".
@@ -414,33 +548,50 @@ static Response handle_post(const Request& req)
         auto given = body.find("side");
         if(given!=body.end() && !side_choice_from_name(given->second, side))
         return Response::json(json::error("side must be white, black or random"), 400);
-        given = body.find("kind");
-        if(given!=body.end())
-        {
-            auto value = body.find("value");
-            long long n = value==body.end() ? 0 : std::atoll(value->second.c_str());
-            if(given->second=="depth")
-            {
-                if(n<1 || n>MAX_DEPTH)
-                return Response::json(json::error("depth must be 1 to " + std::to_string(MAX_DEPTH)), 400);
-                limits = Go_Limits();
-                limits.depth = (int)n;
-            }
-            else if(given->second=="movetime")
-            {
-                if(n<1 || n>MAX_MOVETIME_MS)
-                return Response::json(json::error("move time must be 1 to " + std::to_string(MAX_MOVETIME_MS) + " ms"), 400);
-                limits = Go_Limits();
-                limits.depth = 0;
-                limits.movetime_ms = n;
-            }
-            else
-            return Response::json(json::error("kind must be depth or movetime"), 400);
-        }
+        if(!read_limits(body, limits, error))
+        return Response::json(json::error(error), 400);
         abort_search(session);
         session.side_choice = side;
         session.limits = limits;
         session.start_play();
+    }
+    else if(req.path=="/api/watch")
+    {
+        // Ascaniusfish against itself. One request carries both a side's
+        // setting ("side" plus "kind"/"value") and a run control ("action"), so
+        // the page can change how a side thinks without stopping the game: the
+        // next move simply uses the new setting.
+        auto side = body.find("side");
+        if(side!=body.end())
+        {
+            if(side->second!="white" && side->second!="black")
+            return Response::json(json::error("side must be white or black"), 400);
+            if(!read_limits(body, session.watch_limits[side->second=="white" ? 0 : 1], error))
+            return Response::json(json::error(error), 400);
+        }
+        auto action = body.find("action");
+        if(action!=body.end())
+        {
+            if(session.mode!=Mode::WATCH)
+            return Response::json(json::error("the board is not in Watch mode"), 409);
+            if(action->second=="pause")
+            // Deliberately not an abort: the move being thought about is
+            // finished and played, which is what "after the current move" means.
+            session.watch_pause();
+            else if(action->second=="start" || action->second=="step")
+            {
+                std::string reason;
+                if(session.result(reason)!=Outcome::ONGOING)
+                return Response::json(json::error("the game is over — start a new one"), 409);
+                if(!session.at_tip())
+                return Response::json(json::error("go to the end of the line first"), 409);
+                session.engine_error.clear();
+                session.watch_running = action->second=="start";
+                session.watch_step = action->second=="step";
+            }
+            else
+            return Response::json(json::error("action must be start, pause or step"), 400);
+        }
     }
     else if(req.path=="/api/flip")
     session.flipped = !session.flipped;
@@ -456,11 +607,41 @@ static Response handle_post(const Request& req)
     return Response::json(session.state_json());
 }
 
+// Ctrl-C. Every search is asked to stop, and once the workers are idle the
+// links go, which sends each engine a "quit" and reaps it. A worker still
+// waiting for a bestmove would make ~Engine_Link block — "go infinite" waits a
+// day — so after the grace period the exit itself does the job instead: when
+// this process goes, its engines read EOF on stdin and stop.
+static void quit_engines()
+{
+    for(auto& entry : engines)
+    for(std::unique_ptr<Engine_Link>& link : entry.second->links)
+    if(link)
+    link->abort();
+    for(int waited=0;waited<100;waited++)
+    {
+        bool busy = false;
+        for(auto& entry : engines)
+        for(std::unique_ptr<Engine_Link>& link : entry.second->links)
+        busy = busy || (link && link->searching_now());
+        if(!busy)
+        {
+            engines.clear();
+            return;
+        }
+        usleep(20000);
+    }
+}
+
+static void request_stop(int) { server.stopping = 1; }
+
 int main(int argc, char** argv)
 {
     // Writing to a dead engine's pipe must be an error, not the end of the
     // server: an engine that crashed is something the page gets told about.
     std::signal(SIGPIPE, SIG_IGN);
+    std::signal(SIGINT, request_stop);
+    std::signal(SIGTERM, request_stop);
 
     // The engine's attack tables. Without them sliding-piece attacks are
     // garbage, which shows up as in_check() missing checks rather than as a
@@ -539,5 +720,8 @@ int main(int argc, char** argv)
                 server.port(), web_root.c_str());
     std::fflush(stdout);
     server.run();
-    return 0;
+    std::printf("\nStopping.\n");
+    quit_engines();
+    std::fflush(nullptr);
+    std::_Exit(0);   // anything still thinking is left to EOF on its stdin
 }
