@@ -215,13 +215,23 @@ PV_Line minimax_tactical(const BB* const original, BB* const wfh, const WEIGHTS&
         if(original->white_move)
         {
             if(stand_pat>=beta)
-            return pv_line;
+            {
+                // Standing pat already beats beta, so the captures below were never
+                // searched: the true value is >=stand_pat, not equal to it. Labelling
+                // this exact would make the quiet-leaf probe above (which trusts
+                // bound_type==0 from any depth) hand a fail-high bound out as a value.
+                pv_line.bound_type = -1; // lower bound
+                return pv_line;
+            }
             alpha=max(alpha,stand_pat);
         }
         else
         {
             if(stand_pat<=alpha)
-            return pv_line;
+            {
+                pv_line.bound_type = 1; // upper bound, see the white case above
+                return pv_line;
+            }
             beta=min(beta,stand_pat);
         }
     }
