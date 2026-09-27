@@ -95,7 +95,41 @@ main {
 
 .board-column { flex: 1 1 420px; max-width: 620px; }
 
-.board-frame { position: relative; }
+/* The eval bar stands beside the board and is as tall as it. The frame takes
+   its width from this row rather than from the board inside it, so the
+   ResizeObserver that sizes the board cannot feed back into the layout. */
+.board-row { display: flex; gap: 10px; align-items: stretch; }
+
+.board-frame { position: relative; flex: 1 1 0; min-width: 0; }
+
+/* White's share of the bar, from white's end of the board — so it turns over
+   with the board. An eval far from 0 clamps short of the ends: a full bar
+   would say "mate" when the engine only said "winning". */
+.evalbar {
+  position: relative;
+  flex: 0 0 18px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  overflow: hidden;
+  background: #2f2c27;
+}
+
+.evalbar[hidden] { display: none; }
+
+.evalbar-fill {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: #e8e3d8;
+  transition: height 0.25s ease, top 0.25s ease;
+}
+
+.evalbar.flipped .evalbar-fill { bottom: auto; top: 0; }
+
+/* Nothing has been searched yet: the bar is still there, but it is not
+   claiming the position is equal. */
+.evalbar.idle .evalbar-fill { background: var(--line); }
 
 .status {
   margin: 12px 0 0;
@@ -191,6 +225,47 @@ select:focus, input:focus { outline: none; border-color: var(--accent); }
   font-size: 11px;
   color: var(--muted);
 }
+
+/* The Analysis panel: the toggle, the score, and the line the engine likes. */
+
+.analysis-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.score {
+  margin-left: auto;
+  font-size: 18px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+#analysis-panel.running .score { color: var(--accent); }
+#analysis-panel .note.bad { color: var(--bad); }
+
+.line {
+  margin: 8px 0 0;
+  line-height: 1.8;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 13px;
+  word-spacing: -0.2em;
+}
+
+.line .move-number { color: var(--muted); }
+
+/* Each move in the line is a button: clicking it walks the board into the
+   line up to that move. */
+.pv-move {
+  font: inherit;
+  padding: 1px 3px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  background: none;
+}
+
+.pv-move:hover:not(:disabled) { background: var(--bg); border-color: var(--accent); }
 
 #fen-form { display: flex; flex-direction: column; gap: 8px; }
 

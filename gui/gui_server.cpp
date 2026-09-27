@@ -14,10 +14,11 @@
 //   fen=<fen>      starting position of the "main" session
 //   engine=...     the UCI binary Play mode drives (default ./ascaniusfish_uci)
 //
-// Play mode makes this a UCI client of ./ascaniusfish_uci (gui/engine_link.hpp):
-// the search runs on a worker thread, so a request never waits for it and the
-// SSE stream carries both the thinking indicator and the engine's move. Watch
-// mode is still selector-only.
+// Play and Analyse mode make this a UCI client of ./ascaniusfish_uci
+// (gui/engine_link.hpp): the search runs on a worker thread, so a request never
+// waits for it and the SSE stream carries the thinking indicator, the engine's
+// move and — in Analyse mode — every iteration of a "go infinite" search on the
+// position now on the board. Watch mode is still selector-only.
 #include "http_server.hpp"
 #include "session.hpp"
 
@@ -74,29 +75,36 @@ static void abort_search(Session& session)
     Engine_Slot& slot = engine_of(session);
     slot.link.abort();
     slot.awaiting = 0;
-    session.thinking = false;
+    session.searching = Search_Kind::NONE;
     session.live_valid = false;
+    session.clear_analysis();
 }
 
-// Asks the engine for its move, if it is the engine's turn and it is not
-// already thinking. Returns at once; the answer arrives through on_tick. False
-// when the engine is still finishing an aborted search — on_tick tries again as
-// soon as that one's bestmove turns up.
+// Asks the engine for whatever this session now wants thought about: its move
+// in Play mode, the position on the board in Analyse mode. Returns at once; the
+// answer arrives through on_tick. False when nothing is wanted, or when the
+// engine is still finishing an aborted search — on_tick tries again as soon as
+// that one's bestmove turns up.
 static bool maybe_start_search(Session& session)
 {
     Engine_Slot& slot = engine_of(session);
-    if(session.thinking || !session.engine_to_move() || !session.engine_error.empty())
+    if(session.searching!=Search_Kind::NONE)
+    return false;
+    Search_Kind kind = session.engine_to_move() && session.engine_error.empty() ? Search_Kind::PLAY
+                     : session.analysis_wanted() ? Search_Kind::ANALYSIS
+                     : Search_Kind::NONE;
+    if(kind==Search_Kind::NONE)
     return false;
     Search_Request request;
     request.start_fen = session.root_fen();
     request.moves = session.moves();
-    request.limits = session.limits;
+    request.limits = kind==Search_Kind::PLAY ? session.limits : Go_Limits::analysis();
     request.new_game = session.moves().empty();
     long long token = slot.link.start_search(request);
     if(!token)
     return false;
     slot.awaiting = token;
-    session.thinking = true;
+    session.searching = kind;
     session.live_valid = false;
     return true;
 }
@@ -107,10 +115,15 @@ static void collect_search(Session& session)
 {
     Engine_Slot& slot = engine_of(session);
     Search_Info progress;
-    if(session.thinking && slot.link.take_progress(progress))
+    if(session.searching!=Search_Kind::NONE && slot.link.take_progress(progress))
     {
-        session.live = progress;
-        session.live_valid = true;
+        if(session.analysing())
+        session.set_analysis(progress);
+        else
+        {
+            session.live = progress;
+            session.live_valid = true;
+        }
         broadcast(session);
     }
 
@@ -119,12 +132,23 @@ static void collect_search(Session& session)
     return;
     if(result.token!=slot.awaiting)
     return;                          // an aborted search's answer: not wanted any more
+    Search_Kind kind = session.searching;
     slot.awaiting = 0;
-    session.thinking = false;
+    session.searching = Search_Kind::NONE;
     session.live_valid = false;
     if(!result.error.empty())
     {
         session.engine_error = result.error;
+        session.clear_analysis();
+        broadcast(session);
+        return;
+    }
+    if(kind==Search_Kind::ANALYSIS)
+    {
+        // An analysis search we did not stop ourselves has simply run out of
+        // depth. Its last line stays on the page; starting the same search
+        // again would only spin, so the position is left as analysed.
+        session.analysis_finished = true;
         broadcast(session);
         return;
     }
@@ -249,14 +273,45 @@ static Response handle_post(const Request& req)
         auto uci = body.find("uci");
         if(uci==body.end())
         return Response::json(json::error("no move given"), 400);
-        // A move played into a running search would be answered for a position
-        // the engine never saw. The page doesn't offer one, but the API says no.
-        if(session.thinking)
+        // A move played into a running Play search would be answered for a
+        // position the engine never saw. An analysis search is different: a
+        // move is exactly how you tell it what to think about next.
+        if(session.thinking())
         return Response::json(json::error("the engine is still thinking"), 409);
         // In Play mode a move of yours is also the answer to a failed search:
         // it clears the error, so the engine is asked again.
         session.engine_error.clear();
         ok = session.play(uci->second, error);
+        if(ok)
+        abort_search(session);   // the analysis was about the position you just left
+    }
+    else if(req.path=="/api/line")
+    {
+        // Walk the board along a line: the moves a click in the analysis line
+        // covers, as a space-separated list of UCI moves.
+        auto moves = body.find("moves");
+        if(moves==body.end())
+        return Response::json(json::error("no moves given"), 400);
+        if(session.thinking())
+        return Response::json(json::error("the engine is still thinking"), 409);
+        ok = session.enter_line(moves->second, error);
+        if(ok)
+        abort_search(session);
+    }
+    else if(req.path=="/api/analyse")
+    {
+        auto on = body.find("on");
+        if(on==body.end() || (on->second!="true" && on->second!="false"))
+        return Response::json(json::error("on must be true or false"), 400);
+        bool wanted = on->second=="true";
+        // Turning it off stops the analysis; turning it on clears whatever an
+        // earlier one left, including the "ran out of depth" mark. A Play
+        // search is none of this toggle's business and is left alone.
+        if(!session.thinking())
+        abort_search(session);
+        session.analysis_on = wanted;
+        if(wanted)
+        session.engine_error.clear();
     }
     else if(req.path=="/api/fen")
     {
@@ -279,7 +334,10 @@ static Response handle_post(const Request& req)
         abort_search(session);   // whatever it was searching is about a position that is gone
     }
     else if(req.path=="/api/resign")
-    session.resign();
+    {
+        session.resign();
+        abort_search(session);   // a finished game is nothing to analyse
+    }
     else if(req.path=="/api/mode")
     {
         auto mode = body.find("mode");

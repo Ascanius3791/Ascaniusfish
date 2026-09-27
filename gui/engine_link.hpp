@@ -21,26 +21,43 @@
 constexpr const char* ENGINE_PATH = "./ascaniusfish_uci";
 constexpr long long ENGINE_GRACE_MS = 5000;        // past movetime before the engine counts as hung
 constexpr long long ENGINE_MAX_WAIT_MS = 600000;   // a fixed-depth search may take a while; not forever
+constexpr long long ENGINE_ANALYSIS_WAIT_MS = 86400000;  // "go infinite" ends on "stop", not on a clock
 constexpr int ENGINE_DEFAULT_DEPTH = 6;
 
-// What the engine is told about one move. Fixed depth or a fixed time per move
-// today; the clock fields are here so M4 only has to fill them in rather than
-// reshape everything that carries a limit around.
+// What the engine is told about one move. Fixed depth, a fixed time per move,
+// or — for Analyse mode — no limit at all; the clock fields are here so M4 only
+// has to fill them in rather than reshape everything that carries a limit around.
 struct Go_Limits
 {
     int depth = ENGINE_DEFAULT_DEPTH;
     long long movetime_ms = 0;
     long long wtime_ms = 0, btime_ms = 0, winc_ms = 0, binc_ms = 0;
+    bool infinite = false;   // think until "stop": what Analyse mode asks for
+
+    // The limits an analysis search runs under. It is ended by the position
+    // changing or the toggle going off, never by a clock.
+    static Go_Limits analysis()
+    {
+        Go_Limits limits;
+        limits.depth = 0;
+        limits.infinite = true;
+        return limits;
+    }
 
     bool clocked() const { return wtime_ms>0 || btime_ms>0; }
 
-    // "depth" / "movetime" / "clock": which of the three the engine will be given.
-    const char* kind() const { return clocked() ? "clock" : movetime_ms>0 ? "movetime" : "depth"; }
+    // Which of the four the engine will be given.
+    const char* kind() const
+    {
+        return infinite ? "infinite" : clocked() ? "clock" : movetime_ms>0 ? "movetime" : "depth";
+    }
 
-    long long value() const { return clocked() ? 0 : movetime_ms>0 ? movetime_ms : depth; }
+    long long value() const { return infinite || clocked() ? 0 : movetime_ms>0 ? movetime_ms : depth; }
 
     std::string go_command() const
     {
+        if(infinite)
+        return "go infinite";
         if(clocked())
         return "go wtime " + std::to_string(wtime_ms) + " btime " + std::to_string(btime_ms)
              + " winc " + std::to_string(winc_ms) + " binc " + std::to_string(binc_ms);
@@ -52,6 +69,8 @@ struct Go_Limits
     // How long to wait for a bestmove before calling the engine hung.
     long long deadline_ms() const
     {
+        if(infinite)
+        return ENGINE_ANALYSIS_WAIT_MS;   // only a dead engine (EOF) ends the wait early
         if(movetime_ms>0)
         return movetime_ms+ENGINE_GRACE_MS;
         if(clocked())

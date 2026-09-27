@@ -9,7 +9,8 @@
 // legality from the engine's own all_moves() — nothing here decides chess.
 //
 // In Play mode a session also knows which colour the engine has, how it is
-// asked to think (gui/engine_link.hpp) and what each of its searches found.
+// asked to think (gui/engine_link.hpp) and what each of its searches found; in
+// Analyse mode it holds the running analysis of the position now on the board.
 // Starting and reading those searches is the server's job (gui_server.cpp);
 // this file only holds the state they produce, so nothing here blocks.
 #ifndef GUI_SESSION_HPP
@@ -25,8 +26,14 @@
 #include <string>
 
 // Which of the GUI's modes a session is in. Watch — Ascaniusfish against
-// itself — is still selector-only; Analyse is free play, Play is issue #15.
+// itself — is still selector-only; Analyse is free play plus a live analysis,
+// Play is a game against the engine.
 enum class Mode { ANALYSE, PLAY, WATCH };
+
+// What the one engine process of a session is busy with. A session runs at
+// most one search, so this says how to read its answer: a PLAY search ends in
+// a move on the board, an ANALYSIS search only ever in a line to look at.
+enum class Search_Kind { NONE, PLAY, ANALYSIS };
 
 inline const char* mode_name(Mode m)
 {
@@ -90,10 +97,24 @@ class Session
     Side_Choice side_choice = Side_Choice::WHITE;
     Go_Limits limits;
     bool human_white = true;
-    bool thinking = false;
     std::string engine_error;
-    Search_Info live;        // the running search, as far as it has got
+    Search_Info live;        // the running Play search, as far as it has got
     bool live_valid = false;
+
+    // Analyse mode. The engine thinks about the position on the board until it
+    // changes. Everything here belongs to the position now shown and nothing
+    // else: every position change clears it before the page is told, so no
+    // frame can ever carry the previous position's eval.
+    bool analysis_on = false;
+    bool analysis_valid = false;
+    bool analysis_finished = false;   // the engine ended the search itself (it ran out of depth)
+    Search_Info analysis;
+    std::vector<std::string> analysis_uci, analysis_san;   // its PV, legal from here, both ways
+
+    Search_Kind searching = Search_Kind::NONE;
+
+    bool thinking() const  { return searching==Search_Kind::PLAY; }
+    bool analysing() const { return searching==Search_Kind::ANALYSIS; }
 
     explicit Session(const std::string& id = "main") : id(id)
     {
@@ -158,7 +179,76 @@ class Session
         }
         played.push_back(uci);
         notes.push_back(Move_Note());
+        clear_analysis();
         return true;
+    }
+
+    // Forgets the analysis. Called by every position change here and by the
+    // server whenever it stops a search, so the line the page draws is always
+    // the line for the position the page draws.
+    void clear_analysis()
+    {
+        analysis_valid = false;
+        analysis_finished = false;
+        analysis_uci.clear();
+        analysis_san.clear();
+    }
+
+    // Records one analysis iteration. The engine gives its PV in UCI; it is
+    // replayed from the current position to get SAN, and a stale TT tail that
+    // is not legal here simply ends the line rather than being shown.
+    void set_analysis(const Search_Info& info)
+    {
+        analysis = info;
+        analysis_valid = true;
+        analysis_uci.clear();
+        analysis_san.clear();
+        Game walk;
+        walk.start(game.positions.back(), game.halfmove_clock, game.fullmove());
+        for(const std::string& uci : info.pv)
+        {
+            if(!walk.play(uci))
+            break;
+            analysis_uci.push_back(uci);
+            analysis_san.push_back(walk.san_moves.back());
+        }
+    }
+
+    // Steps the board along a line of UCI moves, which is what clicking a move
+    // in the analysis line does. The page sends the moves it drew rather than
+    // an index into the line, so you get the move you clicked even if a deeper
+    // iteration replaced the line in between. Either all of it is played or
+    // none of it.
+    bool enter_line(const std::string& moves, std::string& error)
+    {
+        std::istringstream in(moves);
+        std::vector<std::string> line;
+        std::string uci;
+        while(in >> uci)
+        line.push_back(uci);
+        if(line.empty())
+        {
+            error = "no moves given";
+            return false;
+        }
+        size_t before = played.size();
+        for(const std::string& move : line)
+        if(!play(move, error))
+        {
+            replay(before);
+            error = "that line does not fit the position any more: " + error;
+            return false;
+        }
+        return true;
+    }
+
+    // Whether Analyse mode wants a search running: the toggle is on, the
+    // engine is alive, and the position is one that still has moves.
+    bool analysis_wanted() const
+    {
+        std::string reason;
+        return mode==Mode::ANALYSE && analysis_on && !analysis_finished
+            && engine_error.empty() && result(reason)==Outcome::ONGOING;
     }
 
     // Records what the engine's search found for the move just played.
@@ -330,13 +420,26 @@ class Session
         o.key("humanColor").str(human_white ? "white" : "black");
         o.key("engineColor").str(human_white ? "black" : "white");
         o.key("limit").obj().key("kind").str(limits.kind()).key("value").num(limits.value()).end_obj();
-        o.key("thinking").boolean(thinking);
+        o.key("thinking").boolean(thinking());
         o.key("engineTurn").boolean(engine_to_move());
         o.key("resigned").boolean(resigned);
         o.key("error").str(engine_error);
         o.key("search");
-        if(thinking && live_valid)
+        if(thinking() && live_valid)
         write_search(o, live);
+        else
+        o.null();
+        o.end_obj();
+
+        // Analyse mode's live search. "search" is null unless there is a line
+        // for exactly this position, so the page has nothing stale to draw.
+        o.key("analysis").obj();
+        o.key("on").boolean(analysis_on);
+        o.key("running").boolean(analysing());
+        o.key("error").str(engine_error);
+        o.key("search");
+        if(analysis_valid)
+        write_analysis(o);
         else
         o.null();
         o.end_obj();
@@ -386,6 +489,33 @@ class Session
         o.end_obj();
     }
 
+    // The analysis, as the page draws it. Unlike every other score here this
+    // one is white's view whichever side is to move: an eval bar that flipped
+    // with the mover would swing a full board width on every move.
+    void write_analysis(json::Out& o) const
+    {
+        o.obj();
+        o.key("depth").num(analysis.depth);
+        o.key("nodes").num(analysis.nodes);
+        o.key("nps").num(analysis.nps);
+        o.key("time").num(analysis.time_ms);
+        o.key("score");
+        if(analysis.score_kind.empty())
+        o.null();
+        else
+        {
+            long long value = std::atoll(analysis.score_value.c_str());
+            o.obj().key("kind").str(analysis.score_kind)
+                   .key("value").num(game.positions.back().white_move ? value : -value)
+             .end_obj();
+        }
+        o.key("line").arr();
+        for(size_t i=0;i<analysis_san.size();i++)
+        o.obj().key("uci").str(analysis_uci[i]).key("san").str(analysis_san[i]).end_obj();
+        o.end_arr();
+        o.end_obj();
+    }
+
     void set_start(const BB& pos, int halfmove, int fullmove)
     {
         start_pos = pos;
@@ -396,6 +526,7 @@ class Session
         resigned = false;
         engine_error.clear();
         live_valid = false;
+        clear_analysis();
         game.start(start_pos, start_halfmove, start_fullmove);
         start_fen = game.fen();
     }
@@ -409,6 +540,7 @@ class Session
         game.start(start_pos, start_halfmove, start_fullmove);
         played.clear();
         notes.clear();
+        clear_analysis();
         for(size_t i=0;i<line.size();i++)
         if(game.play(line[i]))
         {

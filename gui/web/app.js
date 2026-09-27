@@ -5,8 +5,9 @@
 //
 // State arrives two ways: a GET on load for an immediate first paint, and an SSE
 // stream that pushes every later change. In Play mode that stream is also how
-// the engine's thinking and its move arrive: the page never waits for a search,
-// it is simply sent a new state whenever there is one.
+// the engine's thinking and its move arrive, and in Analyse mode every
+// iteration of the running search: the page never waits for a search, it is
+// simply sent a new state whenever there is one.
 import { Chessground } from './vendor/chessground.min.js';
 
 const sessionId = new URLSearchParams(location.search).get('id') || 'main';
@@ -101,6 +102,15 @@ el('copy-fen').addEventListener('click', () => {
   showMessage('FEN copied.');
 });
 
+el('analysis-toggle').addEventListener('click', () => {
+  if (state) command('/api/analyse', { on: !state.analysis.on });
+});
+
+el('analysis-line').addEventListener('click', event => {
+  const button = event.target.closest('.pv-move');
+  if (button) command('/api/line', { moves: button.dataset.line });
+});
+
 el('modes').addEventListener('click', event => {
   const button = event.target.closest('button');
   if (button) command('/api/mode', { mode: button.dataset.mode });
@@ -114,7 +124,7 @@ document.addEventListener('keydown', event => {
 
 const MODE_NOTES = {
   analyse: 'Free play: move for both sides, take moves back, set up any position. ' +
-           'Engine analysis arrives in a later issue.',
+           'Turn the engine on to see its eval and its best line for whatever is on the board.',
   play:    'You against Ascaniusfish. Load a FEN to start from a position of your own.',
   watch:   'Watching Ascaniusfish play itself is not wired up yet — the board below is still free play.',
 };
@@ -164,6 +174,7 @@ function render(s) {
   el('resign').disabled = over;
 
   renderPlayPanel(s);
+  renderAnalysis(s);
 
   // Leave a FEN the user is in the middle of typing alone.
   if (document.activeElement !== el('fen')) el('fen').value = s.fen;
@@ -204,12 +215,90 @@ function engineLine(s) {
   return `Playing ${colour} \u2014 your move`;
 }
 
-// A UCI score object as text. Engine scores in the move list are white's view,
-// so "+1.20" means white is better whoever moved.
+// A UCI score object as text. Every score the page shows is white's view, so
+// "+1.20" means white is better whoever moved, and "#-3" is black mating in 3.
 function scoreText(score) {
   if (!score) return '';
-  if (score.kind === 'mate') return (score.value < 0 ? '-' : '+') + 'M' + Math.abs(score.value);
+  if (score.kind === 'mate') return '#' + score.value;
   return (score.value >= 0 ? '+' : '') + (score.value / 100).toFixed(2);
+}
+
+// ------------------------------------------------------------------- analysis
+
+function renderAnalysis(s) {
+  const analysing = s.mode === 'analyse';
+  const a = s.analysis;
+  const search = a.search;
+  const panel = el('analysis-panel');
+
+  panel.hidden = !analysing;
+  el('evalbar').hidden = !analysing;
+  if (!analysing) return;
+
+  panel.classList.toggle('running', a.running && !a.error);
+  el('analysis-toggle').textContent = a.on ? 'Turn engine off' : 'Turn engine on';
+  el('analysis-score').textContent = search ? scoreText(search.score) : '';
+
+  el('analysis-stats').textContent = analysisStats(s);
+  el('analysis-stats').classList.toggle('bad', !!a.error);
+
+  // The bar turns over with the board, and says nothing at all until there is
+  // a score for this very position — a stale eval would be worse than none.
+  const bar = el('evalbar');
+  bar.classList.toggle('flipped', s.orientation === 'black');
+  bar.classList.toggle('idle', !search || !search.score);
+  bar.querySelector('.evalbar-fill').style.height =
+    `${(search && search.score ? whiteShare(search.score) : 0.5) * 100}%`;
+
+  renderLine(s, search);
+}
+
+function analysisStats(s) {
+  const a = s.analysis;
+  if (a.error) return `Engine: ${a.error}`;
+  if (!a.on) return 'The engine is off.';
+  if (s.outcome.state !== 'ongoing') return 'The game is over — nothing to search.';
+  const search = a.search;
+  if (!search) return 'Starting the search\u2026';
+  const nps = search.nps ? `${Math.round(search.nps / 1000).toLocaleString()} knps` : '';
+  return [`depth ${search.depth}`, `${search.nodes.toLocaleString()} nodes`, nps]
+    .filter(Boolean).join(' \u00b7 ');
+}
+
+// Where the bar sits, as white's share of it. The centipawn score goes through
+// a sigmoid: this engine's king-safety terms reach the thousands, so a linear
+// scale would sit pinned at one end for most of a game. Both ends stop short
+// of full, so a bar that does run out really does mean mate.
+function whiteShare(score) {
+  if (score.kind === 'mate') return score.value >= 0 ? 0.97 : 0.03;
+  return Math.min(0.97, Math.max(0.03, 1 / (1 + Math.exp(-score.value / 400))));
+}
+
+// The best line, numbered from the position on the board. Each move is a
+// button: clicking it plays the line up to and including that move.
+function renderLine(s, search) {
+  const box = el('analysis-line');
+  box.replaceChildren();
+  if (!search) return;
+  let fullmove = s.fullmove;
+  let white = s.turn === 'white';
+  search.line.forEach((move, ply) => {
+    if (white || ply === 0) {
+      const number = document.createElement('span');
+      number.className = 'move-number';
+      number.textContent = white ? `${fullmove}.` : `${fullmove}\u2026`;
+      box.append(number, ' ');
+    }
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'pv-move';
+    button.dataset.line = search.line.slice(0, ply + 1).map(m => m.uci).join(' ');
+    button.textContent = move.san;
+    button.title = move.uci;
+    box.append(button, ' ');
+    if (!white) fullmove++;
+    white = !white;
+  });
 }
 
 function destsMap(dests) {

@@ -98,9 +98,16 @@ When editing engine internals, `lib/*.hpp` is the declaration/interface layer an
   and a board orientation; `Sessions` maps ids to them, so Watch mode can later hold two games.
   `state_json()` is the one thing the page renders from: FEN, `dests` per square, `promotions`,
   legal moves with SAN, history (with the engine's score/depth per engine move), `Outcome`,
-  and the Play panel's state. Play adds the resolved human colour, the `Go_Limits`, a
-  resignation and whether a search is running.
-- `gui/engine_link.hpp` — Play mode's UCI client: a `Go_Limits` (depth or movetime today,
+  and the Play and Analysis panels' state. Play adds the resolved human colour, the `Go_Limits`,
+  a resignation and whether a search is running; Analyse adds the toggle and the running
+  search's depth/nodes/nps, its score **in white's view** (`uci_score()` is the mover's, so
+  `write_analysis()` negates it for black) and its PV in both UCI and SAN. A session runs at
+  most one search, and `Search_Kind` says how to read its answer — a `PLAY` search ends in a
+  move on the board, an `ANALYSIS` search only in a line to look at. Every position change
+  calls `clear_analysis()` *before* the page is told, so no frame can carry the previous
+  position's eval.
+- `gui/engine_link.hpp` — the UCI client of Play and Analyse mode: a `Go_Limits` (depth,
+  movetime, or `Go_Limits::analysis()` = `go infinite` for Analyse;
   `wtime`/`btime`/`winc`/`binc` fields already there for M4), a `Search_Request`, and an
   `Engine_Link` that drives one `./ascaniusfish_uci` (`tools/uci_engine.hpp`) on a worker
   thread. The worker touches no `Session` and no socket: it calls `on_update()`, which only
@@ -114,19 +121,26 @@ When editing engine internals, `lib/*.hpp` is the declaration/interface layer an
 
 **The server owns the position and the page owns nothing** — reloading the browser is just another
 `GET /api/state`. All chess logic stays in C++; the JS is presentation only. Routes:
-`GET /api/state`, `GET /api/events` (SSE), `POST /api/{move,fen,reset,undo,resign,play,mode,flip}`,
-all taking `id` (default `main`). `POST /api/play` carries the Play settings (`side` =
-white/black/random, `kind` = depth/movetime, `value`); applying them starts a new game, since a
-colour cannot change mid-game. Anything that changes the position under a running search aborts it
-and drops its `bestmove` by token.
+`GET /api/state`, `GET /api/events` (SSE),
+`POST /api/{move,fen,reset,undo,resign,play,mode,flip,analyse,line}`, all taking `id` (default
+`main`). `POST /api/play` carries the Play settings (`side` = white/black/random, `kind` =
+depth/movetime, `value`); applying them starts a new game, since a colour cannot change mid-game.
+`POST /api/analyse` is the engine on/off toggle; `POST /api/line` walks the board along a
+space-separated list of UCI `moves` (all of them or none), which is what clicking a move in the
+analysis line does — the page sends the moves it drew rather than an index, so a deeper iteration
+arriving between the draw and the click cannot play a different move. Anything that changes the
+position under a running search aborts it and drops its `bestmove` by token.
 
 Like every tool that touches movegen, `main()` must run `Zobrist`/`initialize_rand()`/`init_magics()`/
 `init_sliders_attacks()` first — without them sliding attacks are garbage and `in_check()` silently
 misses checks instead of crashing.
 
-The mode selector shows Analyse / Play / Watch. Analyse is free play and FEN setup; Play is a
-full game against `./ascaniusfish_uci` (`engine=` picks a different binary); Watch is still
-selector-only. `main()` ignores `SIGPIPE` — an engine that died must be a message on the page,
+The mode selector shows Analyse / Play / Watch. Analyse is free play, FEN setup and a live
+`go infinite` analysis of whatever is on the board — an eval bar beside the board, the score,
+depth/nodes/nps and the best line in SAN; Play is a full game against `./ascaniusfish_uci`
+(`engine=` picks a different binary); Watch is still selector-only. The analysis toggle starts
+**off**: a `go infinite` search holds a core for as long as it runs, and this repo deliberately
+leaves room for several engine processes at once. `main()` ignores `SIGPIPE` — an engine that died must be a message on the page,
 not the end of the server.
 
 ### Python GUI bridge

@@ -24,17 +24,22 @@
 
 <main>
   <section class="board-column">
-    <div class="board-frame">
-      <div id="board"></div>
-      <div id="promotion" class="promotion" hidden>
-        <p>Promote to</p>
-        <div class="promotion-pieces">
-          <button data-piece="q">Queen</button>
-          <button data-piece="r">Rook</button>
-          <button data-piece="b">Bishop</button>
-          <button data-piece="n">Knight</button>
+    <div class="board-row">
+      <div id="evalbar" class="evalbar" hidden aria-hidden="true">
+        <div class="evalbar-fill"></div>
+      </div>
+      <div class="board-frame">
+        <div id="board"></div>
+        <div id="promotion" class="promotion" hidden>
+          <p>Promote to</p>
+          <div class="promotion-pieces">
+            <button data-piece="q">Queen</button>
+            <button data-piece="r">Rook</button>
+            <button data-piece="b">Bishop</button>
+            <button data-piece="n">Knight</button>
+          </div>
+          <button class="cancel" data-piece="">Cancel</button>
         </div>
-        <button class="cancel" data-piece="">Cancel</button>
       </div>
     </div>
     <p id="status" class="status"></p>
@@ -74,6 +79,16 @@
       </form>
       <p class="note">Changing either setting starts a new game from the position
       the current game started from.</p>
+    </section>
+
+    <section class="panel" id="analysis-panel" hidden>
+      <h2>Analysis</h2>
+      <div class="analysis-head">
+        <button id="analysis-toggle"></button>
+        <span id="analysis-score" class="score"></span>
+      </div>
+      <p id="analysis-stats" class="note"></p>
+      <p id="analysis-line" class="line"></p>
     </section>
 
     <section class="panel">
