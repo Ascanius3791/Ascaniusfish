@@ -69,27 +69,61 @@ async function nudge(path, body) {
 
 // ---------------------------------------------------------------- user actions
 
+// Nearest square first: the promotion square itself, then stepping away from
+// the edge along the file.
+const PROMOTION_PIECES = [['q', 'queen'], ['r', 'rook'], ['b', 'bishop'], ['n', 'knight']];
+
 function onUserMove(orig, dest) {
   if (state && state.promotions.includes(orig + dest)) {
     pendingPromotion = { orig, dest };
-    el('promotion').hidden = false;
+    openPromotion();
     return;
   }
   command('/api/move', { uci: orig + dest });
+}
+
+// Lays the four pieces over the destination file, in board orientation. A
+// promotion square is always a board edge (rank 1 or 8), so which way the
+// stack points — regardless of colour or a flipped board — falls out of
+// whether that edge is the top or bottom row.
+function openPromotion() {
+  const { row, col } = squareCoords(pendingPromotion.dest, state.orientation);
+  const step = row === 0 ? 1 : -1;
+  const box = el('promotion');
+  box.replaceChildren();
+  PROMOTION_PIECES.forEach(([code, role], i) => {
+    const piece = document.createElement('piece');
+    piece.className = `${role} ${state.turn}`;
+    piece.style.top = `${(row + step * i) * 12.5}%`;
+    piece.style.left = `${col * 12.5}%`;
+    piece.dataset.piece = code;
+    box.append(piece);
+  });
+  box.hidden = false;
+}
+
+// Board-relative row/col (0 = top/left) for a square, in the given orientation.
+function squareCoords(square, orientation) {
+  const file = 'abcdefgh'.indexOf(square[0]);
+  const rank = Number(square[1]) - 1;
+  return orientation === 'white'
+    ? { row: 7 - rank, col: file }
+    : { row: rank, col: 7 - file };
 }
 
 function finishPromotion(piece) {
   const move = pendingPromotion;
   pendingPromotion = null;
   el('promotion').hidden = true;
+  el('promotion').replaceChildren();
   if (!move) return;
   if (!piece) return render(state);   // cancelled: put the pawn back
   command('/api/move', { uci: move.orig + move.dest + piece });
 }
 
 el('promotion').addEventListener('click', event => {
-  const button = event.target.closest('button');
-  if (button) finishPromotion(button.dataset.piece);
+  const piece = event.target.closest('piece');
+  finishPromotion(piece ? piece.dataset.piece : '');
 });
 
 el('new').addEventListener('click', () => command('/api/reset', {}));
@@ -247,7 +281,7 @@ function render(s) {
   el('download-pgn').href = `/api/pgn?id=${encodeURIComponent(sessionId)}`;
 
   renderMoves(s);
-  if (pendingPromotion) el('promotion').hidden = false;
+  if (pendingPromotion) openPromotion();
 }
 
 // ------------------------------------------------------------------ play panel
