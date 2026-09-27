@@ -31,6 +31,7 @@ diagnostics/repetition_detection_probe
 diagnostics/pruning_oracle_test
 diagnostics/attackers_of_probe
 diagnostics/eval_breakdown_probe
+diagnostics/gui_abort_race_probe
 diagnostics/legal_movegen_perft_compare
 diagnostics/minimax_tactical_probe
 diagnostics/one_move_fast_stress_test

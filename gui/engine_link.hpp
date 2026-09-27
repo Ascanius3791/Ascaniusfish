@@ -125,6 +125,8 @@ class Engine_Link
         token = ++next_token;
         searching = true;
         has_result = false;
+        abort_requested = false;
+        go_sent = false;
         progress_seq = 0;
         taken_progress = 0;
         progress = Search_Info();
@@ -140,7 +142,16 @@ class Engine_Link
     void abort()
     {
         std::lock_guard<std::mutex> lock(m);
-        if(searching)
+        if(!searching)
+        return;
+        abort_requested = true;
+        // Only once the "go" is out. A "stop" sent before it is read while the
+        // engine has nothing to search and thrown away, and the search that
+        // starts a moment later then has nothing left to end it: an infinite
+        // one never sends a bestmove, and this link waits for it forever. In
+        // that case the worker sends the "stop" itself, right after the "go",
+        // where the two cannot come out in the wrong order.
+        if(go_sent)
         send_locked("stop");
     }
 
@@ -183,6 +194,8 @@ class Engine_Link
     long long next_token = 0, token = 0;
     long long progress_seq = 0, taken_progress = 0;
     bool searching = false, has_result = false, quitting = false;
+    bool abort_requested = false;   // abort() was called for the running search
+    bool go_sent = false;           // its "go" is out, so a "stop" may follow it
 
     // A write to the engine's stdin with `m` held, so an abort's "stop" can
     // never interleave with the worker's "position"/"go".
@@ -224,6 +237,9 @@ class Engine_Link
                 position += " " + move;
                 send_locked(position);
                 send_locked(request.limits.go_command());
+                go_sent = true;
+                if(abort_requested)   // aborted before the "go" was out: end it now
+                send_locked("stop");
                 lock.unlock();
                 read_bestmove(request.limits, my_token, answer);
                 lock.lock();
