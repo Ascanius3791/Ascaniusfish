@@ -136,8 +136,7 @@ int static_exchange_eval(const uint64_t Board[12], int from_square, int to_squar
     return gain[0];
 }
 
-bool is_good_capture(const BB* const original, int from_square, int to_square,
-                      bool is_en_passant, const WEIGHTS& /*W*/)
+bool is_good_capture(const BB* const original, int from_square, int to_square, bool is_en_passant)
 {
     if(!is_capturing_move(original->Board, to_square, original->white_move, is_en_passant)) return false;
     // Taking a piece worth at least the mover can't lose material even if it
@@ -154,7 +153,7 @@ bool is_good_capture(const BB* const original, int from_square, int to_square,
                                  original->white_move, is_en_passant) >= 0;
 }
 
-bool is_good_capture_from_child(const BB* const parent, const BB* const child, const WEIGHTS& /*W*/)
+bool is_good_capture_from_child(const BB* const parent, const BB* const child)
 {
     const int own_offset = 6 * !parent->white_move;
     uint64_t own_before = 0, own_after = 0;

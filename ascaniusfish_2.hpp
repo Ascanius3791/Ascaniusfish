@@ -176,7 +176,7 @@ PV_Line minimax_tactical(const BB* const original, BB* const wfh, const WEIGHTS&
         if(
             is_forced_move ||
             moves[idx].promotion_piece_type==QUEEN_PROMOTION ||
-            (moves[idx].promotion_piece_type==-1 && is_good_capture(original, moves[idx].from, moves[idx].to, moves[idx].is_en_passant, W))
+            (moves[idx].promotion_piece_type==-1 && is_good_capture(original, moves[idx].from, moves[idx].to, moves[idx].is_en_passant))
             )
         tactical_order.push_back(idx);
 

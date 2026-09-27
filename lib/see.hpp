@@ -2,7 +2,6 @@
 #ifndef SEE_HPP
 #define SEE_HPP
 #include "Bitboards.hpp"
-#include "Weights.hpp"
 #include "../src/templates.cpp"
 #include "../src/magics.cpp"
 
@@ -40,15 +39,12 @@ int static_exchange_eval(const uint64_t Board[12], int from_square, int to_squar
 bool is_capturing_move(const uint64_t Board[12], int to_square, bool white_to_move, bool is_en_passant);
 
 // A capture that doesn't lose material (SEE >= 0, so equal trades count).
-// The WEIGHTS parameter is ignored (SEE uses SEE_PIECE_VALUE); it stays so the
-// existing call sites compile unchanged.
 // For call sites that already have a Move (from/to/is_en_passant known directly).
-bool is_good_capture(const BB* const original, int from_square, int to_square,
-                      bool is_en_passant, const WEIGHTS& W = WEIGHTS_OG);
+bool is_good_capture(const BB* const original, int from_square, int to_square, bool is_en_passant);
 
 // For call sites that only have a parent/child BB pair (from/to reconstructed via
 // the own-side occupancy diff).
-bool is_good_capture_from_child(const BB* const parent, const BB* const child, const WEIGHTS& W = WEIGHTS_OG);
+bool is_good_capture_from_child(const BB* const parent, const BB* const child);
 
 // A promoting pawn move - independent of whether it's also a capture. Takes the raw
 // promotion_piece_type field rather than a Move (Move isn't declared yet at this point
