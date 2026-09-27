@@ -1,0 +1,73 @@
+<!-- OWNERSHIP=Claude -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ascaniusfish</title>
+<link rel="stylesheet" href="vendor/chessground.base.css">
+<link rel="stylesheet" href="vendor/chessground.brown.css">
+<link rel="stylesheet" href="vendor/chessground.cburnett.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header>
+  <h1>Ascaniusfish</h1>
+  <nav id="modes" aria-label="Mode">
+    <button data-mode="analyse">Analyse</button>
+    <button data-mode="play">Play</button>
+    <button data-mode="watch">Watch</button>
+  </nav>
+  <span id="link" title="connection to the engine server"></span>
+</header>
+
+<main>
+  <section class="board-column">
+    <div class="board-frame">
+      <div id="board"></div>
+      <div id="promotion" class="promotion" hidden>
+        <p>Promote to</p>
+        <div class="promotion-pieces">
+          <button data-piece="q">Queen</button>
+          <button data-piece="r">Rook</button>
+          <button data-piece="b">Bishop</button>
+          <button data-piece="n">Knight</button>
+        </div>
+        <button class="cancel" data-piece="">Cancel</button>
+      </div>
+    </div>
+    <p id="status" class="status"></p>
+  </section>
+
+  <aside>
+    <p id="mode-note" class="note"></p>
+
+    <div class="controls">
+      <button id="new">New game</button>
+      <button id="undo">Take back</button>
+      <button id="flip">Flip board</button>
+    </div>
+
+    <section class="panel">
+      <h2>Moves</h2>
+      <ol id="history" class="history"></ol>
+    </section>
+
+    <section class="panel">
+      <h2>Position</h2>
+      <form id="fen-form" autocomplete="off">
+        <input id="fen" type="text" spellcheck="false" aria-label="FEN">
+        <div class="controls">
+          <button type="submit">Load FEN</button>
+          <button type="button" id="copy-fen">Copy</button>
+        </div>
+      </form>
+      <p id="message" class="message" hidden></p>
+    </section>
+  </aside>
+</main>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>

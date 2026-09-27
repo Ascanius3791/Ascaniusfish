@@ -23,10 +23,11 @@ GAMES ?=
 MOVETIME_TT ?=
 PLIES ?=
 TT_EXPONENT ?=
+GUI_PORT ?=
 TOOL_TARGETS := tools/perft tools/bench tools/speed_compare tools/match tools/make_openings tools/gui_match tools/tt_stats
 PROFILE_CXXFLAGS ?= -O2 -g -pg -Wall -Wno-unknown-pragmas -Wno-parentheses -Wno-unused-variable
 
-.PHONY: all run play asm tests debug profile-startpos perft bench speed-compare match gui-match tt-stats clean rebuild
+.PHONY: all run play asm tests debug profile-startpos perft bench speed-compare match gui-match gui tt-stats clean rebuild
 
 all: $(TARGET) $(UCI_TARGET)
 
@@ -82,6 +83,14 @@ tools/gui_match: tools/gui_match.cpp tools/game_rules.hpp tools/uci_engine.hpp $
 tools/make_openings: tools/make_openings.cpp tools/game_rules.hpp $(HEADERS) $(SOURCES)
 	$(CXX) $(CXXFLAGS) -pthread -o $@ tools/make_openings.cpp
 
+# Browser GUI server (issue #14). Plain g++, no Node: gui/web/vendor holds a
+# prebuilt chessground bundle, and the HTTP/SSE server is gui/http_server.hpp.
+GUI_TARGET := gui/ascaniusfish_gui
+GUI_HEADERS := gui/http_server.hpp gui/session.hpp gui/json.hpp
+
+$(GUI_TARGET): gui/gui_server.cpp $(GUI_HEADERS) tools/game_rules.hpp $(HEADERS) $(SOURCES)
+	$(CXX) $(CXXFLAGS) -pthread -o $@ gui/gui_server.cpp
+
 # Move generation vs known perft counts (PERFT_DEPTH=4 for a quick check)
 perft: tools/perft
 	./tools/perft $(PERFT_DEPTH)
@@ -105,6 +114,10 @@ gui-match: tools/gui_match
 	@test -n "$(A)" -a -n "$(B)" || (echo "usage: make gui-match A=<white binary> B=<black binary> [MOVETIME=10000]"; exit 2)
 	./tools/gui_match $(A) $(B) movetime=$(MOVETIME)
 
+# The board in the browser: prints a http://localhost:<port> URL and serves it
+gui: $(GUI_TARGET)
+	./$(GUI_TARGET) $(if $(GUI_PORT),port=$(GUI_PORT))
+
 # TT discard statistics over self-play games (issue #11). The only build with
 # -DTT_STATS; rebuilt every time so TT_EXPONENT=n always takes effect.
 tt-stats:
@@ -120,4 +133,4 @@ debug: $(TARGET)
 rebuild: clean all
 
 clean:
-	rm -f $(TARGET) $(UCI_TARGET) a.out ascaniusfish.s $(TEST_TARGETS) $(TOOL_TARGETS) benchmarks/profile_startpos benchmarks/gmon.out benchmarks/profile_startpos.gprof
+	rm -f $(TARGET) $(UCI_TARGET) a.out ascaniusfish.s $(TEST_TARGETS) $(TOOL_TARGETS) $(GUI_TARGET) benchmarks/profile_startpos benchmarks/gmon.out benchmarks/profile_startpos.gprof

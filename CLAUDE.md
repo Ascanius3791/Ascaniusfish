@@ -37,6 +37,7 @@ make perft        # movegen vs known perft counts (PERFT_DEPTH=4 for a quick che
 make bench        # fixed-depth search; prints "bench: nodes N ..." (the search signature)
 make speed-compare A=main B=.   # nps A/B of two git refs, 95% CI ("." = working tree)
 make tt-stats DEPTH=5 GAMES=4   # TT discards later re-requested, by depth (only build with -DTT_STATS)
+make gui          # build + run the browser GUI server (GUI_PORT=8173 to pick the port)
 make rebuild      # clean + all
 make clean        # remove build artifacts
 ```
@@ -47,6 +48,7 @@ g++ -O3 -Wall -Wno-unknown-pragmas -Wno-parentheses -Wno-unused-variable -DNDEBU
 ```
 
 `tools/` holds the benchmarking tools behind `make perft`/`bench`/`speed-compare` (see `docs/BENCHMARKS.md`).
+`gui/` holds the browser GUI server behind `make gui` (see **Browser GUI** below).
 
 Recorded outputs of long measurement runs (e.g. `make tt-stats` games) live in `docs/measurements/`, each with a header naming the commit and command. Check there before rerunning one.
 
@@ -83,6 +85,35 @@ When editing engine internals, `lib/*.hpp` is the declaration/interface layer an
 
 ### UCI
 `./ascaniusfish_uci` (entry `ascaniusfish_uci.cpp`, protocol in `lib/uci.hpp` / `src/uci.cpp`) speaks UCI on stdin/stdout; the interactive play mode stays in `./ascaniusfish`. The search runs on its own thread; `lib/search_control.hpp` holds the stop flag/deadline that `minimax()`/`minimax_tactical()` poll via `poll_search_abort()`, which throws `search_aborted` to unwind an aborted search (the last completed iteration's move is played). On a clock (`go wtime … btime …`), `lib/time_manager.hpp` / `src/time_manager.cpp` set the hard limit (the abort deadline) and, after every iteration, a soft limit y + λ·u that decides whether the next iteration starts (λ from PV stability across iterations, see the header). Non-standard `go perft N` prints a perft divide for the current position — handy for checking FEN loading/movegen.
+
+### Browser GUI
+`./gui/ascaniusfish_gui` (`make gui`, entry `gui/gui_server.cpp`) serves a chess board on
+`http://localhost:8173` and is a **separate executable** — it does not use `./ascaniusfish`,
+`nicely_written_play()` or `display_board.py`. Options are `key=value`: `port=`, `root=`, `fen=`.
+
+- `gui/http_server.hpp` — the slice of HTTP this needs on plain sockets (no third-party library):
+  GET static files, POST JSON, and SSE streams held open across one `poll()` loop, so the server
+  can push a new position to every page watching a session. Binds `127.0.0.1` only.
+- `gui/session.hpp` — a `Session` is one game (a `Game` from `tools/game_rules.hpp`), a `Mode`
+  and a board orientation; `Sessions` maps ids to them, so Watch mode can later hold two games.
+  `state_json()` is the one thing the page renders from: FEN, `dests` per square, `promotions`,
+  legal moves with SAN, history and `Outcome`.
+- `gui/json.hpp` — a JSON writer that inserts the commas, plus a flat-object parser for request bodies.
+- `gui/web/` — `index.html`/`app.js`/`style.css` are ours; `gui/web/vendor/` holds chessground
+  (GPL-3, see its `README.md`), upstream's own prebuilt ESM bundle plus CSS with the board and
+  all piece images as `data:` URIs. Nothing is fetched from the network and no Node is involved.
+
+**The server owns the position and the page owns nothing** — reloading the browser is just another
+`GET /api/state`. All chess logic stays in C++; the JS is presentation only. Routes:
+`GET /api/state`, `GET /api/events` (SSE), `POST /api/{move,fen,reset,undo,mode,flip}`, all taking
+`id` (default `main`).
+
+Like every tool that touches movegen, `main()` must run `Zobrist`/`initialize_rand()`/`init_magics()`/
+`init_sliders_attacks()` first — without them sliding attacks are garbage and `in_check()` silently
+misses checks instead of crashing.
+
+The mode selector shows Analyse / Play / Watch, but only free play and FEN setup are wired up;
+attaching the engine over UCI is the next GUI issue.
 
 ### Python GUI bridge
 `lib/python_communication.hpp` / `src/python_communication.cpp` opens `display_board.py` as a subprocess via `popen` (piping UCI move strings to its stdin) so the C++ engine can drive a tkinter/pygame board with sound effects. Separately, `read_from_last_move()` (`ascaniusfish_2.hpp`) and `display_board.py`'s `write_to_last_move_file()` coordinate human-vs-engine play through the shared file `last_move.txt`, polling every 200ms; the color suffix (`ww`/`bb`) written after the move string is a same-color echo used to signal "no new move yet". Treat `last_move.txt` as ephemeral IPC state, not data to commit meaningfully.

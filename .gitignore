@@ -47,3 +47,6 @@ last_move.txt
 
 # Python
 __pycache__/
+
+# Browser GUI server binary (make gui)
+gui/ascaniusfish_gui
