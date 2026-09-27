@@ -19,8 +19,17 @@
 
 * { box-sizing: border-box; }
 
+/* The page is exactly the window and does not scroll: the board is what you
+   are looking at, so a move must never move it. Everything that grows — the
+   side column, and the move list inside it — scrolls in a box of its own. */
+html { height: 100%; }
+
 body {
   margin: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   background: var(--bg);
   color: var(--text);
   font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -28,6 +37,7 @@ body {
 
 header {
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: 16px;
   flex-wrap: wrap;
@@ -92,19 +102,35 @@ nav button.active {
 
 main {
   display: flex;
+  flex: 1 1 auto;
+  min-height: 0;          /* so the aside scrolls instead of stretching the page */
   gap: 24px;
-  align-items: flex-start;
+  align-items: stretch;   /* both columns get the height the window leaves */
   padding: 20px;
 }
 
-.board-column { flex: 1 1 420px; max-width: 620px; }
+.board-column {
+  flex: 1 1 420px;
+  max-width: 620px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
 
-/* The eval bar stands beside the board and is as tall as it. The frame takes
-   its width from this row rather than from the board inside it, so the
-   ResizeObserver that sizes the board cannot feed back into the layout. */
+/* The eval bar stands beside the board and is as tall as it. */
 .board-row { display: flex; gap: 10px; align-items: stretch; }
 
-.board-frame { position: relative; flex: 1 1 0; min-width: 0; }
+/* The room the board may fill: its width is the row's, never the board's, so
+   the ResizeObserver that sizes the board cannot feed back into the layout. */
+.board-fit { flex: 1 1 0; min-width: 0; }
+
+/* A square, sized in whole pixels by fitBoard() (app.js) from the width above
+   and the height the column has left; the board and the promotion overlay both
+   fill it, so the overlay's 12.5%-per-square grid lands on the squares
+   whichever of the two decided the size. */
+.board-frame { position: relative; width: 320px; height: 320px; }
+
+#board { width: 100%; height: 100%; }
 
 /* White's share of the bar, from white's end of the board — so it turns over
    with the board. An eval far from 0 clamps short of the ends: a full bar
@@ -135,8 +161,12 @@ main {
    claiming the position is equal. */
 .evalbar.idle .evalbar-fill { background: var(--line); }
 
+/* Two lines' worth whether it needs them or not: this sits under the board and
+   is what fitBoard() subtracts, so a line that came and went would change how
+   much height the board is given. */
 .status {
   margin: 12px 0 0;
+  min-height: 3em;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
@@ -145,6 +175,9 @@ main {
 
 aside {
   flex: 0 0 300px;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-gutter: stable;   /* the panels don't shift when the bar appears */
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -169,8 +202,10 @@ aside {
    .variation block indented under the move it replaces, and nesting one inside
    another indents again, so depth in the game is depth on the page. */
 
+/* A fixed box, not one that grows with the game: Promote and Delete sit right
+   under it and must not walk down the panel as moves are played. */
 .moves {
-  max-height: 300px;
+  height: 300px;
   overflow-y: auto;
   margin: 8px 0;
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
@@ -270,8 +305,11 @@ select, input[type="number"] {
 input[type="number"] { width: 84px; }
 select:focus, input:focus { outline: none; border-color: var(--accent); }
 
+/* Two lines, whether the text needs them or not: this line grows a depth and a
+   score while the engine thinks, and nothing below it may move for that. */
 .engine {
   margin: 0 0 12px;
+  min-height: 3em;
   font-variant-numeric: tabular-nums;
 }
 
@@ -309,8 +347,19 @@ select:focus, input:focus { outline: none; border-color: var(--accent); }
 #analysis-panel.running .score { color: var(--accent); }
 #analysis-panel .note.bad { color: var(--bad); }
 
+/* Depth, nodes and nps: two lines' worth, for the same reason as .engine. */
+#analysis-stats { min-height: 3em; }
+
+/* A box of its own size, not one that grows with the search: the move list is
+   below it and must not walk down the column on every iteration. Four lines
+   and a scrollbar, since a deep line is longer than that. It is only there
+   while the engine is, so an idle panel isn't mostly empty. */
+#analysis-panel:not(.on) .line { display: none; }
+
 .line {
   margin: 8px 0 0;
+  height: 7.2em;      /* four lines at the line-height below */
+  overflow-y: auto;
   line-height: 1.8;
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
   font-size: 13px;
@@ -389,7 +438,12 @@ select:focus, input:focus { outline: none; border-color: var(--accent); }
   background-color: var(--accent);
 }
 
+/* Stacked, the board and the side column cannot both fit, so the page scrolls
+   again and the aside is no longer a scroll box of its own. fitBoard() (app.js)
+   matches on this same width — keep the two in step. */
 @media (max-width: 860px) {
-  main { flex-direction: column; }
+  body { height: auto; overflow: visible; }
+  main { flex-direction: column; min-height: auto; }
   .board-column, aside { flex: 1 1 auto; width: 100%; max-width: none; }
+  aside { overflow-y: visible; }
 }

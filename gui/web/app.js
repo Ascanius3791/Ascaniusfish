@@ -401,6 +401,7 @@ function renderAnalysis(s) {
   if (!analysing) return;
 
   panel.classList.toggle('running', a.running && !a.error);
+  panel.classList.toggle('on', a.on);
   el('analysis-toggle').textContent = a.on ? 'Turn engine off' : 'Turn engine on';
   el('analysis-score').textContent = search ? scoreText(search.score) : '';
 
@@ -509,7 +510,20 @@ function renderMoves(s) {
   // Numbering the first move even when it is black's is what a start position
   // with black to move needs: "12\u2026 Nc6" rather than a bare "Nc6".
   drawAfter(byId, 0, box, newLine(box), true, tree.cursor);
-  box.querySelector('.move.current')?.scrollIntoView({ block: 'nearest' });
+  keepCurrentInView(box);
+}
+
+// Keep the current move visible inside the move list. `scrollIntoView` would do
+// this too, but it scrolls every scrollable ancestor it has, the document among
+// them: in a long game every move played scrolled the board off the screen.
+// Nothing but this box's own scrollTop moves here.
+function keepCurrentInView(box) {
+  const chip = box.querySelector('.move.current');
+  if (!chip) return;
+  const list = box.getBoundingClientRect();
+  const move = chip.getBoundingClientRect();
+  if (move.top < list.top) box.scrollTop -= list.top - move.top;
+  else if (move.bottom > list.bottom) box.scrollTop += move.bottom - list.bottom;
 }
 
 function newLine(container) {
@@ -604,16 +618,39 @@ function setLink(text, kind) {
   el('link').className = kind;
 }
 
+// The narrow stacked layout in style.css; keep this query in step with it.
+const stacked = window.matchMedia('(max-width: 860px)');
+
 function fitBoard() {
   // chessground needs a pixel size, and a whole number of pixels per square
-  // keeps the piece SVGs from shimmering.
+  // keeps the piece SVGs from shimmering. The frame is what gets the size, not
+  // the board inside it, so the promotion overlay stays on the squares too.
   const frame = document.querySelector('.board-frame');
-  const size = Math.max(256, Math.floor(frame.clientWidth / 8) * 8);
-  el('board').style.width = el('board').style.height = `${size}px`;
+  const room = Math.min(document.querySelector('.board-fit').clientWidth, boardRoom());
+  const size = `${Math.max(256, Math.floor(room / 8) * 8)}px`;
+  if (frame.style.width === size) return;    // the observer hearing our own change
+  frame.style.width = frame.style.height = size;
   board.redrawAll();
 }
 
-new ResizeObserver(fitBoard).observe(document.querySelector('.board-frame'));
+// How tall the board may be. The page does not scroll, so a board taller than
+// the column would be cut off rather than scrolled to: it gets the column's
+// height less the status line under it, which is why that line is held to a
+// fixed height. Stacked, the column is as tall as its content, so measuring it
+// would chase the board's own size — there the page scrolls and only the width
+// decides.
+function boardRoom() {
+  if (stacked.matches) return Infinity;
+  const column = document.querySelector('.board-column');
+  const status = el('status');
+  return column.clientHeight - status.offsetHeight
+         - (parseFloat(getComputedStyle(status).marginTop) || 0);
+}
+
+const boardFit = new ResizeObserver(fitBoard);
+boardFit.observe(document.querySelector('.board-fit'));      // the width, eval bar and all
+boardFit.observe(document.querySelector('.board-column'));   // the height the window leaves
+stacked.addEventListener('change', fitBoard);
 
 setLink('connecting…', 'down');
 fetch(`/api/state?id=${encodeURIComponent(sessionId)}`)

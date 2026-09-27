@@ -147,6 +147,13 @@ When editing engine internals, `lib/*.hpp` is the declaration/interface layer an
 - `gui/web/` — `index.html`/`app.js`/`style.css` are ours; `gui/web/vendor/` holds chessground
   (GPL-3, see its `README.md`), upstream's own prebuilt ESM bundle plus CSS with the board and
   all piece images as `data:` URIs. Nothing is fetched from the network and no Node is involved.
+  **The page is exactly the window and never scrolls**: the board must not move when a move is
+  played, so `body` is `overflow: hidden`, the side column and the move list are each their own
+  scroll box, and everything whose text grows while the engine thinks (the status line, the
+  engine line, the analysis stats, the best line) is held to a fixed height. `fitBoard()` sizes
+  the board from the width the row gives it *and* the height the column has left — nothing can
+  be scrolled to, so anything that does not fit is simply gone. Don't use `scrollIntoView()`
+  here: it scrolls every scrollable ancestor, the document among them (#22).
 
 **The server owns the position and the page owns nothing** — reloading the browser is just another
 `GET /api/state`. All chess logic stays in C++; the JS is presentation only. Routes:
