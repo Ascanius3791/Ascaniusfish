@@ -83,10 +83,10 @@ tools/gui_match: tools/gui_match.cpp tools/game_rules.hpp tools/uci_engine.hpp $
 tools/make_openings: tools/make_openings.cpp tools/game_rules.hpp $(HEADERS) $(SOURCES)
 	$(CXX) $(CXXFLAGS) -pthread -o $@ tools/make_openings.cpp
 
-# Browser GUI server (issues #14, #15). Plain g++, no Node: gui/web/vendor holds
+# Browser GUI server (issues #14-#17). Plain g++, no Node: gui/web/vendor holds
 # a prebuilt chessground bundle, and the HTTP/SSE server is gui/http_server.hpp.
 GUI_TARGET := gui/ascaniusfish_gui
-GUI_HEADERS := gui/http_server.hpp gui/session.hpp gui/json.hpp gui/engine_link.hpp
+GUI_HEADERS := gui/http_server.hpp gui/session.hpp gui/move_tree.hpp gui/json.hpp gui/engine_link.hpp
 
 $(GUI_TARGET): gui/gui_server.cpp $(GUI_HEADERS) tools/game_rules.hpp tools/uci_engine.hpp $(HEADERS) $(SOURCES)
 	$(CXX) $(CXXFLAGS) -pthread -o $@ gui/gui_server.cpp

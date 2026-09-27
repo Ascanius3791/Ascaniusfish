@@ -3,6 +3,12 @@
 // every move; it decides no chess itself, so there is no position here to get
 // out of step with the engine's.
 //
+// The move list is a tree: the server sends every node with its parent and its
+// children and says which one the cursor is on, and the page lays that out —
+// the main line inline, side lines indented under the move they replace. Moving
+// around it is the same kind of request as a move, so a reload finds the cursor
+// exactly where it was.
+//
 // State arrives two ways: a GET on load for an immediate first paint, and an SSE
 // stream that pushes every later change. In Play mode that stream is also how
 // the engine's thinking and its move arrive, and in Analyse mode every
@@ -48,6 +54,16 @@ async function command(path, body) {
   } catch (err) {
     showMessage(err.message);
     if (state) render(state);   // whatever was refused, the board still shows the truth
+  }
+}
+
+// The same, for a command whose refusal is not news: holding the right arrow at
+// the end of a line is how you find the end of a line, not a mistake to report.
+async function nudge(path, body) {
+  try {
+    apply(await post(path, body));
+  } catch (err) {
+    if (state) render(state);
   }
 }
 
@@ -116,14 +132,63 @@ el('modes').addEventListener('click', event => {
   if (button) command('/api/mode', { mode: button.dataset.mode });
 });
 
-document.addEventListener('keydown', event => {
-  if (event.key === 'Escape' && pendingPromotion) finishPromotion('');
+el('nav').addEventListener('click', event => {
+  const button = event.target.closest('button');
+  if (button) nudge('/api/nav', { where: button.dataset.nav });
 });
+
+el('moves').addEventListener('click', event => {
+  const button = event.target.closest('.move');
+  if (button) command('/api/goto', { node: Number(button.dataset.node) });
+});
+
+el('promote').addEventListener('click', () => command('/api/promote', {}));
+el('delete-move').addEventListener('click', () => command('/api/delete', {}));
+
+el('pgn-form').addEventListener('submit', event => {
+  event.preventDefault();
+  command('/api/pgn', { pgn: el('pgn').value });
+});
+
+el('copy-pgn').addEventListener('click', () => {
+  el('pgn').select();
+  navigator.clipboard?.writeText(el('pgn').value);
+  showMessage('PGN copied.');
+});
+
+// Which key does what. Every one of these has a button beside the move list, so
+// nothing is only reachable from the keyboard.
+const NAV_KEYS = {
+  ArrowLeft: 'back',
+  ArrowRight: 'forward',
+  ArrowUp: 'prev',
+  ArrowDown: 'next',
+  Home: 'start',
+  End: 'end',
+};
+
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && pendingPromotion) return finishPromotion('');
+  // A shortcut must never fire into a FEN or a PGN being typed: there Home,
+  // End and the arrows are the text field's own.
+  if (typingSomewhere() || event.ctrlKey || event.metaKey || event.altKey) return;
+  const where = NAV_KEYS[event.key];
+  if (!where) return;
+  event.preventDefault();
+  nudge('/api/nav', { where });
+});
+
+function typingSomewhere() {
+  const at = document.activeElement;
+  if (!at) return false;
+  return at.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(at.tagName);
+}
 
 // --------------------------------------------------------------------- drawing
 
 const MODE_NOTES = {
-  analyse: 'Free play: move for both sides, take moves back, set up any position. ' +
+  analyse: 'Free play: move for both sides, set up any position, step through the game ' +
+           'with the arrow keys. A move played from an earlier position starts a side line. ' +
            'Turn the engine on to see its eval and its best line for whatever is on the board.',
   play:    'You against Ascaniusfish. Load a FEN to start from a position of your own.',
   watch:   'Watching Ascaniusfish play itself is not wired up yet — the board below is still free play.',
@@ -169,17 +234,19 @@ function render(s) {
 
   el('status').textContent = statusLine(s);
   el('status').classList.toggle('over', over);
-  el('undo').disabled = (s.ply === 0 && !s.play.resigned) || s.play.thinking;
+  el('undo').disabled = (!s.tree.canBack && !s.play.resigned) || s.play.thinking;
   el('resign').hidden = !playing;
   el('resign').disabled = over;
 
   renderPlayPanel(s);
   renderAnalysis(s);
 
-  // Leave a FEN the user is in the middle of typing alone.
+  // Leave a FEN or a PGN the user is in the middle of typing alone.
   if (document.activeElement !== el('fen')) el('fen').value = s.fen;
+  if (document.activeElement !== el('pgn')) el('pgn').value = s.pgn;
+  el('download-pgn').href = `/api/pgn?id=${encodeURIComponent(sessionId)}`;
 
-  renderHistory(s.history);
+  renderMoves(s);
   if (pendingPromotion) el('promotion').hidden = false;
 }
 
@@ -317,28 +384,100 @@ function statusLine(s) {
   return `${side} to move (move ${s.fullmove}${check}) — ${s.legalMoves.length} legal moves`;
 }
 
-function renderHistory(history) {
-  const list = el('history');
-  list.replaceChildren();
-  for (let i = 0; i < history.length; i += 2) {
-    const item = document.createElement('li');
-    item.value = 1 + i / 2;
-    for (const move of history.slice(i, i + 2)) {
-      const span = document.createElement('span');
-      span.textContent = move.san;
-      // An engine move carries what its search found: eval and depth reached.
-      if (move.note) {
-        const note = document.createElement('em');
-        const score = scoreText(move.note.score);
-        note.textContent = `${score}/${move.note.depth}`;
-        note.title = `${move.note.nodes} nodes in ${move.note.time} ms`;
-        span.append(' ', note);
-      }
-      item.append(span);
-    }
-    list.append(item);
+// ----------------------------------------------------------------- move tree
+
+function renderMoves(s) {
+  const tree = s.tree;
+  const busy = s.play.thinking;
+  for (const button of el('nav').children) {
+    const where = button.dataset.nav;
+    const can = { back: tree.canBack, start: tree.canBack, forward: tree.canForward,
+                  end: tree.canForward, prev: tree.canPrev, next: tree.canNext }[where];
+    button.disabled = busy || !can;
   }
-  list.scrollTop = list.scrollHeight;
+  el('promote').disabled = busy || !tree.canPromote;
+  el('delete-move').disabled = busy || !tree.canBack;
+
+  const box = el('moves');
+  box.replaceChildren();
+  const byId = new Map(tree.nodes.map(node => [node.id, node]));
+  if (!byId.get(0)?.children.length) {
+    const empty = document.createElement('p');
+    empty.className = 'note';
+    empty.textContent = 'No moves yet.';
+    box.append(empty);
+    return;
+  }
+  // Numbering the first move even when it is black's is what a start position
+  // with black to move needs: "12\u2026 Nc6" rather than a bare "Nc6".
+  drawAfter(byId, 0, box, newLine(box), true, tree.cursor);
+  box.querySelector('.move.current')?.scrollIntoView({ block: 'nearest' });
+}
+
+function newLine(container) {
+  const line = document.createElement('div');
+  line.className = 'move-line';
+  container.append(line);
+  return line;
+}
+
+// Draws everything after `id` into `container`, starting in `line`. Each move
+// after the first of a branch point gets an indented block of its own, and the
+// main line then picks up again in a fresh line below them — which is what
+// makes a variation read as an aside rather than as part of the game.
+function drawAfter(byId, id, container, line, forceNumber, cursor) {
+  let force = forceNumber;
+  while (byId.get(id).children.length) {
+    const kids = byId.get(id).children;
+    line.append(...moveChip(byId.get(kids[0]), force, cursor));
+    force = false;
+    if (kids.length > 1) {
+      for (const alt of kids.slice(1)) {
+        const block = document.createElement('div');
+        block.className = 'variation';
+        const head = newLine(block);
+        head.append(...moveChip(byId.get(alt), true, cursor));
+        drawAfter(byId, alt, block, head, false, cursor);
+        container.append(block);
+      }
+      line = newLine(container);      // the main line resumes below the asides
+      force = true;                   // so a black move needs its number again
+    }
+    id = kids[0];
+  }
+}
+
+// One move: its number when it needs one, the move itself as a button, and
+// whatever is attached to it — an engine score, a PGN comment.
+function moveChip(node, forceNumber, cursor) {
+  const parts = [];
+  if (node.white || forceNumber) {
+    const number = document.createElement('span');
+    number.className = 'move-number';
+    number.textContent = node.white ? `${node.moveNumber}.` : `${node.moveNumber}\u2026`;
+    parts.push(number, ' ');
+  }
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'move' + (node.id === cursor ? ' current' : '');
+  button.dataset.node = node.id;
+  button.textContent = node.san;
+  button.title = node.uci;
+  // An engine move carries what its search found: eval and depth reached.
+  if (node.note) {
+    const note = document.createElement('em');
+    note.textContent = `${scoreText(node.note.score)}/${node.note.depth}`;
+    note.title = `${node.note.nodes} nodes in ${node.note.time} ms`;
+    button.append(' ', note);
+  }
+  parts.push(button, ' ');
+  if (node.comment) {
+    const comment = document.createElement('span');
+    comment.className = 'move-comment';
+    comment.textContent = node.comment;
+    parts.push(comment, ' ');
+  }
+  return parts;
 }
 
 function showMessage(text) {

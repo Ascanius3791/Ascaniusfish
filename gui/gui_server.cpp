@@ -251,6 +251,11 @@ static Response handle_get(const Request& req)
     if(req.path=="/api/events")
     return Response::event_stream(sessions.get(req.param("id")).id);
 
+    // The game as a file, so a browser can save it. The page already has the
+    // same text in its state; this is for the URL.
+    if(req.path=="/api/pgn")
+    return Response::file(sessions.get(req.param("id")).pgn(), "text/plain; charset=utf-8");
+
     std::string path = req.path=="/" ? "/index.html" : req.path;
     std::string body;
     if(!read_web_file(path, body))
@@ -297,6 +302,57 @@ static Response handle_post(const Request& req)
         ok = session.enter_line(moves->second, error);
         if(ok)
         abort_search(session);
+    }
+    else if(req.path=="/api/nav")
+    {
+        // The arrow keys and the buttons beside them. Moving the cursor moves
+        // the position, so the analysis has to follow it: abort what was running
+        // and the reply below starts a search on the position now shown.
+        auto where = body.find("where");
+        Nav parsed;
+        if(where==body.end() || !nav_from_name(where->second, parsed))
+        return Response::json(json::error("where must be back, forward, start, end, prev or next"), 400);
+        if(session.thinking())
+        return Response::json(json::error("the engine is still thinking"), 409);
+        ok = session.navigate(parsed, error);
+        if(ok)
+        abort_search(session);
+    }
+    else if(req.path=="/api/goto")
+    {
+        // Clicking a move in the tree. The page sends the node's id, and an id
+        // from before a deletion is refused rather than meaning another move.
+        auto node = body.find("node");
+        if(node==body.end())
+        return Response::json(json::error("no node given"), 400);
+        if(session.thinking())
+        return Response::json(json::error("the engine is still thinking"), 409);
+        ok = session.go_to(std::atoi(node->second.c_str()), error);
+        if(ok)
+        abort_search(session);
+    }
+    else if(req.path=="/api/promote")
+    {
+        // The line through the cursor becomes the main line. The position does
+        // not change, so a running analysis is still about the right board and
+        // is deliberately left alone.
+        ok = session.promote(error);
+    }
+    else if(req.path=="/api/delete")
+    {
+        if(session.thinking())
+        return Response::json(json::error("the engine is still thinking"), 409);
+        ok = session.delete_variation(error);
+        if(ok)
+        abort_search(session);
+    }
+    else if(req.path=="/api/pgn")
+    {
+        auto pgn = body.find("pgn");
+        if(pgn==body.end())
+        return Response::json(json::error("no PGN given"), 400);
+        abort_search(session);           // whatever it was thinking about is gone either way
+        ok = session.load_pgn(pgn->second, error);
     }
     else if(req.path=="/api/analyse")
     {

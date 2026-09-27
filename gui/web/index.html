@@ -93,7 +93,19 @@
 
     <section class="panel">
       <h2>Moves</h2>
-      <ol id="history" class="history"></ol>
+      <div id="nav" class="controls nav">
+        <button data-nav="start" title="Start of the game (Home)" aria-label="Start of the game">&#x23EE;</button>
+        <button data-nav="back" title="One move back (left arrow)" aria-label="One move back">&#x25C0;</button>
+        <button data-nav="forward" title="One move on (right arrow)" aria-label="One move on">&#x25B6;</button>
+        <button data-nav="end" title="End of this line (End)" aria-label="End of this line">&#x23ED;</button>
+        <button data-nav="prev" title="Previous variation (up arrow)" aria-label="Previous variation">&#x2191;</button>
+        <button data-nav="next" title="Next variation (down arrow)" aria-label="Next variation">&#x2193;</button>
+      </div>
+      <div id="moves" class="moves"></div>
+      <div class="controls">
+        <button id="promote" title="Make the line you are on the main line">Promote</button>
+        <button id="delete-move" title="Delete this move and everything after it">Delete</button>
+      </div>
     </section>
 
     <section class="panel">
@@ -106,6 +118,20 @@
         </div>
       </form>
       <p id="message" class="message" hidden></p>
+    </section>
+
+    <section class="panel">
+      <h2>Game</h2>
+      <form id="pgn-form" autocomplete="off">
+        <textarea id="pgn" rows="7" spellcheck="false" aria-label="PGN"></textarea>
+        <div class="controls">
+          <button type="submit">Load PGN</button>
+          <button type="button" id="copy-pgn">Copy</button>
+          <a id="download-pgn" class="button" download="ascaniusfish.pgn">Download</a>
+        </div>
+      </form>
+      <p class="note">Variations are written as nested parentheses, so a game
+      saved here comes back with its side lines.</p>
     </section>
   </aside>
 </main>

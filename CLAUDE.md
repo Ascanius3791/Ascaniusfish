@@ -94,11 +94,27 @@ When editing engine internals, `lib/*.hpp` is the declaration/interface layer an
 - `gui/http_server.hpp` — the slice of HTTP this needs on plain sockets (no third-party library):
   GET static files, POST JSON, and SSE streams held open across one `poll()` loop, so the server
   can push a new position to every page watching a session. Binds `127.0.0.1` only.
-- `gui/session.hpp` — a `Session` is one game (a `Game` from `tools/game_rules.hpp`), a `Mode`
-  and a board orientation; `Sessions` maps ids to them, so Watch mode can later hold two games.
-  `state_json()` is the one thing the page renders from: FEN, `dests` per square, `promotions`,
-  legal moves with SAN, history (with the engine's score/depth per engine move), `Outcome`,
-  and the Play and Analysis panels' state. Play adds the resolved human colour, the `Go_Limits`,
+- `gui/move_tree.hpp` — the game as a tree with a cursor, and PGN both ways. The linear `Game`
+  in `tools/game_rules.hpp` stays as it is (`tools/match.cpp` and `tools/gui_match.cpp` use it);
+  this is the shape a game being *looked at* needs. A `Tree_Node` holds the move, its SAN, the
+  position after it, the repetition key, the halfmove clock along *this path*, a `Move_Note`
+  eval slot and a PGN comment; `children[0]` is the main line and the rest are side lines.
+  Node ids index one pool and are **never reused** — a deleted node stays in it marked dead, so
+  an id the browser drew before a deletion is refused rather than meaning another move. `Nav`
+  is the cursor's six moves (back/forward/start/end, and prev/next between siblings).
+  `load_pgn()` reads a move by naming every legal move with the same `san()` the exporter uses
+  and comparing, so import and export cannot drift apart; it handles nested variations, NAGs,
+  `{}`/`;` comments and a `FEN`/`SetUp` tag. `diagnostics/move_tree_pgn_test.cpp` covers all of
+  it, including a Lichess-shaped study PGN.
+- `gui/session.hpp` — a `Session` is one game (a `Move_Tree`), a `Mode` and a board orientation;
+  `Sessions` maps ids to them, so Watch mode can later hold two games.
+  **"The position" is the cursor, not the end of the game**: legal moves, FEN, the result, the
+  repetition count and the moves handed to the engine all follow it, which is what makes the
+  analysis search follow it too. `state_json()` is the one thing the page renders from: FEN,
+  `dests` per square, `promotions`, legal moves with SAN, the whole tree flat (every live node
+  with its parent, children, SAN, move number and engine note) plus `cursor` and the
+  `can{Back,Forward,Prev,Next,Promote}` flags, the game as PGN, `Outcome`, and the Play and
+  Analysis panels' state. Play adds the resolved human colour, the `Go_Limits`,
   a resignation and whether a search is running; Analyse adds the toggle and the running
   search's depth/nodes/nps, its score **in white's view** (`uci_score()` is the mover's, so
   `write_analysis()` negates it for black) and its PV in both UCI and SAN. A session runs at
@@ -130,6 +146,17 @@ space-separated list of UCI `moves` (all of them or none), which is what clickin
 analysis line does — the page sends the moves it drew rather than an index, so a deeper iteration
 arriving between the draw and the click cannot play a different move. Anything that changes the
 position under a running search aborts it and drops its `bestmove` by token.
+
+Moving around the tree: `POST /api/nav` (`where` = back/forward/start/end/prev/next, what the
+arrow keys and Home/End send), `POST /api/goto` (`node` = a node id, what clicking a move sends),
+`POST /api/promote` (the line through the cursor becomes the main line — the position does not
+change, so a running analysis is deliberately left alone), `POST /api/delete` (the move at the
+cursor and everything after it), `POST /api/pgn` (`pgn` = a game to load) and `GET /api/pgn`
+(the game as a file). "Take back" (`/api/undo`) is the one destructive step among these: it
+removes the move at the cursor, and in Play mode keeps going until it is your turn again. In
+Play mode the engine only answers at the **end of a line**, so stepping back into the game to
+look around does not set it thinking; playing a different move there makes a new end, and then
+it does answer.
 
 Like every tool that touches movegen, `main()` must run `Zobrist`/`initialize_rand()`/`init_magics()`/
 `init_sliders_attacks()` first — without them sliding attacks are garbage and `in_check()` silently

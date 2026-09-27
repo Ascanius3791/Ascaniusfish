@@ -161,21 +161,81 @@ aside {
 
 .controls { display: flex; gap: 6px; flex-wrap: wrap; }
 
-.history {
-  margin: 0;
-  padding-left: 30px;
-  max-height: 260px;
+/* The move tree. The main line runs along each .move-line; a side line is a
+   .variation block indented under the move it replaces, and nesting one inside
+   another indents again, so depth in the game is depth on the page. */
+
+.moves {
+  max-height: 300px;
   overflow-y: auto;
-  font-variant-numeric: tabular-nums;
-}
-
-.history li::marker { color: var(--muted); }
-
-.history li span {
-  display: inline-block;
-  min-width: 108px;
+  margin: 8px 0;
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.9;
 }
+
+.move-line { word-spacing: -0.2em; }
+.move-line:empty { display: none; }
+
+.variation {
+  margin: 2px 0 2px 10px;
+  padding-left: 8px;
+  border-left: 2px solid var(--line);
+  color: var(--muted);
+}
+
+.moves .move-number { color: var(--muted); }
+
+/* Every move is a button: clicking it takes the board to that position. */
+.move {
+  font: inherit;
+  padding: 1px 3px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  background: none;
+}
+
+.move:hover:not(:disabled) { background: var(--bg); border-color: var(--accent); }
+
+.move.current {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+}
+
+.move.current em { color: var(--accent-text); }
+
+.move-comment { font-style: italic; }
+
+/* The arrows above the tree; they carry glyphs, so they want no side padding. */
+.nav button { padding: 4px 9px; }
+
+#pgn-form { display: flex; flex-direction: column; gap: 8px; }
+
+#pgn {
+  width: 100%;
+  resize: vertical;
+  font: 12px/1.5 ui-monospace, "SF Mono", Menlo, monospace;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 7px 8px;
+}
+
+/* The download is a link, so it has to be told it looks like a button. */
+a.button {
+  font: inherit;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 6px 12px;
+  text-decoration: none;
+}
+
+a.button:hover { border-color: var(--accent); }
 
 /* The Play panel: colour, how long the engine thinks, and what it is doing. */
 
@@ -220,7 +280,7 @@ select:focus, input:focus { outline: none; border-color: var(--accent); }
 @keyframes pulse { 50% { opacity: 0.55; } }
 
 /* Eval and depth of an engine move, beside its SAN. */
-.history em {
+.move em {
   font-style: normal;
   font-size: 11px;
   color: var(--muted);

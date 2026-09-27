@@ -5,6 +5,12 @@
 // another GET of the state. Sessions are addressed by id so Watch mode can
 // later hold two games at once.
 //
+// The game is a tree with a cursor (gui/move_tree.hpp), not a list of moves:
+// "the position" is wherever the cursor is, so stepping back and playing a
+// different move opens a side line instead of throwing the game away. Every
+// question here — legal moves, FEN, the result, the moves the engine is given —
+// is asked of the cursor, which is what makes the engine follow it.
+//
 // Rules come from tools/game_rules.hpp (SAN, FEN, repetition, Outcome) and
 // legality from the engine's own all_moves() — nothing here decides chess.
 //
@@ -15,9 +21,9 @@
 // this file only holds the state they produce, so nothing here blocks.
 #ifndef GUI_SESSION_HPP
 #define GUI_SESSION_HPP
-#include "../tools/game_rules.hpp"
 #include "engine_link.hpp"
 #include "json.hpp"
+#include "move_tree.hpp"
 #include <algorithm>
 #include <map>
 #include <random>
@@ -74,15 +80,6 @@ inline bool coin_flip()
     static std::mt19937 rng((unsigned)std::random_device{}());
     return std::uniform_int_distribution<int>(0, 1)(rng)==1;
 }
-
-// The engine's answer to one move, kept beside it in the move list.
-struct Move_Note
-{
-    bool from_engine = false;
-    int depth = 0;
-    std::string score_kind, score_value;   // "cp"/"mate", white's view
-    long long nodes = 0, time_ms = 0;
-};
 
 class Session
 {
@@ -163,7 +160,9 @@ class Session
         set_start(start_pos, start_halfmove, start_fullmove);
     }
 
-    // Plays a UCI move ("e2e4", "e7e8q", "e1g1" for castling).
+    // Plays a UCI move ("e2e4", "e7e8q", "e1g1" for castling) from wherever the
+    // cursor is. From an earlier position that is a new side line, and from one
+    // already in the tree it just follows the move that is there.
     bool play(const std::string& uci, std::string& error)
     {
         std::string reason;
@@ -172,13 +171,61 @@ class Session
             error = "the game is over";
             return false;
         }
-        if(!game.play(uci))
+        if(!tree.play(uci))
         {
             error = "illegal move: " + uci;
             return false;
         }
-        played.push_back(uci);
-        notes.push_back(Move_Note());
+        clear_analysis();
+        return true;
+    }
+
+    // Moves the cursor: the arrow keys, and the buttons beside them.
+    bool navigate(Nav where, std::string& error)
+    {
+        if(!tree.navigate(where))
+        {
+            error = "there is nowhere to go from here";
+            return false;
+        }
+        clear_analysis();
+        return true;
+    }
+
+    // Jumps to a node, which is what clicking a move in the tree does. An id
+    // from before a deletion is refused rather than landing somewhere else.
+    bool go_to(int node, std::string& error)
+    {
+        if(!tree.go_to(node))
+        {
+            error = "that move is not in the game any more";
+            return false;
+        }
+        clear_analysis();
+        return true;
+    }
+
+    // Makes the line through the cursor the main line. The position does not
+    // change, so the analysis running on it is still about the right board.
+    bool promote(std::string& error)
+    {
+        if(!tree.promote_to_main())
+        {
+            error = "this is already the main line";
+            return false;
+        }
+        return true;
+    }
+
+    // Throws away the move at the cursor and everything after it.
+    bool delete_variation(std::string& error)
+    {
+        if(!tree.delete_at_cursor())
+        {
+            error = "there is no move here to delete";
+            return false;
+        }
+        resigned = false;   // the game it ended is gone
         clear_analysis();
         return true;
     }
@@ -204,7 +251,7 @@ class Session
         analysis_uci.clear();
         analysis_san.clear();
         Game walk;
-        walk.start(game.positions.back(), game.halfmove_clock, game.fullmove());
+        walk.start(tree.position(), tree.halfmove_clock(), tree.fullmove());
         for(const std::string& uci : info.pv)
         {
             if(!walk.play(uci))
@@ -217,8 +264,8 @@ class Session
     // Steps the board along a line of UCI moves, which is what clicking a move
     // in the analysis line does. The page sends the moves it drew rather than
     // an index into the line, so you get the move you clicked even if a deeper
-    // iteration replaced the line in between. Either all of it is played or
-    // none of it.
+    // iteration replaced the line in between. The line is checked through before
+    // any of it is played, so a line that does not fit leaves the tree alone.
     bool enter_line(const std::string& moves, std::string& error)
     {
         std::istringstream in(moves);
@@ -231,14 +278,17 @@ class Session
             error = "no moves given";
             return false;
         }
-        size_t before = played.size();
+        Game walk;
+        walk.start(tree.position(), tree.halfmove_clock(), tree.fullmove());
         for(const std::string& move : line)
-        if(!play(move, error))
+        if(!walk.play(move))
         {
-            replay(before);
-            error = "that line does not fit the position any more: " + error;
+            error = "that line does not fit the position any more: illegal move " + move;
             return false;
         }
+        for(const std::string& move : line)
+        tree.play(move);
+        clear_analysis();
         return true;
     }
 
@@ -254,9 +304,7 @@ class Session
     // Records what the engine's search found for the move just played.
     void annotate_last(const Search_Info& info, bool white_moved)
     {
-        if(notes.empty())
-        return;
-        Move_Note& note = notes.back();
+        Move_Note note;
         note.from_engine = true;
         note.depth = info.depth;
         note.nodes = info.nodes;
@@ -269,10 +317,14 @@ class Session
             long long value = std::atoll(info.score_value.c_str());
             note.score_value = std::to_string(white_moved ? value : -value);
         }
+        tree.annotate(note);
     }
 
-    // Takes back one move; in Play mode the engine's reply and your own move
-    // both go, so it is your turn again on a position you chose.
+    // Takes the move at the cursor back: it and its continuations go, and the
+    // cursor is left on the position it was played from. This is the one
+    // destructive step — the arrows only move the cursor. In Play mode the
+    // engine's reply and your own move both go, so it is your turn again on a
+    // position you chose.
     bool undo(std::string& error)
     {
         if(resigned)
@@ -280,16 +332,16 @@ class Session
             resigned = false;   // taking back a resignation plays the game on
             return true;
         }
-        if(played.empty())
+        if(tree.at_root())
         {
             error = "nothing to take back";
             return false;
         }
-        size_t keep = played.size()-1;
+        tree.delete_at_cursor();
         if(mode==Mode::PLAY)
-        while(keep>0 && game.positions[keep].white_move!=human_white)
-        keep--;
-        replay(keep);
+        while(!tree.at_root() && tree.position().white_move!=human_white)
+        tree.delete_at_cursor();
+        clear_analysis();
         return true;
     }
 
@@ -298,17 +350,21 @@ class Session
     void resign()
     {
         resigned = true;
-        resigned_white = mode==Mode::PLAY ? human_white : game.positions.back().white_move;
+        resigned_white = mode==Mode::PLAY ? human_white : tree.position().white_move;
     }
 
+    // The engine only answers at the end of a line: stepping back into the game
+    // to look around is not a request for it to play there. Playing a move from
+    // an earlier position makes a new end, and then it does answer.
     bool engine_to_move() const
     {
         std::string reason;
-        return mode==Mode::PLAY && result(reason)==Outcome::ONGOING
-            && game.positions.back().white_move!=human_white;
+        return mode==Mode::PLAY && tree.at_tip() && result(reason)==Outcome::ONGOING
+            && tree.position().white_move!=human_white;
     }
 
-    // The game's result, resignation included.
+    // The game's result, resignation included. A resignation belongs to the
+    // game that was played, so it does not follow the cursor into a side line.
     Outcome result(std::string& reason) const
     {
         if(resigned)
@@ -316,18 +372,41 @@ class Session
             reason = resigned_white ? "white resigns" : "black resigns";
             return resigned_white ? Outcome::BLACK_WINS : Outcome::WHITE_WINS;
         }
-        return game.outcome(reason);
+        return tree.outcome(reason);
     }
 
-    std::string fen() const { return game.fen(); }
+    std::string fen() const { return tree.fen(); }
 
-    // What the engine is told to think about: the root and the moves from it.
+    // What the engine is told to think about: the root and the moves down to
+    // the cursor, so its search is always about the position on the board.
     const std::string& root_fen() const { return start_fen; }
-    const std::vector<std::string>& moves() const { return played; }
+    std::vector<std::string> moves() const { return tree.path_moves(); }
+
+    // The whole tree as PGN, and back. A load replaces the game, so the caller
+    // stops whatever the engine was doing first.
+    std::string pgn() const { return tree.pgn(tags()); }
+
+    bool load_pgn(const std::string& text, std::string& error)
+    {
+        Move_Tree loaded;
+        if(!loaded.load_pgn(text, error))
+        return false;
+        tree = loaded;
+        start_pos = tree.root_position();
+        start_halfmove = tree.start_halfmove_clock();
+        start_fullmove = tree.start_fullmove_number();
+        start_fen = Game::fen_of(start_pos, tree.node(0).key[13], start_halfmove, start_fullmove);
+        resigned = false;
+        engine_error.clear();
+        live_valid = false;
+        clear_analysis();
+        return true;
+    }
 
     std::string state_json() const
     {
-        const BB& pos = game.positions.back();
+        const BB& pos = tree.position();
+        const Tree_Node& here = tree.current();
         std::string reason;
         Outcome outcome = result(reason);
 
@@ -336,17 +415,17 @@ class Session
         o.key("id").str(id);
         o.key("mode").str(mode_name(mode));
         o.key("orientation").str(flipped ? "black" : "white");
-        o.key("fen").str(game.fen());
+        o.key("fen").str(tree.fen());
         o.key("turn").str(pos.white_move ? "white" : "black");
-        o.key("ply").num((long long)played.size());
-        o.key("fullmove").num(game.fullmove());
-        o.key("halfmoveClock").num(game.halfmove_clock);
+        o.key("ply").num(here.ply);
+        o.key("fullmove").num(tree.fullmove());
+        o.key("halfmoveClock").num(tree.halfmove_clock());
 
         o.key("lastMove");
-        if(played.empty())
+        if(tree.at_root())
         o.null();
         else
-        o.arr().str(played.back().substr(0, 2)).str(played.back().substr(2, 2)).end_arr();
+        o.arr().str(here.uci.substr(0, 2)).str(here.uci.substr(2, 2)).end_arr();
 
         o.key("check");
         if(in_check(pos.Board, pos.white_move))
@@ -357,11 +436,13 @@ class Session
         // Where each piece may go, and which of those destinations promote.
         // chessground wants every destination once, so the four promotion moves
         // to one square collapse into one entry plus a "promotions" hint.
+        const BB* legal = tree.legal_moves();
+        int n_legal = tree.n_legal_moves();
         std::map<std::string, std::vector<std::string>> dests;
         std::set<std::string> promotions;
-        for(int k=0;k<game.n_children;k++)
+        for(int k=0;k<n_legal;k++)
         {
-            std::string uci = get_UCI(&pos, game.children+k);
+            std::string uci = get_UCI(&pos, legal+k);
             std::string from = uci.substr(0, 2), to = uci.substr(2, 2);
             std::vector<std::string>& targets = dests[from];
             if(std::find(targets.begin(), targets.end(), to)==targets.end())
@@ -386,25 +467,15 @@ class Session
         o.end_arr();
 
         o.key("legalMoves").arr();
-        for(int k=0;k<game.n_children;k++)
+        for(int k=0;k<n_legal;k++)
         o.obj()
-            .key("uci").str(get_UCI(&pos, game.children+k))
-            .key("san").str(san(pos, game.children, game.n_children, k))
+            .key("uci").str(get_UCI(&pos, legal+k))
+            .key("san").str(san(pos, legal, n_legal, k))
          .end_obj();
         o.end_arr();
 
-        o.key("history").arr();
-        for(size_t i=0;i<game.san_moves.size();i++)
-        {
-            o.obj().key("uci").str(game.uci_moves[i]).key("san").str(game.san_moves[i]);
-            o.key("note");
-            if(i<notes.size() && notes[i].from_engine)
-            write_note(o, notes[i]);
-            else
-            o.null();
-            o.end_obj();
-        }
-        o.end_arr();
+        write_tree(o);
+        o.key("pgn").str(pgn());
 
         o.key("outcome").obj();
         o.key("state").str(outcome==Outcome::ONGOING ? "ongoing" :
@@ -449,13 +520,94 @@ class Session
     }
 
     private:
-    Game game;
+    Move_Tree tree;
     BB start_pos;
     int start_halfmove = 0, start_fullmove = 1;
     std::string start_fen;                 // FEN of the position the game starts from
-    std::vector<std::string> played;
-    std::vector<Move_Note> notes;          // one per played move
     bool resigned = false, resigned_white = false;
+
+    // The tags an exported game carries. In Play mode the names say who had
+    // which colour, which is the only thing this session knows about them.
+    Pgn_Tags tags() const
+    {
+        Pgn_Tags t;
+        if(mode==Mode::PLAY)
+        {
+            t.white = human_white ? "Human" : "Ascaniusfish";
+            t.black = human_white ? "Ascaniusfish" : "Human";
+        }
+        std::string reason;
+        Outcome outcome = result(reason);
+        t.result = outcome==Outcome::WHITE_WINS ? "1-0" :
+                   outcome==Outcome::BLACK_WINS ? "0-1" :
+                   outcome==Outcome::DRAW ? "1/2-1/2" : "*";
+        return t;
+    }
+
+    // The tree, flat: every live node with its parent and its children, so the
+    // page can draw the nesting itself from one array. Ids are the tree's own,
+    // which is what /api/goto takes — the page never has to count plies.
+    void write_tree(json::Out& o) const
+    {
+        o.key("tree").obj();
+        o.key("cursor").num(tree.cursor_id());
+        o.key("canBack").boolean(!tree.at_root());
+        o.key("canForward").boolean(!tree.at_tip());
+        o.key("canPrev").boolean(sibling_count(-1)>0);
+        o.key("canNext").boolean(sibling_count(1)>0);
+        o.key("canPromote").boolean(can_promote());
+        o.key("nodes").arr();
+        for(int id=0; id<tree.size(); id++)
+        {
+            const Tree_Node& n = tree.node(id);
+            if(!n.alive)
+            continue;
+            o.obj();
+            o.key("id").num(id);
+            o.key("parent").num(n.parent);
+            o.key("children").arr();
+            for(int child : n.children)
+            o.num(child);
+            o.end_arr();
+            o.key("san").str(n.san);
+            o.key("uci").str(n.uci);
+            o.key("comment").str(n.comment);
+            // The number this move is printed with, and whose move it was: both
+            // belong to the position it was played from.
+            o.key("moveNumber").num(n.parent<0 ? tree.start_fullmove_number() : tree.fullmove_of(n.parent));
+            o.key("white").boolean(n.parent>=0 && tree.node(n.parent).pos.white_move);
+            o.key("note");
+            if(n.note.from_engine)
+            write_note(o, n.note);
+            else
+            o.null();
+            o.end_obj();
+        }
+        o.end_arr();
+        o.end_obj();
+    }
+
+    // How many siblings the cursor has before it (-1) or after it (1), which is
+    // what greys the two variation buttons out.
+    int sibling_count(int direction) const
+    {
+        int id = tree.cursor_id(), parent = tree.node(id).parent;
+        if(parent<0)
+        return 0;
+        const std::vector<int>& siblings = tree.node(parent).children;
+        int at = (int)(std::find(siblings.begin(), siblings.end(), id)-siblings.begin());
+        return direction<0 ? at : (int)siblings.size()-1-at;
+    }
+
+    // Whether "promote" would change anything: the cursor, or an ancestor of
+    // it, is not the first child of its parent.
+    bool can_promote() const
+    {
+        for(int id=tree.cursor_id(); tree.node(id).parent>=0; id=tree.node(id).parent)
+        if(tree.node(tree.node(id).parent).children[0]!=id)
+        return true;
+        return false;
+    }
 
     // The score of a finished engine search, from white's view.
     static void write_note(json::Out& o, const Move_Note& note)
@@ -506,7 +658,7 @@ class Session
         {
             long long value = std::atoll(analysis.score_value.c_str());
             o.obj().key("kind").str(analysis.score_kind)
-                   .key("value").num(game.positions.back().white_move ? value : -value)
+                   .key("value").num(tree.position().white_move ? value : -value)
              .end_obj();
         }
         o.key("line").arr();
@@ -521,32 +673,12 @@ class Session
         start_pos = pos;
         start_halfmove = halfmove;
         start_fullmove = fullmove;
-        played.clear();
-        notes.clear();
         resigned = false;
         engine_error.clear();
         live_valid = false;
         clear_analysis();
-        game.start(start_pos, start_halfmove, start_fullmove);
-        start_fen = game.fen();
-    }
-
-    // Game only grows forwards, so taking back a move means replaying the rest.
-    // Games are short and all_moves() is cheap next to a search.
-    void replay(size_t keep)
-    {
-        std::vector<std::string> line(played.begin(), played.begin()+std::min(keep, played.size()));
-        std::vector<Move_Note> kept(notes.begin(), notes.begin()+std::min(keep, notes.size()));
-        game.start(start_pos, start_halfmove, start_fullmove);
-        played.clear();
-        notes.clear();
-        clear_analysis();
-        for(size_t i=0;i<line.size();i++)
-        if(game.play(line[i]))
-        {
-            played.push_back(line[i]);
-            notes.push_back(i<kept.size() ? kept[i] : Move_Note());
-        }
+        tree.start(start_pos, start_halfmove, start_fullmove);
+        start_fen = tree.fen();
     }
 
     // The clock fields of an already-validated FEN (fields 5 and 6); a FEN that
