@@ -206,6 +206,7 @@ function advanceQueue(s) {
   if (!legal) {
     queue = [];
     board.cancelPremove();
+    showMessage('Queued move is no longer legal and was dropped.');
     return;
   }
   queueSending = true;
