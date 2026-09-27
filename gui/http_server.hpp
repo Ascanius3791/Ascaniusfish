@@ -7,6 +7,10 @@
 // SSE stream never blocks a request. Ordinary responses say "Connection: close"
 // — there is no keep-alive parsing here, which costs nothing on localhost.
 //
+// Work that happens off this thread (a search, gui/engine_link.hpp) never
+// touches a socket: it calls wake(), and the loop runs on_tick() to collect
+// whatever finished. All writing stays on the one thread.
+//
 // Only 127.0.0.1 is bound: the server reads files from disk and takes commands
 // without authentication, so it must not be reachable from the network.
 #ifndef GUI_HTTP_SERVER_HPP
@@ -115,6 +119,7 @@ inline const char* status_text(int status)
         case 400: return "Bad Request";
         case 404: return "Not Found";
         case 405: return "Method Not Allowed";
+        case 409: return "Conflict";
         case 413: return "Payload Too Large";
         default:  return "Internal Server Error";
     }
@@ -143,6 +148,16 @@ class Http_Server
     std::function<Response(const Request&)> handler;
     // Called right after a page subscribes, so it can be sent the current state.
     std::function<void(const std::string& topic)> on_subscribe;
+    // Called on every poll iteration, so a wake() from another thread turns
+    // into work done here: this is where a finished search reaches the pages.
+    std::function<void()> on_tick;
+
+    Http_Server()
+    {
+        // Self-pipe: the only way another thread may reach this loop.
+        if(pipe2(wake_fds, O_CLOEXEC | O_NONBLOCK)!=0)
+        wake_fds[0] = wake_fds[1] = -1;
+    }
 
     ~Http_Server()
     {
@@ -150,12 +165,23 @@ class Http_Server
         close(c.fd);
         if(listen_fd>=0)
         close(listen_fd);
+        for(int fd : wake_fds)
+        if(fd>=0)
+        close(fd);
+    }
+
+    // Wakes the poll loop from any thread. Nothing else here is thread-safe.
+    void wake()
+    {
+        if(wake_fds[1]>=0 && write(wake_fds[1], "", 1)<0) {}  // a full pipe already means "wake up"
     }
 
     // Binds the first free port in [first_port, first_port+tries).
     bool listen_on(int first_port, int tries = 20)
     {
-        listen_fd = socket(AF_INET, SOCK_STREAM, 0);
+        // SOCK_CLOEXEC: an engine process started later (gui/engine_link.hpp)
+        // must not inherit the listening socket and hold the port open.
+        listen_fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
         if(listen_fd<0)
         return false;
         int on = 1;
@@ -218,6 +244,7 @@ class Http_Server
     {
         std::vector<pollfd> fds;
         fds.push_back({listen_fd, POLLIN, 0});
+        fds.push_back({wake_fds[0], POLLIN, 0});
         for(Client& c : clients)
         fds.push_back({c.fd, (short)(POLLIN | (c.out.empty() ? 0 : POLLOUT)), 0});
 
@@ -234,17 +261,21 @@ class Http_Server
         {
             if(fds[0].revents & POLLIN)
             accept_all();
-            for(size_t i=0;i<clients.size();i++)   // clients[i] lines up with fds[i+1]:
+            if(fds[1].revents & POLLIN)
+            drain_wake();
+            for(size_t i=0;i<clients.size();i++)   // clients[i] lines up with fds[i+2]:
             {                                      // accept_all only appends
-                if(i+1>=fds.size())
+                if(i+2>=fds.size())
                 break;
-                short ev = fds[i+1].revents;
+                short ev = fds[i+2].revents;
                 if(ev & POLLIN)
                 on_readable(clients[i]);
                 if(ev & (POLLERR | POLLHUP | POLLNVAL))
                 clients[i].done = true;
             }
         }
+        if(on_tick)
+        on_tick();
         flush_all();
     }
 
@@ -262,7 +293,15 @@ class Http_Server
 
     int listen_fd = -1;
     int bound_port = 0;
+    int wake_fds[2] = {-1, -1};   // [0] read, [1] written by wake()
     std::vector<Client> clients;
+
+    void drain_wake()
+    {
+        char buf[64];
+        while(read(wake_fds[0], buf, sizeof buf)>0)
+        ;
+    }
 
     static void set_nonblocking(int fd)
     {
@@ -273,10 +312,9 @@ class Http_Server
     {
         for(;;)
         {
-            int fd = accept(listen_fd, nullptr, nullptr);
+            int fd = accept4(listen_fd, nullptr, nullptr, SOCK_CLOEXEC | SOCK_NONBLOCK);
             if(fd<0)
             return;
-            set_nonblocking(fd);
             Client c;
             c.fd = fd;
             clients.push_back(c);

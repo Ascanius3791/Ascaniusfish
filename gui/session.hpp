@@ -7,18 +7,25 @@
 //
 // Rules come from tools/game_rules.hpp (SAN, FEN, repetition, Outcome) and
 // legality from the engine's own all_moves() — nothing here decides chess.
+//
+// In Play mode a session also knows which colour the engine has, how it is
+// asked to think (gui/engine_link.hpp) and what each of its searches found.
+// Starting and reading those searches is the server's job (gui_server.cpp);
+// this file only holds the state they produce, so nothing here blocks.
 #ifndef GUI_SESSION_HPP
 #define GUI_SESSION_HPP
 #include "../tools/game_rules.hpp"
+#include "engine_link.hpp"
 #include "json.hpp"
 #include <algorithm>
 #include <map>
+#include <random>
 #include <set>
 #include <sstream>
 #include <string>
 
-// Which of the GUI's modes a session is in. Issue #14 only makes free play and
-// FEN setup work; the later issues attach an engine to PLAY and WATCH.
+// Which of the GUI's modes a session is in. Watch — Ascaniusfish against
+// itself — is still selector-only; Analyse is free play, Play is issue #15.
 enum class Mode { ANALYSE, PLAY, WATCH };
 
 inline const char* mode_name(Mode m)
@@ -39,12 +46,54 @@ inline std::string square_name(int square)
     return std::string(1, 'a'+square%8) + std::string(1, '1'+square/8);
 }
 
+// Which colour the human asked for, before a random choice is made.
+enum class Side_Choice { WHITE, BLACK, RANDOM };
+
+inline const char* side_choice_name(Side_Choice s)
+{
+    return s==Side_Choice::WHITE ? "white" : s==Side_Choice::BLACK ? "black" : "random";
+}
+
+inline bool side_choice_from_name(const std::string& name, Side_Choice& out)
+{
+    if(name=="white")  { out = Side_Choice::WHITE;  return true; }
+    if(name=="black")  { out = Side_Choice::BLACK;  return true; }
+    if(name=="random") { out = Side_Choice::RANDOM; return true; }
+    return false;
+}
+
+inline bool coin_flip()
+{
+    static std::mt19937 rng((unsigned)std::random_device{}());
+    return std::uniform_int_distribution<int>(0, 1)(rng)==1;
+}
+
+// The engine's answer to one move, kept beside it in the move list.
+struct Move_Note
+{
+    bool from_engine = false;
+    int depth = 0;
+    std::string score_kind, score_value;   // "cp"/"mate", white's view
+    long long nodes = 0, time_ms = 0;
+};
+
 class Session
 {
     public:
     std::string id;
     Mode mode = Mode::ANALYSE;
     bool flipped = false;   // board orientation: UI state, but kept here so a reload keeps it
+
+    // Play mode. `human_white` is the resolved colour (a RANDOM choice is
+    // decided once, when the game starts), so the engine's colour is its
+    // opposite and every later question has one answer.
+    Side_Choice side_choice = Side_Choice::WHITE;
+    Go_Limits limits;
+    bool human_white = true;
+    bool thinking = false;
+    std::string engine_error;
+    Search_Info live;        // the running search, as far as it has got
+    bool live_valid = false;
 
     explicit Session(const std::string& id = "main") : id(id)
     {
@@ -82,10 +131,22 @@ class Session
         return true;
     }
 
+    // Begins a game against the engine from the position the session starts
+    // from, resolving a random colour choice. The board orientation follows the
+    // human's colour, which is what everyone expects of a chess GUI.
+    void start_play()
+    {
+        mode = Mode::PLAY;
+        human_white = side_choice==Side_Choice::RANDOM ? coin_flip() : side_choice==Side_Choice::WHITE;
+        flipped = !human_white;
+        set_start(start_pos, start_halfmove, start_fullmove);
+    }
+
     // Plays a UCI move ("e2e4", "e7e8q", "e1g1" for castling).
     bool play(const std::string& uci, std::string& error)
     {
-        if(game.outcome(scratch)!=Outcome::ONGOING)
+        std::string reason;
+        if(result(reason)!=Outcome::ONGOING)
         {
             error = "the game is over";
             return false;
@@ -96,29 +157,89 @@ class Session
             return false;
         }
         played.push_back(uci);
+        notes.push_back(Move_Note());
         return true;
     }
 
-    // Takes back one move (in free play, either side's).
+    // Records what the engine's search found for the move just played.
+    void annotate_last(const Search_Info& info, bool white_moved)
+    {
+        if(notes.empty())
+        return;
+        Move_Note& note = notes.back();
+        note.from_engine = true;
+        note.depth = info.depth;
+        note.nodes = info.nodes;
+        note.time_ms = info.time_ms;
+        note.score_kind = info.score_kind;
+        // UCI scores are the mover's view; the move list shows white's, as a
+        // printed game does, so a score after a black move flips sign.
+        if(!info.score_kind.empty())
+        {
+            long long value = std::atoll(info.score_value.c_str());
+            note.score_value = std::to_string(white_moved ? value : -value);
+        }
+    }
+
+    // Takes back one move; in Play mode the engine's reply and your own move
+    // both go, so it is your turn again on a position you chose.
     bool undo(std::string& error)
     {
+        if(resigned)
+        {
+            resigned = false;   // taking back a resignation plays the game on
+            return true;
+        }
         if(played.empty())
         {
             error = "nothing to take back";
             return false;
         }
-        std::vector<std::string> keep(played.begin(), played.end()-1);
+        size_t keep = played.size()-1;
+        if(mode==Mode::PLAY)
+        while(keep>0 && game.positions[keep].white_move!=human_white)
+        keep--;
         replay(keep);
         return true;
     }
 
+    // Resigning ends the game for the side to move (in Play mode, the human's
+    // colour whether or not it is their turn).
+    void resign()
+    {
+        resigned = true;
+        resigned_white = mode==Mode::PLAY ? human_white : game.positions.back().white_move;
+    }
+
+    bool engine_to_move() const
+    {
+        std::string reason;
+        return mode==Mode::PLAY && result(reason)==Outcome::ONGOING
+            && game.positions.back().white_move!=human_white;
+    }
+
+    // The game's result, resignation included.
+    Outcome result(std::string& reason) const
+    {
+        if(resigned)
+        {
+            reason = resigned_white ? "white resigns" : "black resigns";
+            return resigned_white ? Outcome::BLACK_WINS : Outcome::WHITE_WINS;
+        }
+        return game.outcome(reason);
+    }
+
     std::string fen() const { return game.fen(); }
+
+    // What the engine is told to think about: the root and the moves from it.
+    const std::string& root_fen() const { return start_fen; }
+    const std::vector<std::string>& moves() const { return played; }
 
     std::string state_json() const
     {
         const BB& pos = game.positions.back();
         std::string reason;
-        Outcome result = game.outcome(reason);
+        Outcome outcome = result(reason);
 
         json::Out o;
         o.obj();
@@ -184,14 +305,40 @@ class Session
 
         o.key("history").arr();
         for(size_t i=0;i<game.san_moves.size();i++)
-        o.obj().key("uci").str(game.uci_moves[i]).key("san").str(game.san_moves[i]).end_obj();
+        {
+            o.obj().key("uci").str(game.uci_moves[i]).key("san").str(game.san_moves[i]);
+            o.key("note");
+            if(i<notes.size() && notes[i].from_engine)
+            write_note(o, notes[i]);
+            else
+            o.null();
+            o.end_obj();
+        }
         o.end_arr();
 
         o.key("outcome").obj();
-        o.key("state").str(result==Outcome::ONGOING ? "ongoing" :
-                           result==Outcome::WHITE_WINS ? "white_wins" :
-                           result==Outcome::BLACK_WINS ? "black_wins" : "draw");
-        o.key("reason").str(result==Outcome::ONGOING ? "" : reason);
+        o.key("state").str(outcome==Outcome::ONGOING ? "ongoing" :
+                           outcome==Outcome::WHITE_WINS ? "white_wins" :
+                           outcome==Outcome::BLACK_WINS ? "black_wins" : "draw");
+        o.key("reason").str(outcome==Outcome::ONGOING ? "" : reason);
+        o.end_obj();
+
+        // Everything the Play panel shows. It is sent in every mode so the page
+        // can draw the settings form before a game has started.
+        o.key("play").obj();
+        o.key("side").str(side_choice_name(side_choice));
+        o.key("humanColor").str(human_white ? "white" : "black");
+        o.key("engineColor").str(human_white ? "black" : "white");
+        o.key("limit").obj().key("kind").str(limits.kind()).key("value").num(limits.value()).end_obj();
+        o.key("thinking").boolean(thinking);
+        o.key("engineTurn").boolean(engine_to_move());
+        o.key("resigned").boolean(resigned);
+        o.key("error").str(engine_error);
+        o.key("search");
+        if(thinking && live_valid)
+        write_search(o, live);
+        else
+        o.null();
         o.end_obj();
 
         o.end_obj();
@@ -202,8 +349,42 @@ class Session
     Game game;
     BB start_pos;
     int start_halfmove = 0, start_fullmove = 1;
+    std::string start_fen;                 // FEN of the position the game starts from
     std::vector<std::string> played;
-    mutable std::string scratch;  // outcome() insists on somewhere to put its reason
+    std::vector<Move_Note> notes;          // one per played move
+    bool resigned = false, resigned_white = false;
+
+    // The score of a finished engine search, from white's view.
+    static void write_note(json::Out& o, const Move_Note& note)
+    {
+        o.obj();
+        o.key("depth").num(note.depth);
+        o.key("nodes").num(note.nodes);
+        o.key("time").num(note.time_ms);
+        o.key("score");
+        if(note.score_kind.empty())
+        o.null();
+        else
+        o.obj().key("kind").str(note.score_kind).key("value").num(std::atoll(note.score_value.c_str())).end_obj();
+        o.end_obj();
+    }
+
+    // The running search. Its score stays the mover's view, which is what a
+    // thinking indicator wants: "+0.40" means the engine likes its position.
+    static void write_search(json::Out& o, const Search_Info& info)
+    {
+        o.obj();
+        o.key("depth").num(info.depth);
+        o.key("nodes").num(info.nodes);
+        o.key("nps").num(info.nps);
+        o.key("time").num(info.time_ms);
+        o.key("score");
+        if(info.score_kind.empty())
+        o.null();
+        else
+        o.obj().key("kind").str(info.score_kind).key("value").num(std::atoll(info.score_value.c_str())).end_obj();
+        o.end_obj();
+    }
 
     void set_start(const BB& pos, int halfmove, int fullmove)
     {
@@ -211,18 +392,29 @@ class Session
         start_halfmove = halfmove;
         start_fullmove = fullmove;
         played.clear();
+        notes.clear();
+        resigned = false;
+        engine_error.clear();
+        live_valid = false;
         game.start(start_pos, start_halfmove, start_fullmove);
+        start_fen = game.fen();
     }
 
     // Game only grows forwards, so taking back a move means replaying the rest.
     // Games are short and all_moves() is cheap next to a search.
-    void replay(const std::vector<std::string>& moves)
+    void replay(size_t keep)
     {
+        std::vector<std::string> line(played.begin(), played.begin()+std::min(keep, played.size()));
+        std::vector<Move_Note> kept(notes.begin(), notes.begin()+std::min(keep, notes.size()));
         game.start(start_pos, start_halfmove, start_fullmove);
         played.clear();
-        for(const std::string& uci : moves)
-        if(game.play(uci))
-        played.push_back(uci);
+        notes.clear();
+        for(size_t i=0;i<line.size();i++)
+        if(game.play(line[i]))
+        {
+            played.push_back(line[i]);
+            notes.push_back(i<kept.size() ? kept[i] : Move_Note());
+        }
     }
 
     // The clock fields of an already-validated FEN (fields 5 and 6); a FEN that

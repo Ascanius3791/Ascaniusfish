@@ -139,8 +139,57 @@ aside {
 
 .history li span {
   display: inline-block;
-  min-width: 78px;
+  min-width: 108px;
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+/* The Play panel: colour, how long the engine thinks, and what it is doing. */
+
+.field { margin-bottom: 10px; }
+
+.label {
+  display: block;
+  margin-bottom: 5px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+#sides button.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+}
+
+select, input[type="number"] {
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+
+input[type="number"] { width: 84px; }
+select:focus, input:focus { outline: none; border-color: var(--accent); }
+
+.engine {
+  margin: 0 0 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.engine.bad { color: var(--bad); }
+
+/* While the engine searches the line is redrawn on every iteration, so a slow
+   pulse is enough to say "still going" without animating the number itself. */
+.engine.thinking { color: var(--accent); animation: pulse 1.4s ease-in-out infinite; }
+
+@keyframes pulse { 50% { opacity: 0.55; } }
+
+/* Eval and depth of an engine move, beside its SAN. */
+.history em {
+  font-style: normal;
+  font-size: 11px;
+  color: var(--muted);
 }
 
 #fen-form { display: flex; flex-direction: column; gap: 8px; }

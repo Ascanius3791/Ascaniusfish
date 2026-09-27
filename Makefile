@@ -83,12 +83,12 @@ tools/gui_match: tools/gui_match.cpp tools/game_rules.hpp tools/uci_engine.hpp $
 tools/make_openings: tools/make_openings.cpp tools/game_rules.hpp $(HEADERS) $(SOURCES)
 	$(CXX) $(CXXFLAGS) -pthread -o $@ tools/make_openings.cpp
 
-# Browser GUI server (issue #14). Plain g++, no Node: gui/web/vendor holds a
-# prebuilt chessground bundle, and the HTTP/SSE server is gui/http_server.hpp.
+# Browser GUI server (issues #14, #15). Plain g++, no Node: gui/web/vendor holds
+# a prebuilt chessground bundle, and the HTTP/SSE server is gui/http_server.hpp.
 GUI_TARGET := gui/ascaniusfish_gui
-GUI_HEADERS := gui/http_server.hpp gui/session.hpp gui/json.hpp
+GUI_HEADERS := gui/http_server.hpp gui/session.hpp gui/json.hpp gui/engine_link.hpp
 
-$(GUI_TARGET): gui/gui_server.cpp $(GUI_HEADERS) tools/game_rules.hpp $(HEADERS) $(SOURCES)
+$(GUI_TARGET): gui/gui_server.cpp $(GUI_HEADERS) tools/game_rules.hpp tools/uci_engine.hpp $(HEADERS) $(SOURCES)
 	$(CXX) $(CXXFLAGS) -pthread -o $@ gui/gui_server.cpp
 
 # Move generation vs known perft counts (PERFT_DEPTH=4 for a quick check)
@@ -114,8 +114,9 @@ gui-match: tools/gui_match
 	@test -n "$(A)" -a -n "$(B)" || (echo "usage: make gui-match A=<white binary> B=<black binary> [MOVETIME=10000]"; exit 2)
 	./tools/gui_match $(A) $(B) movetime=$(MOVETIME)
 
-# The board in the browser: prints a http://localhost:<port> URL and serves it
-gui: $(GUI_TARGET)
+# The board in the browser: prints a http://localhost:<port> URL and serves it.
+# Play mode drives $(UCI_TARGET) over pipes, so that has to exist too.
+gui: $(GUI_TARGET) $(UCI_TARGET)
 	./$(GUI_TARGET) $(if $(GUI_PORT),port=$(GUI_PORT))
 
 # TT discard statistics over self-play games (issue #11). The only build with

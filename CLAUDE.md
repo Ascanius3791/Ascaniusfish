@@ -97,7 +97,16 @@ When editing engine internals, `lib/*.hpp` is the declaration/interface layer an
 - `gui/session.hpp` — a `Session` is one game (a `Game` from `tools/game_rules.hpp`), a `Mode`
   and a board orientation; `Sessions` maps ids to them, so Watch mode can later hold two games.
   `state_json()` is the one thing the page renders from: FEN, `dests` per square, `promotions`,
-  legal moves with SAN, history and `Outcome`.
+  legal moves with SAN, history (with the engine's score/depth per engine move), `Outcome`,
+  and the Play panel's state. Play adds the resolved human colour, the `Go_Limits`, a
+  resignation and whether a search is running.
+- `gui/engine_link.hpp` — Play mode's UCI client: a `Go_Limits` (depth or movetime today,
+  `wtime`/`btime`/`winc`/`binc` fields already there for M4), a `Search_Request`, and an
+  `Engine_Link` that drives one `./ascaniusfish_uci` (`tools/uci_engine.hpp`) on a worker
+  thread. The worker touches no `Session` and no socket: it calls `on_update()`, which only
+  does `Http_Server::wake()` (a self-pipe), and the poll loop's `on_tick` picks the answer up.
+  So a search never blocks a request — page loads, `flip`, `undo` and mode switches are all
+  answered while the engine thinks, and every iteration's depth/score is pushed over SSE.
 - `gui/json.hpp` — a JSON writer that inserts the commas, plus a flat-object parser for request bodies.
 - `gui/web/` — `index.html`/`app.js`/`style.css` are ours; `gui/web/vendor/` holds chessground
   (GPL-3, see its `README.md`), upstream's own prebuilt ESM bundle plus CSS with the board and
@@ -105,15 +114,20 @@ When editing engine internals, `lib/*.hpp` is the declaration/interface layer an
 
 **The server owns the position and the page owns nothing** — reloading the browser is just another
 `GET /api/state`. All chess logic stays in C++; the JS is presentation only. Routes:
-`GET /api/state`, `GET /api/events` (SSE), `POST /api/{move,fen,reset,undo,mode,flip}`, all taking
-`id` (default `main`).
+`GET /api/state`, `GET /api/events` (SSE), `POST /api/{move,fen,reset,undo,resign,play,mode,flip}`,
+all taking `id` (default `main`). `POST /api/play` carries the Play settings (`side` =
+white/black/random, `kind` = depth/movetime, `value`); applying them starts a new game, since a
+colour cannot change mid-game. Anything that changes the position under a running search aborts it
+and drops its `bestmove` by token.
 
 Like every tool that touches movegen, `main()` must run `Zobrist`/`initialize_rand()`/`init_magics()`/
 `init_sliders_attacks()` first — without them sliding attacks are garbage and `in_check()` silently
 misses checks instead of crashing.
 
-The mode selector shows Analyse / Play / Watch, but only free play and FEN setup are wired up;
-attaching the engine over UCI is the next GUI issue.
+The mode selector shows Analyse / Play / Watch. Analyse is free play and FEN setup; Play is a
+full game against `./ascaniusfish_uci` (`engine=` picks a different binary); Watch is still
+selector-only. `main()` ignores `SIGPIPE` — an engine that died must be a message on the page,
+not the end of the server.
 
 ### Python GUI bridge
 `lib/python_communication.hpp` / `src/python_communication.cpp` opens `display_board.py` as a subprocess via `popen` (piping UCI move strings to its stdin) so the C++ engine can drive a tkinter/pygame board with sound effects. Separately, `read_from_last_move()` (`ascaniusfish_2.hpp`) and `display_board.py`'s `write_to_last_move_file()` coordinate human-vs-engine play through the shared file `last_move.txt`, polling every 200ms; the color suffix (`ww`/`bb`) written after the move string is a same-color echo used to signal "no new move yet". Treat `last_move.txt` as ephemeral IPC state, not data to commit meaningfully.

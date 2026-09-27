@@ -5,14 +5,60 @@
 #include "../lib/search_control.hpp"  // steady_now_ns
 #include <algorithm>
 #include <csignal>
+#include <cstdio>
+#include <cstdlib>
 #include <fcntl.h>
 #include <fstream>
 #include <poll.h>
+#include <sstream>
 #include <string>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <vector>
 
 constexpr long long READY_TIMEOUT_MS = 60000;
+
+// One "info depth ..." line of an engine: what the last completed iteration of
+// its search reached. The score is the mover's view, as UCI has it.
+struct Search_Info
+{
+    int depth = 0;
+    long long nodes = 0, nps = 0, time_ms = 0;
+    std::string score_kind, score_value;  // "cp"/"mate", mover's view
+    std::vector<std::string> pv;
+};
+
+inline bool parse_info(const std::string& line, Search_Info& info)
+{
+    if(line.compare(0, 11, "info depth ")!=0)
+    return false;
+    std::istringstream in(line);
+    std::string tok;
+    Search_Info s;
+    while(in >> tok)
+    {
+        if(tok=="depth") in >> s.depth;
+        else if(tok=="nodes") in >> s.nodes;
+        else if(tok=="nps") in >> s.nps;
+        else if(tok=="time") in >> s.time_ms;
+        else if(tok=="score") in >> s.score_kind >> s.score_value;
+        else if(tok=="pv") { while(in >> tok) s.pv.push_back(tok); }
+    }
+    info = s;
+    return true;
+}
+
+// "+0.35" or "+M3"; "" for a search that never reported a score.
+inline std::string score_text(const Search_Info& s)
+{
+    if(s.score_kind.empty())
+    return "";
+    if(s.score_kind=="mate")
+    return std::string(s.score_value[0]=='-' ? "-M" : "+M") + (s.score_value.c_str()+(s.score_value[0]=='-'));
+    char buf[32];
+    std::snprintf(buf, sizeof buf, "%+.2f", std::atoi(s.score_value.c_str())/100.0);
+    return buf;
+}
 
 static long long now_ms()
 {

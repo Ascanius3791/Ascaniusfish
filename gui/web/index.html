@@ -47,7 +47,34 @@
       <button id="new">New game</button>
       <button id="undo">Take back</button>
       <button id="flip">Flip board</button>
+      <button id="resign" hidden>Resign</button>
     </div>
+
+    <section class="panel" id="play-panel" hidden>
+      <h2>Ascaniusfish</h2>
+      <p id="engine" class="engine"></p>
+      <div class="field">
+        <span class="label">You play</span>
+        <div id="sides" class="controls">
+          <button data-side="white">White</button>
+          <button data-side="black">Black</button>
+          <button data-side="random">Random</button>
+        </div>
+      </div>
+      <form id="limit-form" class="field" autocomplete="off">
+        <span class="label">Engine thinks</span>
+        <div class="controls">
+          <select id="limit-kind" aria-label="Search limit">
+            <option value="depth">to depth</option>
+            <option value="movetime">for ms</option>
+          </select>
+          <input id="limit-value" type="number" min="1" step="1" aria-label="Limit value">
+          <button type="submit">Apply</button>
+        </div>
+      </form>
+      <p class="note">Changing either setting starts a new game from the position
+      the current game started from.</p>
+    </section>
 
     <section class="panel">
       <h2>Moves</h2>

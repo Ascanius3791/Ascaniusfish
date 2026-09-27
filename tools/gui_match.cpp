@@ -32,35 +32,6 @@ constexpr int MAX_GAME_PLIES = 600;
     std::exit(2);
 }
 
-// One "info depth ..." line of the engine.
-struct Search_Info
-{
-    int depth = 0;
-    long long nodes = 0, nps = 0, time_ms = 0;
-    std::string score_kind, score_value;  // "cp"/"mate", mover's view
-    std::vector<std::string> pv;
-};
-
-static bool parse_info(const std::string& line, Search_Info& info)
-{
-    if(line.compare(0, 11, "info depth ")!=0)
-    return false;
-    std::istringstream in(line);
-    std::string tok;
-    Search_Info s;
-    while(in >> tok)
-    {
-        if(tok=="depth") in >> s.depth;
-        else if(tok=="nodes") in >> s.nodes;
-        else if(tok=="nps") in >> s.nps;
-        else if(tok=="time") in >> s.time_ms;
-        else if(tok=="score") in >> s.score_kind >> s.score_value;
-        else if(tok=="pv") { while(in >> tok) s.pv.push_back(tok); }
-    }
-    info = s;
-    return true;
-}
-
 // Engine eval in the GUI's encoding: centipawns from white's view, mates near INT_MIN/INT_MAX.
 static long long gui_eval(const Search_Info& s, bool white_to_move)
 {
@@ -97,15 +68,6 @@ static std::string pv_to_san(BB pos, int fullmove, const std::vector<std::string
         pos = children[k];
     }
     return out;
-}
-
-static std::string score_text(const Search_Info& s)
-{
-    if(s.score_kind=="mate")
-    return std::string(s.score_value[0]=='-' ? "-M" : "+M") + (s.score_value.c_str()+(s.score_value[0]=='-'));
-    char buf[32];
-    std::snprintf(buf, sizeof buf, "%+.2f", std::atoi(s.score_value.c_str())/100.0);
-    return buf;
 }
 
 struct Side_Stats
@@ -259,7 +221,7 @@ int main(int argc, char** argv)
         st.depths.push_back(last.depth);
         st.nodes += last.nodes;
         st.time_ms += last.time_ms;
-        std::string score = last.score_kind.empty() ? "" : score_text(last);
+        std::string score = score_text(last);
         std::printf("%5d  %-5s %-8s %5d %12lld %9lld %7.2fs %8s\n", ply, wtm ? "white" : "black",
                     game->san_moves.back().c_str(), last.depth, last.nodes, last.nps, used/1000.0, score.c_str());
         std::fflush(stdout);

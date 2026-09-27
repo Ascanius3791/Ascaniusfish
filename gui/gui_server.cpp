@@ -12,28 +12,166 @@
 //   port=8173      first port to try; the next 20 are tried if it is taken
 //   root=gui/web   directory the static files come from
 //   fen=<fen>      starting position of the "main" session
+//   engine=...     the UCI binary Play mode drives (default ./ascaniusfish_uci)
 //
-// This is the shell the later GUI issues plug into: Play and Watch appear in the
-// mode selector but do nothing yet, and the SSE stream is already how every open
-// page learns about a new position.
+// Play mode makes this a UCI client of ./ascaniusfish_uci (gui/engine_link.hpp):
+// the search runs on a worker thread, so a request never waits for it and the
+// SSE stream carries both the thinking indicator and the engine's move. Watch
+// mode is still selector-only.
 #include "http_server.hpp"
 #include "session.hpp"
 
+#include <csignal>
 #include <cstdio>
+#include <cstdlib>
 #include <fstream>
+#include <memory>
 #include <sstream>
 #include <string>
 
 constexpr int DEFAULT_PORT = 8173;
+constexpr long long MAX_MOVETIME_MS = 600000;
+constexpr int MAX_DEPTH = 40;
 
 static Sessions sessions;
 static Http_Server server;
 static std::string web_root;
+static std::string engine_path = ENGINE_PATH;
+
+// One engine process per session, started on the first search it is asked for,
+// plus the token of the search that session is still waiting for — an aborted
+// search's bestmove arrives all the same and is dropped by its token.
+struct Engine_Slot
+{
+    Engine_Link link;
+    long long awaiting = 0;
+};
+
+static std::map<std::string, std::unique_ptr<Engine_Slot>> engines;
+
+static Engine_Slot& engine_of(const Session& session)
+{
+    std::unique_ptr<Engine_Slot>& slot = engines[session.id];
+    if(!slot)
+    {
+        slot.reset(new Engine_Slot);
+        slot->link.path = engine_path;
+        slot->link.on_update = [] { server.wake(); };   // the only cross-thread call there is
+    }
+    return *slot;
+}
 
 // Pushes the current position to every page watching this session.
 static void broadcast(Session& session)
 {
     server.publish(session.id, "state", session.state_json());
+}
+
+// Stops a running search and forgets its answer, for anything that changes the
+// position under the engine: a new game, a FEN, a take back, a mode switch.
+static void abort_search(Session& session)
+{
+    Engine_Slot& slot = engine_of(session);
+    slot.link.abort();
+    slot.awaiting = 0;
+    session.thinking = false;
+    session.live_valid = false;
+}
+
+// Asks the engine for its move, if it is the engine's turn and it is not
+// already thinking. Returns at once; the answer arrives through on_tick. False
+// when the engine is still finishing an aborted search — on_tick tries again as
+// soon as that one's bestmove turns up.
+static bool maybe_start_search(Session& session)
+{
+    Engine_Slot& slot = engine_of(session);
+    if(session.thinking || !session.engine_to_move() || !session.engine_error.empty())
+    return false;
+    Search_Request request;
+    request.start_fen = session.root_fen();
+    request.moves = session.moves();
+    request.limits = session.limits;
+    request.new_game = session.moves().empty();
+    long long token = slot.link.start_search(request);
+    if(!token)
+    return false;
+    slot.awaiting = token;
+    session.thinking = true;
+    session.live_valid = false;
+    return true;
+}
+
+// Plays whatever the engine answered, and tells the pages. Called from the
+// poll loop, never from the worker thread.
+static void collect_search(Session& session)
+{
+    Engine_Slot& slot = engine_of(session);
+    Search_Info progress;
+    if(session.thinking && slot.link.take_progress(progress))
+    {
+        session.live = progress;
+        session.live_valid = true;
+        broadcast(session);
+    }
+
+    Search_Result result;
+    if(!slot.link.take_result(result))
+    return;
+    if(result.token!=slot.awaiting)
+    return;                          // an aborted search's answer: not wanted any more
+    slot.awaiting = 0;
+    session.thinking = false;
+    session.live_valid = false;
+    if(!result.error.empty())
+    {
+        session.engine_error = result.error;
+        broadcast(session);
+        return;
+    }
+    bool engine_is_white = !session.human_white;
+    std::string error;
+    if(!session.play(result.bestmove, error))
+    session.engine_error = "the engine answered " + result.bestmove + " — " + error;
+    else
+    session.annotate_last(result.info, engine_is_white);
+    broadcast(session);
+}
+
+// Every session with something in flight, once per poll iteration. The ids are
+// copied out first: collect_search() may reach back into `engines`.
+static void collect_all()
+{
+    std::vector<std::string> ids;
+    for(auto& entry : engines)
+    ids.push_back(entry.first);
+    for(const std::string& id : ids)
+    {
+        Session& session = sessions.get(id);
+        collect_search(session);
+        if(maybe_start_search(session))
+        broadcast(session);   // a search that had to wait for the last one
+    }
+}
+
+// The UCI binary Play mode drives: as given, else next to the working directory
+// or beside gui/, so the server plays from the repo root and from gui/ alike.
+static std::string find_engine(const std::string& option)
+{
+    if(!option.empty())
+    return option;
+    std::vector<std::string> candidates(1, std::string(ENGINE_PATH));
+    char exe[4096];
+    ssize_t n = readlink("/proc/self/exe", exe, sizeof exe-1);
+    if(n>0)
+    {
+        std::string dir = std::string(exe, n);
+        dir = dir.substr(0, dir.rfind('/'));
+        candidates.push_back(dir + "/../ascaniusfish_uci");
+    }
+    for(const std::string& path : candidates)
+    if(access(path.c_str(), X_OK)==0)
+    return path;
+    return ENGINE_PATH;
 }
 
 // Where gui/web/ is: next to the binary, else relative to the working
@@ -111,6 +249,13 @@ static Response handle_post(const Request& req)
         auto uci = body.find("uci");
         if(uci==body.end())
         return Response::json(json::error("no move given"), 400);
+        // A move played into a running search would be answered for a position
+        // the engine never saw. The page doesn't offer one, but the API says no.
+        if(session.thinking)
+        return Response::json(json::error("the engine is still thinking"), 409);
+        // In Play mode a move of yours is also the answer to a failed search:
+        // it clears the error, so the engine is asked again.
+        session.engine_error.clear();
         ok = session.play(uci->second, error);
     }
     else if(req.path=="/api/fen")
@@ -119,18 +264,69 @@ static Response handle_post(const Request& req)
         if(fen==body.end())
         return Response::json(json::error("no FEN given"), 400);
         ok = session.set_fen(fen->second, error);
+        if(ok)
+        abort_search(session);   // a refused FEN leaves the engine thinking on
     }
     else if(req.path=="/api/reset")
-    session.reset();
+    {
+        abort_search(session);
+        session.reset();
+    }
     else if(req.path=="/api/undo")
-    ok = session.undo(error);
+    {
+        ok = session.undo(error);
+        if(ok)
+        abort_search(session);   // whatever it was searching is about a position that is gone
+    }
+    else if(req.path=="/api/resign")
+    session.resign();
     else if(req.path=="/api/mode")
     {
         auto mode = body.find("mode");
         Mode parsed;
         if(mode==body.end() || !mode_from_name(mode->second, parsed))
         return Response::json(json::error("mode must be analyse, play or watch"), 400);
+        abort_search(session);
         session.mode = parsed;
+        if(parsed==Mode::PLAY)
+        session.start_play();
+    }
+    else if(req.path=="/api/play")
+    {
+        // The settings of a game against the engine. Applying them starts a new
+        // game: a colour or a search limit cannot sensibly change mid-game.
+        Side_Choice side = session.side_choice;
+        Go_Limits limits = session.limits;
+        auto given = body.find("side");
+        if(given!=body.end() && !side_choice_from_name(given->second, side))
+        return Response::json(json::error("side must be white, black or random"), 400);
+        given = body.find("kind");
+        if(given!=body.end())
+        {
+            auto value = body.find("value");
+            long long n = value==body.end() ? 0 : std::atoll(value->second.c_str());
+            if(given->second=="depth")
+            {
+                if(n<1 || n>MAX_DEPTH)
+                return Response::json(json::error("depth must be 1 to " + std::to_string(MAX_DEPTH)), 400);
+                limits = Go_Limits();
+                limits.depth = (int)n;
+            }
+            else if(given->second=="movetime")
+            {
+                if(n<1 || n>MAX_MOVETIME_MS)
+                return Response::json(json::error("move time must be 1 to " + std::to_string(MAX_MOVETIME_MS) + " ms"), 400);
+                limits = Go_Limits();
+                limits.depth = 0;
+                limits.movetime_ms = n;
+            }
+            else
+            return Response::json(json::error("kind must be depth or movetime"), 400);
+        }
+        abort_search(session);
+        session.side_choice = side;
+        session.limits = limits;
+        session.start_play();
     }
     else if(req.path=="/api/flip")
     session.flipped = !session.flipped;
@@ -139,12 +335,19 @@ static Response handle_post(const Request& req)
 
     if(!ok)
     return Response::json(json::error(error), 400);
+    // A move the human just made, or a fresh game the engine has white in:
+    // ask for its reply before answering, so the page sees "thinking" at once.
+    maybe_start_search(session);
     broadcast(session);                               // every other open page follows along
     return Response::json(session.state_json());
 }
 
 int main(int argc, char** argv)
 {
+    // Writing to a dead engine's pipe must be an error, not the end of the
+    // server: an engine that crashed is something the page gets told about.
+    std::signal(SIGPIPE, SIG_IGN);
+
     // The engine's attack tables. Without them sliding-piece attacks are
     // garbage, which shows up as in_check() missing checks rather than as a
     // crash — every tool that touches movegen starts with these four lines.
@@ -155,7 +358,7 @@ int main(int argc, char** argv)
     init_sliders_attacks(0);  // rook
 
     int port = DEFAULT_PORT;
-    std::string root_option, start_fen;
+    std::string root_option, start_fen, engine_option;
     for(int i=1;i<argc;i++)
     {
         std::string arg = argv[i];
@@ -169,6 +372,7 @@ int main(int argc, char** argv)
         if(key=="port")      port = std::atoi(value.c_str());
         else if(key=="root") root_option = value;
         else if(key=="fen")  start_fen = value;
+        else if(key=="engine") engine_option = value;
         else
         {
             std::fprintf(stderr, "gui: unknown option \"%s\"\n", key.c_str());
@@ -176,6 +380,7 @@ int main(int argc, char** argv)
         }
     }
 
+    engine_path = find_engine(engine_option);
     web_root = find_web_root(root_option);
     if(!std::ifstream(web_root + "/index.html").good())
     {
@@ -206,6 +411,9 @@ int main(int argc, char** argv)
     };
     // A page that just connected has no position yet; send it one.
     server.on_subscribe = [](const std::string& topic) { broadcast(sessions.get(topic)); };
+    // Where a finished search becomes a move on the board: on this thread, so
+    // nothing the worker produced ever touches a socket itself.
+    server.on_tick = collect_all;
 
     if(!server.listen_on(port))
     {
