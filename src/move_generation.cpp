@@ -533,6 +533,7 @@ std::tuple<int,std::vector<Move>> all_moves(const BB* const original, BB* const 
     auto result = std::make_tuple(GI,moves);
     //now check if all the moves have the correct zobrist hash, if not, then there is a bug in the move generation
     int original_GI = GI-moves.size();
+    if constexpr (DEBUG_MODE)
     for(int k=0;k<GI;k++)
     {   
         //std::cout << "Move " << k << " of " << GI-1 << ": ";
