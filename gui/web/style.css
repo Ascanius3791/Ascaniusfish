@@ -36,6 +36,7 @@ body {
 }
 
 header {
+  position: relative;   /* the settings panel hangs under the gear */
   display: flex;
   flex: 0 0 auto;
   align-items: center;
@@ -99,6 +100,45 @@ nav button.active {
 
 #link.live::before { background: #7bb661; }
 #link.down::before { background: var(--bad); }
+
+/* The gear, and the panel it opens. The panel is over the page rather than in
+   it: the layout must not move when it opens, and the board must not be resized
+   by a menu. It is anchored to the header's right edge, which is where the gear
+   is, and has room to grow downwards — later settings go in this box. */
+.gear {
+  padding: 4px 9px;
+  font-size: 16px;
+  line-height: 1.2;
+}
+
+.gear.active { border-color: var(--accent); color: var(--accent); }
+
+.settings {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 6px);
+  right: 20px;
+  width: 280px;
+  max-height: 70vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.45);
+}
+
+.settings[hidden] { display: none; }
+.settings h2 { margin: 0; }
+
+.switch {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.switch input { margin: 3px 0 0; accent-color: var(--accent); }
 
 main {
   display: flex;
@@ -352,9 +392,9 @@ select:focus, input:focus { outline: none; border-color: var(--accent); }
 
 /* A box of its own size, not one that grows with the search: the move list is
    below it and must not walk down the column on every iteration. Four lines
-   and a scrollbar, since a deep line is longer than that. It is only there
-   while the engine is, so an idle panel isn't mostly empty. */
-#analysis-panel:not(.on) .line { display: none; }
+   and a scrollbar, since a deep line is longer than that. It is only there when
+   there is a line to put in it, so an idle panel isn't mostly empty. */
+#analysis-panel:not(.has-line) .line { display: none; }
 
 .line {
   margin: 8px 0 0;

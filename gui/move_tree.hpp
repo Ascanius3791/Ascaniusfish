@@ -28,6 +28,10 @@
 #include <string>
 #include <vector>
 
+// How far a kept line is worth following. A PV longer than this says more about
+// the search than about the move, and every node of a game carries one.
+constexpr int MOVE_NOTE_PV = 24;
+
 // The engine's answer to one move, kept beside it in the tree. #16 fills it in
 // from an analysis search; a PGN comment lands in `comment`.
 struct Move_Note
@@ -36,6 +40,14 @@ struct Move_Note
     int depth = 0;
     std::string score_kind, score_value;   // "cp"/"mate", white's view
     long long nodes = 0, time_ms = 0;
+    // The line the search found, in UCI, from the position the move was played
+    // in — so `pv[0]` is the move itself and the rest is what the engine
+    // expected to follow. It is what the engine-line box shows when you step
+    // back onto this move (#25), which is why it belongs to the move rather
+    // than to a position: the analysis store is keyed by position and a later
+    // analysis of the same one replaces what this search found. Not exported to
+    // PGN, so a loaded game has the comment's score and depth but no line.
+    std::vector<std::string> pv;
 };
 
 // Where the cursor can be asked to go. PREV/NEXT step between the siblings of

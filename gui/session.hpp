@@ -85,12 +85,49 @@ inline bool coin_flip()
     return std::uniform_int_distribution<int>(0, 1)(rng)==1;
 }
 
+// Where the number beside the board came from: a search running now, the search
+// that played the move the cursor is on, or an analysis kept from an earlier
+// visit to this position. NONE is a position nothing has ever looked at, and is
+// what makes the bar show nothing at all rather than 0.00.
+enum class Eval_From { NONE, LIVE, MOVE, STORED };
+
+inline const char* eval_from_name(Eval_From from)
+{
+    return from==Eval_From::LIVE   ? "live"
+         : from==Eval_From::MOVE   ? "move"
+         : from==Eval_From::STORED ? "stored" : "none";
+}
+
+// The engine's opinion of what is on show, as the eval bar and the engine-line
+// box draw it: one score in white's view, the depth behind it, and a line that
+// starts at the position on the board. Unlike everything else a search produces
+// here the score does not flip with the mover — a bar that did would swing a
+// full board width on every move.
+struct Eval_View
+{
+    Eval_From from = Eval_From::NONE;
+    int depth = 0;
+    int live_depth = 0;         // how far a search still behind a kept result has got
+    long long nodes = 0, nps = 0, time_ms = 0;
+    std::string score_kind;     // "cp"/"mate", empty when there is no score
+    long long score_value = 0;
+    std::vector<std::string> uci, san;
+};
+
 class Session
 {
     public:
     std::string id;
     Mode mode = Mode::ANALYSE;
     bool flipped = false;   // board orientation: UI state, but kept here so a reload keeps it
+
+    // What the gear in the header switches: the eval gauge beside the board and
+    // the engine-line box. They live here rather than in the browser for the
+    // same reason the orientation does — the server owns everything the page
+    // draws, so a reload and a second tab on the same game find the same
+    // switches. Nothing is written to disk: they last as long as this process.
+    bool show_eval_bar = true;
+    bool show_engine_line = true;
 
     // Play mode. `human_white` is the resolved colour (a RANDOM choice is
     // decided once, when the game starts), so the engine's colour is its
@@ -390,6 +427,16 @@ class Session
             long long value = std::atoll(info.score_value.c_str());
             note.score_value = std::to_string(white_moved ? value : -value);
         }
+        // The line it found, kept with the move so stepping back onto it shows
+        // what the engine expected to follow (#25). It starts at the position
+        // the move was played in, which is where the display checks it against
+        // the move itself before following it.
+        for(const std::string& move : info.pv)
+        {
+            if((int)note.pv.size()>=MOVE_NOTE_PV)
+            break;
+            note.pv.push_back(move);
+        }
         tree.annotate(note);
     }
 
@@ -476,6 +523,30 @@ class Session
         watch_pause();
         forget_analysis();
         return true;
+    }
+
+    // What the eval bar and the engine-line box draw, whatever mode the board is
+    // in. A search running now is always about the position on the board, so it
+    // wins. Otherwise the mode says what is being looked at: in Analyse it is
+    // the position, and the best result kept for it wins (#24); in Play and
+    // Watch it is the move you are on, and the eval that belongs to a move is
+    // the one the engine chose it on — which is also why stepping back onto a
+    // move no engine played shows nothing rather than the newest number a search
+    // happened to reach.
+    Eval_View eval_view() const
+    {
+        if(analysing() && analysis_valid && !analysis_stored)
+        return analysis_view();
+        if((thinking() || watching()) && live_valid)
+        return live_view();
+        if(mode==Mode::ANALYSE && analysis_valid)
+        return analysis_view();
+        Eval_View move = move_view();
+        if(move.from!=Eval_From::NONE)
+        return move;
+        if(analysis_valid)
+        return analysis_view();
+        return Eval_View();
     }
 
     std::string state_json() const
@@ -600,17 +671,27 @@ class Session
         o.null();
         o.end_obj();
 
-        // Analyse mode's live search. "search" is null unless there is a line
-        // for exactly this position, so the page has nothing stale to draw.
+        // Analyse mode's own search: the toggle and whether it is running. What
+        // it found is not in here — it is in "eval" below, with every other
+        // search's answer.
         o.key("analysis").obj();
         o.key("on").boolean(analysis_on);
         o.key("running").boolean(analysing());
         o.key("error").str(engine_error);
-        o.key("search");
-        if(analysis_valid)
-        write_analysis(o);
-        else
-        o.null();
+        o.end_obj();
+
+        // The one score and line the page draws, in every mode, always for the
+        // position on the board and never for one it has left. "source" says
+        // which search it came from, and "none" that no search has ever been
+        // this way — the page shows nothing at all rather than an equal bar.
+        o.key("eval").obj();
+        write_eval(o);
+        o.end_obj();
+
+        // The gear's switches, so a reload keeps them.
+        o.key("settings").obj();
+        o.key("evalBar").boolean(show_eval_bar);
+        o.key("engineLine").boolean(show_engine_line);
         o.end_obj();
 
         o.end_obj();
@@ -784,48 +865,113 @@ class Session
         analysis = info;
         analysis_valid = true;
         analysis_key = tree.current().key;
-        analysis_uci.clear();
-        analysis_san.clear();
+        line_from_here(info.pv, 0, analysis_uci, analysis_san);
+    }
+
+    // Replays a line of UCI moves from the position on the board, dropping its
+    // first `skip` moves, and gives back each move with its SAN. A tail that is
+    // not legal here — a stale TT line, or a kept line from a transposition —
+    // simply ends the line rather than being shown.
+    void line_from_here(const std::vector<std::string>& pv, size_t skip,
+                        std::vector<std::string>& out_uci, std::vector<std::string>& out_san) const
+    {
+        out_uci.clear();
+        out_san.clear();
         Game walk;
         walk.start(tree.position(), tree.halfmove_clock(), tree.fullmove());
-        for(const std::string& uci : info.pv)
+        for(size_t i=skip;i<pv.size();i++)
         {
-            if(!walk.play(uci))
+            if(!walk.play(pv[i]))
             break;
-            analysis_uci.push_back(uci);
-            analysis_san.push_back(walk.san_moves.back());
+            out_uci.push_back(pv[i]);
+            out_san.push_back(walk.san_moves.back());
         }
     }
 
-    // The analysis, as the page draws it. Unlike every other score here this
-    // one is white's view whichever side is to move: an eval bar that flipped
-    // with the mover would swing a full board width on every move.
-    void write_analysis(json::Out& o) const
+    // The analysis on show, live or kept, with its line already replayed from
+    // this position by show_analysis().
+    Eval_View analysis_view() const
     {
-        o.obj();
-        o.key("depth").num(analysis.depth);
-        o.key("nodes").num(analysis.nodes);
-        o.key("nps").num(analysis.nps);
-        o.key("time").num(analysis.time_ms);
+        Eval_View v;
+        v.from = analysis_stored ? Eval_From::STORED : Eval_From::LIVE;
+        v.depth = analysis.depth;
+        v.live_depth = analysis_live_depth;
+        v.nodes = analysis.nodes;
+        v.nps = analysis.nps;
+        v.time_ms = analysis.time_ms;
+        v.score_kind = analysis.score_kind;
+        v.score_value = white_view(std::atoll(analysis.score_value.c_str()));
+        v.uci = analysis_uci;
+        v.san = analysis_san;
+        return v;
+    }
+
+    // The Play or Watch search running now. It is about the position the cursor
+    // is on — a move played into it is refused and a step away from it aborts it
+    // — so its line starts here, and the score it reaches is the one the move it
+    // ends in will carry.
+    Eval_View live_view() const
+    {
+        Eval_View v;
+        v.from = Eval_From::LIVE;
+        v.depth = live.depth;
+        v.live_depth = live.depth;
+        v.nodes = live.nodes;
+        v.nps = live.nps;
+        v.time_ms = live.time_ms;
+        v.score_kind = live.score_kind;
+        v.score_value = white_view(std::atoll(live.score_value.c_str()));
+        line_from_here(live.pv, 0, v.uci, v.san);
+        return v;
+    }
+
+    // The search that played the move the cursor is on. Its line was found in
+    // the position before the move, so the move itself is its first entry: only
+    // a line that really does begin with this move can be the continuation of
+    // it, and the rest is what the engine expected to follow.
+    Eval_View move_view() const
+    {
+        const Tree_Node& here = tree.current();
+        if(tree.at_root() || !here.note.from_engine)
+        return Eval_View();
+        Eval_View v;
+        v.from = Eval_From::MOVE;
+        v.depth = here.note.depth;
+        v.live_depth = here.note.depth;
+        v.nodes = here.note.nodes;
+        v.time_ms = here.note.time_ms;
+        v.score_kind = here.note.score_kind;
+        v.score_value = std::atoll(here.note.score_value.c_str());   // already white's view
+        if(!here.note.pv.empty() && here.note.pv[0]==here.uci)
+        line_from_here(here.note.pv, 1, v.uci, v.san);
+        return v;
+    }
+
+    // A UCI score is the mover's view; every score the page shows beside the
+    // board is white's.
+    long long white_view(long long value) const
+    {
+        return tree.position().white_move ? value : -value;
+    }
+
+    void write_eval(json::Out& o) const
+    {
+        Eval_View v = eval_view();
+        o.key("source").str(eval_from_name(v.from));
+        o.key("depth").num(v.depth);
+        o.key("liveDepth").num(v.live_depth);
+        o.key("nodes").num(v.nodes);
+        o.key("nps").num(v.nps);
+        o.key("time").num(v.time_ms);
         o.key("score");
-        if(analysis.score_kind.empty())
+        if(v.score_kind.empty())
         o.null();
         else
-        {
-            long long value = std::atoll(analysis.score_value.c_str());
-            o.obj().key("kind").str(analysis.score_kind)
-                   .key("value").num(tree.position().white_move ? value : -value)
-             .end_obj();
-        }
-        // Whether this is a kept result and how far the search behind it has
-        // got: while it is behind, the page marks the depth as not caught up.
-        o.key("stored").boolean(analysis_stored);
-        o.key("liveDepth").num(analysis_live_depth);
+        o.obj().key("kind").str(v.score_kind).key("value").num(v.score_value).end_obj();
         o.key("line").arr();
-        for(size_t i=0;i<analysis_san.size();i++)
-        o.obj().key("uci").str(analysis_uci[i]).key("san").str(analysis_san[i]).end_obj();
+        for(size_t i=0;i<v.san.size();i++)
+        o.obj().key("uci").str(v.uci[i]).key("san").str(v.san[i]).end_obj();
         o.end_arr();
-        o.end_obj();
     }
 
     void set_start(const BB& pos, int halfmove, int fullmove)

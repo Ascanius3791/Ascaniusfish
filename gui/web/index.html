@@ -27,6 +27,25 @@
     <button data-mode="watch">Watch</button>
   </nav>
   <span id="link" title="connection to the engine server"></span>
+  <button id="settings-toggle" class="gear" title="Settings" aria-label="Settings"
+          aria-expanded="false" aria-controls="settings">&#x2699;</button>
+
+  <!-- The home for settings that belong to the page rather than to a mode. The
+       server holds them (they are in every state it sends), so a reload and a
+       second tab on the same game agree about them. -->
+  <section class="panel settings" id="settings" hidden>
+    <h2>Settings</h2>
+    <label class="switch">
+      <input type="checkbox" id="set-evalbar">
+      <span>Eval gauge beside the board</span>
+    </label>
+    <label class="switch">
+      <input type="checkbox" id="set-engine-line">
+      <span>Engine line and search stats</span>
+    </label>
+    <p class="note">Both apply in every mode. They last as long as the server
+    runs and are not saved to a file.</p>
+  </section>
 </header>
 
 <main>
@@ -115,10 +134,14 @@
       your own — the side to move in it plays first.</p>
     </section>
 
+    <!-- What the engine thinks of the position on the board, in every mode: the
+         score, the depth it reached and its best line. The on/off toggle is
+         Analyse mode's own — Play and Watch search because it is someone's
+         move, not because this panel is open. -->
     <section class="panel" id="analysis-panel" hidden>
-      <h2>Analysis</h2>
+      <h2>Engine</h2>
       <div class="analysis-head">
-        <button id="analysis-toggle"></button>
+        <button id="analysis-toggle" hidden></button>
         <span id="analysis-score" class="score"></span>
       </div>
       <p id="analysis-stats" class="note"></p>

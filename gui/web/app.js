@@ -172,8 +172,22 @@ el('analysis-toggle').addEventListener('click', () => {
 });
 
 el('analysis-line').addEventListener('click', event => {
-  const button = event.target.closest('.pv-move');
+  const button = event.target.closest('button.pv-move');
   if (button) command('/api/line', { moves: button.dataset.line });
+});
+
+el('settings-toggle').addEventListener('click', () => openSettings(el('settings').hidden));
+
+el('set-evalbar').addEventListener('change', event =>
+  command('/api/settings', { evalBar: event.target.checked }));
+el('set-engine-line').addEventListener('change', event =>
+  command('/api/settings', { engineLine: event.target.checked }));
+
+// Anywhere else closes it, as a menu does; the gear itself is its own toggle.
+document.addEventListener('pointerdown', event => {
+  if (el('settings').hidden) return;
+  if (event.target.closest('#settings, #settings-toggle')) return;
+  openSettings(false);
 });
 
 el('modes').addEventListener('click', event => {
@@ -218,6 +232,7 @@ const NAV_KEYS = {
 
 document.addEventListener('keydown', event => {
   if (event.key === 'Escape' && pendingPromotion) return finishPromotion('');
+  if (event.key === 'Escape' && !el('settings').hidden) return openSettings(false);
   // A shortcut must never fire into a FEN or a PGN being typed: there Home,
   // End and the arrows are the text field's own.
   if (typingSomewhere() || event.ctrlKey || event.metaKey || event.altKey) return;
@@ -305,7 +320,8 @@ function render(s) {
 
   renderPlayPanel(s);
   renderWatchPanel(s);
-  renderAnalysis(s);
+  renderEngine(s);
+  renderSettings(s);
 
   // Leave a FEN or a PGN the user is in the middle of typing alone.
   if (document.activeElement !== el('fen')) el('fen').value = s.fen;
@@ -400,55 +416,74 @@ function watchLine(s) {
   return `Paused \u2014 ${mover} to move.`;
 }
 
-// ------------------------------------------------------------------- analysis
+// --------------------------------------------------------------------- engine
 
-function renderAnalysis(s) {
+// The eval gauge and the engine-line box, in every mode (#25). Both draw from
+// `eval`, the one score and line the server says belongs to the position on the
+// board — while an engine is thinking that is its search, and after it has moved
+// it is what the move you are looking at was played on. `source` is 'none' for a
+// position no search has ever been at, and then the bar and the box say nothing
+// at all: an equal bar would be a claim, and a stale one a lie.
+function renderEngine(s) {
   const analysing = s.mode === 'analyse';
   const a = s.analysis;
-  const search = a.search;
+  const ev = s.eval;
+  const known = ev.source !== 'none';
+  const showLine = s.settings.engineLine;
   const panel = el('analysis-panel');
 
-  panel.hidden = !analysing;
-  el('evalbar').hidden = !analysing;
-  if (!analysing) return;
-
-  panel.classList.toggle('running', a.running && !a.error);
-  panel.classList.toggle('on', a.on);
-  el('analysis-toggle').textContent = a.on ? 'Turn engine off' : 'Turn engine on';
-  el('analysis-score').textContent = search ? scoreText(search.score) : '';
-
-  el('analysis-stats').textContent = analysisStats(s);
-  el('analysis-stats').classList.toggle('bad', !!a.error);
-
-  // The bar turns over with the board, and says nothing at all until there is
-  // a score for this very position — a stale eval would be worse than none.
   const bar = el('evalbar');
+  bar.hidden = !s.settings.evalBar;
   bar.classList.toggle('flipped', s.orientation === 'black');
-  bar.classList.toggle('idle', !search || !search.score);
+  bar.classList.toggle('idle', !ev.score);
   bar.querySelector('.evalbar-fill').style.height =
-    `${(search && search.score ? whiteShare(search.score) : 0.5) * 100}%`;
+    `${(ev.score ? whiteShare(ev.score) : 0.5) * 100}%`;
 
-  renderLine(s, search);
+  // Analyse mode's panel also holds the engine's on/off switch, so it stays
+  // whatever the gear says. In Play and Watch the panel is only the line box, so
+  // with that switch off there is nothing for it to hold and the two modes look
+  // exactly as they did before this existed.
+  panel.hidden = !analysing && !showLine;
+  if (panel.hidden) return;
+
+  panel.classList.toggle('running', (a.running || s.play.thinking || s.watch.thinking) && !a.error);
+  panel.classList.toggle('has-line', showLine && (known || a.running));
+  el('analysis-toggle').hidden = !analysing;
+  el('analysis-toggle').textContent = a.on ? 'Turn engine off' : 'Turn engine on';
+  el('analysis-score').textContent = s.settings.evalBar && known ? scoreText(ev.score) : '';
+
+  // With the line switched off the stats go too, and so does the height they
+  // hold open: an Analyse panel that is only its on/off button should look like
+  // one, not like a box with something missing from it.
+  el('analysis-stats').hidden = !showLine;
+  el('analysis-stats').textContent = showLine ? engineStats(s) : '';
+  el('analysis-stats').classList.toggle('bad', showLine && analysing && !!a.error);
+
+  renderLine(s, showLine ? ev : null, analysing);
 }
 
-function analysisStats(s) {
+function engineStats(s) {
   const a = s.analysis;
-  const search = a.search;
-  if (a.error) return `Engine: ${a.error}`;
-  if (!search) {
-    if (!a.on) return 'The engine is off.';
+  const ev = s.eval;
+  // Every mode shows the engine's error in its own panel; here it belongs to the
+  // analysis, which has no other line to say it in.
+  if (a.error && s.mode === 'analyse') return `Engine: ${a.error}`;
+  if (ev.source === 'none') {
     if (s.outcome.state !== 'ongoing') return 'The game is over — nothing to search.';
-    return 'Starting the search\u2026';
+    if (s.mode !== 'analyse') return 'No search of this position yet.';
+    return a.on ? 'Starting the search\u2026' : 'The engine is off.';
   }
-  // A kept result from an earlier visit to this position (search.stored) says so
-  // beside its depth, and while the search running now is behind it, how far it
-  // has got. The marker goes when the live search reaches that depth.
-  const behind = a.running && search.liveDepth < search.depth;
-  const depth = search.stored
-    ? `depth ${search.depth} saved` + (behind ? `, search at ${search.liveDepth}` : '')
-    : `depth ${search.depth}`;
-  const nps = search.nps ? `${Math.round(search.nps / 1000).toLocaleString()} knps` : '';
-  return [depth, `${search.nodes.toLocaleString()} nodes`, nps]
+  // Where the number came from: the search running now, one kept from an earlier
+  // visit to this position (#24), or the search that played the move the cursor
+  // is on. A kept result deeper than the search running behind it says how far
+  // that one has got, and the marker goes when it catches up.
+  const behind = ev.source === 'stored' && a.running && ev.liveDepth < ev.depth;
+  const depth = ev.source === 'stored'
+    ? `depth ${ev.depth} saved` + (behind ? `, search at ${ev.liveDepth}` : '')
+    : ev.source === 'move' ? `depth ${ev.depth} for this move`
+    : `depth ${ev.depth}`;
+  const nps = ev.nps ? `${Math.round(ev.nps / 1000).toLocaleString()} knps` : '';
+  return [depth, `${ev.nodes.toLocaleString()} nodes`, nps]
     .filter(Boolean).join(' \u00b7 ');
 }
 
@@ -461,31 +496,50 @@ function whiteShare(score) {
   return Math.min(0.97, Math.max(0.03, 1 / (1 + Math.exp(-score.value / 400))));
 }
 
-// The best line, numbered from the position on the board. Each move is a
-// button: clicking it plays the line up to and including that move.
-function renderLine(s, search) {
+// The best line, numbered from the position on the board. In Analyse mode each
+// move is a button: clicking it plays the line up to and including that move. In
+// Play and Watch it is a line to read, not one to walk into — the engine is in
+// the middle of a game there, and clicking a move would open a side line in it.
+function renderLine(s, ev, clickable) {
   const box = el('analysis-line');
   box.replaceChildren();
-  if (!search) return;
+  if (!ev) return;
   let fullmove = s.fullmove;
   let white = s.turn === 'white';
-  search.line.forEach((move, ply) => {
+  ev.line.forEach((move, ply) => {
     if (white || ply === 0) {
       const number = document.createElement('span');
       number.className = 'move-number';
       number.textContent = white ? `${fullmove}.` : `${fullmove}\u2026`;
       box.append(number, ' ');
     }
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'pv-move';
-    button.dataset.line = search.line.slice(0, ply + 1).map(m => m.uci).join(' ');
-    button.textContent = move.san;
-    button.title = move.uci;
-    box.append(button, ' ');
+    const chip = document.createElement(clickable ? 'button' : 'span');
+    if (clickable) {
+      chip.type = 'button';
+      chip.dataset.line = ev.line.slice(0, ply + 1).map(m => m.uci).join(' ');
+    }
+    chip.className = 'pv-move';
+    chip.textContent = move.san;
+    chip.title = move.uci;
+    box.append(chip, ' ');
     if (!white) fullmove++;
     white = !white;
   });
+}
+
+// ------------------------------------------------------------------- settings
+
+// The gear's switches. The server holds them, so this only draws them; a second
+// tab on the same game sees a switch flipped here as it sees a move.
+function renderSettings(s) {
+  el('set-evalbar').checked = s.settings.evalBar;
+  el('set-engine-line').checked = s.settings.engineLine;
+}
+
+function openSettings(open) {
+  el('settings').hidden = !open;
+  el('settings-toggle').setAttribute('aria-expanded', open ? 'true' : 'false');
+  el('settings-toggle').classList.toggle('active', open);
 }
 
 function destsMap(dests) {

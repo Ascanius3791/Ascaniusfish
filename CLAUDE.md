@@ -106,7 +106,11 @@ When editing engine internals, `lib/*.hpp` is the declaration/interface layer an
   and comparing, so import and export cannot drift apart; it handles nested variations, NAGs,
   `{}`/`;` comments and a `FEN`/`SetUp` tag. An engine move's `Move_Note` is exported as the
   comment `{+0.35/7 10.00s}`, the same shape `tools/gui_match.cpp` writes, so a downloaded game
-  keeps what the searches found; a comment read back is collapsed to one line, or the newline
+  keeps what the searches found; the note also keeps that search's PV (`Move_Note::pv`, capped
+  at `MOVE_NOTE_PV`, in UCI **from the position the move was played in**, so `pv[0]` is the move
+  itself) — that is what the engine-line box shows when you step back onto the move, and it
+  belongs to the move rather than to a position because the `Analysis_Store` is keyed by
+  position and a later analysis of the same one replaces it. It is not exported to PGN; a comment read back is collapsed to one line, or the newline
   the exporter's wrapping put inside it would re-wrap the next export differently. `diagnostics/move_tree_pgn_test.cpp` covers all of
   it, including a Lichess-shaped study PGN.
 - `gui/session.hpp` — a `Session` is one game (a `Move_Tree`), a `Mode` and a board orientation;
@@ -119,9 +123,19 @@ When editing engine internals, `lib/*.hpp` is the declaration/interface layer an
   `can{Back,Forward,Prev,Next,Promote}` flags, the game as PGN, `Outcome`, and the Play, Watch
   and Analysis panels' state. Play adds the resolved human colour, the `Go_Limits`,
   a resignation and whether a search is running; Watch adds a `Go_Limits` per side, whether the
-  self-play game is running or stepping, and which side is thinking; Analyse adds the toggle and
-  the running search's depth/nodes/nps, its score **in white's view** (`uci_score()` is the
-  mover's, so `write_analysis()` negates it for black) and its PV in both UCI and SAN. A session
+  self-play game is running or stepping, and which side is thinking; Analyse adds only the
+  toggle, whether a search is running and the engine's error. What a search *found* is not in
+  any of the three: `eval` is the one score and line the page draws, in every mode, and
+  `eval_view()` picks it (#25). A search running now wins, since it is about the position on the
+  board; otherwise the mode says what is being looked at — in Analyse the position, so the best
+  result kept for it wins, and in Play and Watch the move you are on, so the search that chose it
+  does. `source` is `live`/`stored`/`move`, or `none` for a position nothing has searched, which
+  is what makes the bar show nothing rather than 0.00. The score is **in white's view** whichever
+  side moved (a bar that flipped with the mover would swing a board width every move), unlike the
+  mover's-view score in the Play and Watch panels' thinking indicator. `settings` carries the
+  gear's two switches (the eval gauge, the engine-line box); they live in the `Session` like the
+  board orientation, so a reload and a second tab agree, and they are never written to a file.
+  `diagnostics/eval_view_test.cpp` covers the choosing. A session
   runs at most one search — in Watch mode the two sides think in turn, never together — and
   `Search_Kind` says how to read its answer: a `PLAY` or `WATCH` search ends in a move on the
   board, an `ANALYSIS` search only in a line to look at. Every position change
@@ -169,13 +183,15 @@ When editing engine internals, `lib/*.hpp` is the declaration/interface layer an
 **The server owns the position and the page owns nothing** — reloading the browser is just another
 `GET /api/state`. All chess logic stays in C++; the JS is presentation only. Routes:
 `GET /api/state`, `GET /api/events` (SSE),
-`POST /api/{move,fen,reset,undo,resign,play,watch,mode,flip,analyse,line}`, all taking `id`
-(default `main`). `POST /api/play` carries the Play settings (`side` = white/black/random,
+`POST /api/{move,fen,reset,undo,resign,play,watch,mode,flip,analyse,line,settings}`, all taking
+`id` (default `main`). `POST /api/play` carries the Play settings (`side` = white/black/random,
 `kind` = depth/movetime, `value`); applying them starts a new game, since a colour cannot change
 mid-game. `POST /api/watch` carries both a side's setting (`side` = white/black plus
 `kind`/`value`, which applies from the next move and does *not* stop the game) and a run control
 (`action` = start/pause/step). Pause is deliberately **not** an abort: the move being thought
 about is finished and played, which is what "after the current move" means.
+`POST /api/settings` carries the gear's switches (`evalBar`, `engineLine`), each applied only
+when the body names it, so one can be flipped without saying anything about the other.
 `POST /api/analyse` is the engine on/off toggle; `POST /api/line` walks the board along a
 space-separated list of UCI `moves` (all of them or none), which is what clicking a move in the
 analysis line does — the page sends the moves it drew rather than an index, so a deeper iteration
@@ -198,11 +214,16 @@ Like every tool that touches movegen, `main()` must run `Zobrist`/`initialize_ra
 misses checks instead of crashing.
 
 The mode selector shows Analyse / Play / Watch. Analyse is free play, FEN setup and a live
-`go infinite` analysis of whatever is on the board — an eval bar beside the board, the score,
-depth/nodes/nps and the best line in SAN; Play is a full game against `./ascaniusfish_uci`
-(`engine=` picks a different binary); Watch is Ascaniusfish against itself, two processes with a
-depth or movetime each, started/paused/stepped from the panel and reviewable in the move tree
-afterwards with every move's eval and reached depth. It plays only from the **end of a line**,
+`go infinite` analysis of whatever is on the board; Play is a full game against
+`./ascaniusfish_uci` (`engine=` picks a different binary); Watch is Ascaniusfish against itself,
+two processes with a depth or movetime each, started/paused/stepped from the panel and reviewable
+in the move tree afterwards with every move's eval and reached depth. The eval bar beside the
+board and the Engine panel (the score, depth/nodes/nps and the best line in SAN) are the same two
+things in **all three** modes (#25), drawn from `eval`; the gear in the header opens the settings
+panel, whose two switches turn either of them off everywhere at once, and with both off Play and
+Watch look exactly as they did before. The Engine panel also holds Analyse's on/off button, so
+there it stays whatever the switches say. The line's moves are buttons only in Analyse, where
+clicking one walks the board into it — in a game being played that would open a side line. It plays only from the **end of a line**,
 like Play, so stepping back into the game pauses it. The analysis toggle starts
 **off**: a `go infinite` search holds a core for as long as it runs, and this repo deliberately
 leaves room for several engine processes at once. `main()` ignores `SIGPIPE` — an engine that died must be a message on the page,

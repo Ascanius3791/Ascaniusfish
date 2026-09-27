@@ -36,6 +36,7 @@ diagnostics/gui_stale_state_probe
 diagnostics/legal_movegen_perft_compare
 diagnostics/move_tree_pgn_test
 diagnostics/analysis_store_test
+diagnostics/eval_view_test
 diagnostics/minimax_tactical_probe
 diagnostics/one_move_fast_stress_test
 diagnostics/random_position_stress_test

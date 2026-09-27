@@ -595,6 +595,25 @@ static Response handle_post(const Request& req)
     }
     else if(req.path=="/api/flip")
     session.flipped = !session.flipped;
+    else if(req.path=="/api/settings")
+    {
+        // The gear's switches. Each is only applied when the body carries it, so
+        // one switch can be flipped without saying anything about the other.
+        static const struct { const char* name; bool Session::*field; } switches[] =
+        {
+            { "evalBar",    &Session::show_eval_bar    },
+            { "engineLine", &Session::show_engine_line },
+        };
+        for(const auto& option : switches)
+        {
+            auto given = body.find(option.name);
+            if(given==body.end())
+            continue;
+            if(given->second!="true" && given->second!="false")
+            return Response::json(json::error(std::string(option.name) + " must be true or false"), 400);
+            session.*option.field = given->second=="true";
+        }
+    }
     else
     return Response::text("not found: " + req.path, 404);
 
