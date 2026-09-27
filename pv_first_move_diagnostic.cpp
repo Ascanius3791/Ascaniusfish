@@ -6,6 +6,7 @@
 #include <iomanip>
 #include <iostream>
 #include <string>
+#include <vector>
 
 static int move_index(const BB* position, const Move& target, BB* boards)
 {
@@ -44,6 +45,12 @@ int main(int argc, char** argv)
     depth=1;
 
     initialize_rand();
+    // Populates the static Zobrist key tables. Without this every key is 0, so every
+    // position hashes to 0, the transposition table collapses into one bucket and any
+    // probe matches the first entry stored - one arbitrary position's result is handed
+    // out for all of them. Matching is by hash alone now, so omitting this silently
+    // corrupts results instead of merely slowing things down.
+    Zobrist zobrist_keys;
     init_magics();
     init_sliders_attacks(1);
     init_sliders_attacks(0);
@@ -54,18 +61,28 @@ int main(int argc, char** argv)
     BB position;
     initialize_starting_position(&position);
 
-    // First pass populates the table. The second pass tests its stored root PVs.
+    // First pass populates the table, recording the exact position reached
+    // before each move. History-heuristic move ordering (see butterfly
+    // history in ascaniusfish_2.hpp) carries state across searches, so a
+    // second replay of the game from scratch is not guaranteed to retrace
+    // the same trajectory - probing the table against these saved snapshots
+    // instead of a re-simulated game keeps this diagnostic correct regardless.
+    std::vector<BB> position_history;
     for(int ply=0; ply<max_halfmoves && result(&position)==0; ++ply)
-    engine.engine_move(&position, workspace, false, depth, WEIGHTS_OG, table);
+    {
+        position_history.push_back(position);
+        engine.engine_move(&position, workspace, false, depth, WEIGHTS_OG, table);
+    }
 
-    initialize_starting_position(&position);
     int eligible=0;
     int matches=0;
     int best_by_eval=0;
     int mismatches=0;
     int exact_entries=0;
-    for(int ply=0; ply<max_halfmoves && result(&position)==0; ++ply)
+    for(size_t history_index=0; history_index<position_history.size(); ++history_index)
     {
+        int ply = static_cast<int>(history_index);
+        BB position = position_history[history_index];
         TT_readout readout = table->is_retrivable_eval(&position, depth);
         if(readout.is_found && readout.pv_line.current_lenght>0)
         {
@@ -85,11 +102,18 @@ int main(int argc, char** argv)
             if(pv_is_legal)
             {
             is_match = are_equal(&legal_boards[pv_index], &uncached_position);
-            int pv_depth=depth;
+            // engine_move() searches the root at `depth`, so it gives this child
+            // depth-1. Searching it at `depth` compared scores from two different
+            // depths and read ~0% no matter how healthy the engine was.
+            int pv_depth=depth-1;
             if(captures_more_valuable_piece(&position, legal_boards+pv_index,
                                             WEIGHTS_OG))
             ++pv_depth;
-            PV_Line pv_result = minimax(legal_boards+pv_index, legal_boards,
+            // wfh must be scratch memory disjoint from `original` (legal_boards+pv_index) -
+            // passing legal_boards itself here aliased the PV candidate's own board with
+            // the recursion's write buffer and corrupted the heap once this code path
+            // actually ran (previously masked entirely by the eligible==0 bug above).
+            PV_Line pv_result = minimax(legal_boards+pv_index, workspace,
                                          pv_depth, WEIGHTS_OG, INT_MIN,
                                          INT_MAX, nullptr);
             int pv_eval=pv_result.eval;
@@ -113,9 +137,6 @@ int main(int argc, char** argv)
                       << std::endl;
             delete[] legal_boards;
         }
-
-        engine.engine_move(&position, workspace, false, depth, WEIGHTS_OG,
-                   table);
     }
 
     const double percentage = eligible==0 ? 0.0 : 100.0*matches/eligible;
