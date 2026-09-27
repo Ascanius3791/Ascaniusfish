@@ -3,6 +3,10 @@
    squares and the pieces; nothing in here belongs to it. */
 
 :root {
+  /* The board is drawn from CSS background colours and `data:` SVGs, which
+     a browser dark mode rewrites. Declaring the scheme keeps it out. */
+  color-scheme: dark;
+
   --bg: #1b1a17;
   --panel: #252420;
   --line: #3a3833;

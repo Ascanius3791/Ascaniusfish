@@ -4,6 +4,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- This page is already dark (style.css), so say so before the stylesheets
+     load. A browser that thinks it is looking at a light page darkens it
+     itself, and that turns the black pieces white: see vendor/README.md.
+     `color-scheme` stops Chrome/Edge auto dark mode, the lock stops
+     Dark Reader, which ignores `color-scheme`. -->
+<meta name="color-scheme" content="dark">
+<meta name="darkreader-lock">
 <title>Ascaniusfish</title>
 <link rel="stylesheet" href="vendor/chessground.base.css">
 <link rel="stylesheet" href="vendor/chessground.brown.css">
