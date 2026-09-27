@@ -23,6 +23,12 @@ static void expect(bool condition, const std::string& message)
 static void setup()
 {
     initialize_rand();
+    // Populates the static Zobrist key tables. Without this every key is 0, so every
+    // position hashes to 0, the transposition table collapses into one bucket and any
+    // probe matches the first entry stored - one arbitrary position's result is handed
+    // out for all of them. Matching is by hash alone now, so omitting this silently
+    // corrupts results instead of merely slowing things down.
+    Zobrist zobrist_keys;
     init_magics();
     init_sliders_attacks(1);
     init_sliders_attacks(0);
@@ -50,9 +56,8 @@ int main()
         FEN_to_BB("4k3/8/8/8/8/8/8/4K3 w - - 0 1", &parent);
         castling_rights(&parent);
 
-        lookup_table* table = new lookup_table; // ~580MB (TT_EXPONENT_FOR_SIZE) - must be heap-allocated
+        lookup_table* table = new lookup_table; // ~46MB (TT_EXPONENT_FOR_SIZE) - must be heap-allocated
         TT_entry entry;
-        entry.board = parent;
         entry.zobrist_hash = parent.zobrist_hash;
         entry.initialized = true;
         entry.pv_line = PV_Line(12345);

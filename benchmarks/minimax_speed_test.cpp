@@ -227,6 +227,12 @@ int main(int argc, char** argv)
         max_halfmoves = 1;
 
     initialize_rand();
+    // Populates the static Zobrist key tables. Without this every key is 0, so every
+    // position hashes to 0, the transposition table collapses into one bucket and any
+    // probe matches the first entry stored - one arbitrary position's result is handed
+    // out for all of them. Matching is by hash alone now, so omitting this silently
+    // corrupts results instead of merely slowing things down.
+    Zobrist zobrist_keys;
     init_magics();
     init_sliders_attacks(1);
     init_sliders_attacks(0);

@@ -100,6 +100,15 @@ static void test_cached_engine_move(const BB& position, int depth)
 int main()
 {
     initialize_rand();
+    // Populates the static Zobrist key tables. Without this every key is 0, so
+    // compute_Zobrist_Hash() returns 0 for EVERY position, the whole table
+    // collapses into bucket 0 and any probe matches the first entry stored -
+    // i.e. the transposition table hands out one arbitrary position's result for
+    // all of them. This used to be invisible here: TT_entry carried a full BB and
+    // is_retrivable_eval() confirmed the hit with are_equal(), which rejected the
+    // mismatches the zero hashes let through. Now that matching is by hash alone,
+    // forgetting this silently corrupts the search instead of merely slowing it.
+    Zobrist zobrist_keys;
     init_magics();
     init_sliders_attacks(1);
     init_sliders_attacks(0);
@@ -107,6 +116,7 @@ int main()
     BB position;
     FEN_to_BB("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", &position);
     castling_rights(&position);
+    position.zobrist_hash = Zobrist::compute_Zobrist_Hash(position);
 
     test_cached_engine_move(position, 3);
     std::cout << "lookup_consistency_test passed" << std::endl;

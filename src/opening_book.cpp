@@ -157,7 +157,6 @@ bool load_opening_book_from_pgn(
     int total_positions_inserted = 0;
     std::string line;
     std::string current_game_moves;
-    bool in_moves_section = false;
     
     while (std::getline(pgn_file, line)) {
         // Skip empty lines
@@ -198,7 +197,7 @@ bool load_opening_book_from_pgn(
                     
                             // Insert into lookup table
                             TT_entry entry;
-                            entry.board = result_pos;
+                            entry.zobrist_hash = result_pos.zobrist_hash;
                             entry.pv_line = PV_Line(eval_value);
                             entry.pv_line.bound_type = 0; // exact
                             entry.pv_line.depth = target_depth;
@@ -215,7 +214,7 @@ bool load_opening_book_from_pgn(
                                 BB result_pos = moves_array[0];
                                 int eval_value = basic_eval(&result_pos);
                                 TT_entry entry;
-                                entry.board = result_pos;
+                                entry.zobrist_hash = result_pos.zobrist_hash;
                                 entry.pv_line = PV_Line(eval_value);
                                 entry.pv_line.depth = target_depth;
                                 entry.pv_line.bound_type = 0; // exact
@@ -233,7 +232,6 @@ bool load_opening_book_from_pgn(
             }
             
             current_game_moves.clear();
-            in_moves_section = false;
         }
         
         // Skip header lines
@@ -242,7 +240,6 @@ bool load_opening_book_from_pgn(
         }
         
         // This is part of the moves section
-        in_moves_section = true;
         current_game_moves += line + " ";
     }
     
@@ -271,7 +268,7 @@ bool load_opening_book_from_pgn(
                     BB result_pos = moves_array[move_idx];
                     int eval_value = basic_eval(&result_pos);
                     TT_entry entry;
-                    entry.board = result_pos;
+                    entry.zobrist_hash = result_pos.zobrist_hash;
                     entry.pv_line = PV_Line(eval_value);
                     entry.pv_line.depth = target_depth;
                     entry.pv_line.bound_type = 0; // exact
@@ -284,7 +281,7 @@ bool load_opening_book_from_pgn(
                         BB result_pos = moves_array[0];
                         int eval_value = basic_eval(&result_pos);
                         TT_entry entry;
-                        entry.board = result_pos;
+                        entry.zobrist_hash = result_pos.zobrist_hash;
                         entry.pv_line = PV_Line(eval_value);
                         entry.pv_line.depth = target_depth;
                         entry.pv_line.bound_type = 0; // exact
@@ -560,7 +557,7 @@ bool load_opening_book_from_lichess_json(
             
             // Insert into lookup table with INT_MAX depth
             TT_entry tt_entry;
-            tt_entry.board = position;
+            tt_entry.zobrist_hash = position.zobrist_hash;
             tt_entry.is_from_opening_book = true;
             tt_entry.pv_line = PV_Line(entry.cp_eval);
             tt_entry.pv_line.depth = INT_MAX;
@@ -668,7 +665,7 @@ bool load_and_save_full_opening_book(
             // Insert into lookup table
             TT_entry tt_entry;
             tt_entry.is_from_opening_book = true;
-            tt_entry.board = position;
+            tt_entry.zobrist_hash = position.zobrist_hash;
             tt_entry.pv_line = PV_Line(cp_eval);
             tt_entry.pv_line.depth = INT_MAX;
             tt_entry.pv_line.bound_type = 0; // exact

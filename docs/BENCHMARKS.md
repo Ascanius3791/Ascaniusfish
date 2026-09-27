@@ -68,8 +68,13 @@ Answers "is B stronger than A, and by how much?"
 
 - A and B are git refs (built like in `speed-compare`, `.` = working tree)
   or paths to UCI binaries. A ref is built as `ascaniusfish_uci` with
-  `-DTT_EXPONENT=11` (~36 MB TT instead of ~580 MB) so that many engines fit
-  in memory. Refs older than 55c44ce ignore that flag and need ~580 MB each.
+  `-DTT_EXPONENT=11` so that many engines fit in memory. With the current
+  `PV_CHUNK` `PV_Line` layout (`TT_entry` ~184 B) that is a ~2.9 MB TT instead of
+  the default ~46 MB. Refs older than 55c44ce ignore the flag entirely, and any
+  ref still on the flat `Move[MAX_PV_Lenght]` `PV_Line` (~2.2 KB per entry) needs
+  ~580 MB each - so far that is every commit, the smaller layout being working-tree
+  only. Do not raise `TT_EXPONENT` to close that gap; see the sizing note in
+  `lib/Settings.hpp`.
 - Every position of `tools/openings.epd` is played twice with colours
   swapped (a game pair): 100 openings, 200 games.
 - `DEPTH=n` (default 3) fixes the search depth. `TC=10+0.1` plays with a

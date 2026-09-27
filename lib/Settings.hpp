@@ -37,16 +37,23 @@ constexpr int MAX_PV_Lenght = 128; //maximum principlad variation lenght(cheap)
 
 //==================================================================================================================================
 //lookup table sizes (see lib/lookup_table.hpp) - exponent_for_size is log2(number
-//of buckets), bucket_size is entries per bucket. TT_entry is ~2.2KB (dominated by
-//PV_Line's Move[MAX_PV_Lenght] array), so total size is roughly
-//(1<<exponent_for_size) * bucket_size * 2.2KB - keep that in mind before raising
-//either exponent.
+//of buckets), bucket_size is entries per bucket. TT_entry is ~184 bytes (PV_Line
+//keeps PV_CHUNK moves inline instead of a flat Move[MAX_PV_Lenght]), so total size
+//is roughly (1<<exponent_for_size) * bucket_size * 184B.
+//
+//DO NOT RAISE EITHER EXPONENT just because there is memory to spare. These tables
+//are deliberately small: a small footprint is what lets several engine processes
+//run at the same time - debugging a binary next to a probe/benchmark, and two
+//agents working in this repo who may each want to play a game. That parallelism is
+//worth more here than the marginal search gain from a bigger table, so raising
+//these is Ascanius' call and not a free win. Going SMALLER is fine and already
+//supported: -DTT_EXPONENT=n (tools/match builds its engines with tt=11).
 #ifndef TT_EXPONENT
 #define TT_EXPONENT 15
 #endif
-constexpr int TT_EXPONENT_FOR_SIZE = TT_EXPONENT;   //regular per-game transposition table: ~580MB (-DTT_EXPONENT=n overrides, e.g. for parallel match engines)
+constexpr int TT_EXPONENT_FOR_SIZE = TT_EXPONENT;   //regular per-game transposition table: 262144 entries, ~46MB (-DTT_EXPONENT=n overrides it downwards, e.g. for parallel match engines)
 constexpr int TT_BUCKET_SIZE = 8;
-constexpr int PTT_EXPONENT_FOR_SIZE = 16;  //persistent transposition table: ~1.16GB
+constexpr int PTT_EXPONENT_FOR_SIZE = 16;  //persistent transposition table: 524288 entries, ~92MB
 constexpr int PTT_BUCKET_SIZE = 8;
 
 //==================================================================================================================================

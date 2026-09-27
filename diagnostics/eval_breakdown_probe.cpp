@@ -57,8 +57,8 @@ int main() {
     WEIGHTS W = WEIGHTS_OG;
     int mat = material_eval(&pos, W);
     int pt = piecetable(&pos, W);
-    int ks_w = king_safety_of_colour(pos.Board, true, W);
-    int ks_b = king_safety_of_colour(pos.Board, false, W);
+    int ks_w = king_safety_of_colour(&pos, true, W);
+    int ks_b = king_safety_of_colour(&pos, false, W);
     int posi = positional_eval(&pos, W);
     int pawn_w = pawn_struckture_eval_of_colour(&pos, true, W);
     int pawn_b = pawn_struckture_eval_of_colour(&pos, false, W);

@@ -49,7 +49,7 @@ void TimeManager::iteration_done(int depth, const PV_Line& line, long long elaps
     return;
     len[depth] = std::min(line.current_lenght, TM_PV_LEN);
     for(int k=0; k<len[depth]; k++)
-    pv[depth][k] = line.moves[k];
+    pv[depth][k] = line.at(k);
     finished_at[depth] = elapsed_ms;
     deepest = depth;
     lam = TM_PV_STABILITY ? pv_instability(pv, len, deepest) : 1;

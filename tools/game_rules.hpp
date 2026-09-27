@@ -84,7 +84,7 @@ inline std::string san(const BB& pos, const BB* children, int n, int k)
         }
     }
     const BB& child = children[k];
-    if(in_check(child.Board, child.white_move))
+    if(child.get_in_check())
     {
         BB grandchildren[MAX_LEGAL_MOVES];
         s += std::get<0>(all_moves(&child, grandchildren))==0 ? '#' : '+';
@@ -195,7 +195,7 @@ struct Game
         const BB& pos = positions.back();
         if(n_children==0)
         {
-            if(in_check(pos.Board, pos.white_move))
+            if(pos.get_in_check())
             {
                 reason = pos.white_move ? "black mates" : "white mates";
                 return pos.white_move ? Outcome::BLACK_WINS : Outcome::WHITE_WINS;

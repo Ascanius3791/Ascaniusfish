@@ -63,20 +63,20 @@ int main()
     {
         uint64_t expected_occ = p.Board[0]|p.Board[1]|p.Board[2]|p.Board[3]|p.Board[4]|p.Board[5]
                                |p.Board[6]|p.Board[7]|p.Board[8]|p.Board[9]|p.Board[10]|p.Board[11];
-        assert(get_occupancy(&p) == expected_occ);
-        assert(get_occupancy(&p) == expected_occ); // second call must hit the cache and still match
+        assert(p.get_occupancy() == expected_occ);
+        assert(p.get_occupancy() == expected_occ); // second call must hit the cache and still match
 
         uint64_t expected_white = p.Board[0]|p.Board[1]|p.Board[2]|p.Board[3]|p.Board[4]|p.Board[5];
         uint64_t expected_black = p.Board[6]|p.Board[7]|p.Board[8]|p.Board[9]|p.Board[10]|p.Board[11];
-        assert(get_pieces_of_colour(&p, true) == expected_white);
-        assert(get_pieces_of_colour(&p, false) == expected_black);
+        assert(p.get_pieces_of_colour(true) == expected_white);
+        assert(p.get_pieces_of_colour(false) == expected_black);
 
-        assert(get_attacked_squares(&p, true) == attacked_squares(p.Board, true));
-        assert(get_attacked_squares(&p, false) == attacked_squares(p.Board, false));
-        assert(get_attacked_squares(&p, true) == attacked_squares(p.Board, true)); // cached path
+        assert(p.get_attacked_squares(true) == attacked_squares(p.Board, true));
+        assert(p.get_attacked_squares(false) == attacked_squares(p.Board, false));
+        assert(p.get_attacked_squares(true) == attacked_squares(p.Board, true)); // cached path
 
-        assert(get_in_check(&p) == in_check(p.Board, p.white_move));
-        assert(get_has_legal_move(&p) == one_move(&p));
+        assert(p.get_in_check() == in_check(p.Board, p.white_move));
+        assert(p.get_has_legal_move() == one_move(&p));
     }
 
     std::cout << "All BB_lazyfields getters agree with the raw computations. OK\n";

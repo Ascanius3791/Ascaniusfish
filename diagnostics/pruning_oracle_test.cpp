@@ -62,7 +62,7 @@ static void seed_table_with_pv(lookup_table& table, const BB& root, const PV_Lin
     int len = std::min(pv.current_lenght, MAX_PV_Lenght);
     for(int i=0;i<len;i++)
     {
-        Move mv = pv.moves[i];
+        Move mv = pv.at(i);
 
         PV_Line hint;
         hint.moves[0] = mv;
@@ -72,7 +72,6 @@ static void seed_table_with_pv(lookup_table& table, const BB& root, const PV_Lin
         hint.bound_type = -1;
 
         TT_entry entry;
-        entry.board = pos;
         entry.zobrist_hash = pos.zobrist_hash;
         entry.pv_line = hint;
         entry.initialized = true;
@@ -103,13 +102,13 @@ static std::pair<int,int> count_surviving_hints(lookup_table& table, const BB& r
     {
         TT_readout readout = table.is_retrivable_eval(&pos, 0);
         if(readout.is_found && readout.pv_line.depth==HARMLESS_HINT_DEPTH && readout.pv_line.bound_type==-1
-           && readout.pv_line.current_lenght>0 && readout.pv_line.moves[0]==pv.moves[i])
+           && readout.pv_line.current_lenght>0 && readout.pv_line.moves[0]==pv.at(i))
         survived++;
 
         if(i+1<len)
         {
             BB next;
-            if(!apply_move(pos, pv.moves[i], next))
+            if(!apply_move(pos, pv.at(i), next))
             break;
             pos = next;
         }

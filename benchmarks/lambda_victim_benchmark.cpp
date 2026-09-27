@@ -134,7 +134,6 @@ int main(int argc, char** argv)
               << " ms=" << std::fixed << std::setprecision(2) << static_cast<double>(total_ms)
               << " knps=" << std::setprecision(1)
               << (total_ms > 0 ? static_cast<double>(total_calls) / static_cast<double>(total_ms) : 0.0)
-              << " full_collisions=" << table->get_number_of_full_collisions()
               << std::endl;
     std::cout << "after measured phase: ";
     table->get_number_of_entrys();

@@ -145,9 +145,15 @@ bool CuckooCycleTable::verify_move_is_legal_now(const BB& board, int piece_type,
 
     //finally, making the move must not leave the mover's own king in check
     BB after = board;
+    // Raw memberwise copy above carries over `board`'s lazy cache as-is; since
+    // Board[] is about to be hand-patched (not going through copy_BB/Base_BB,
+    // which reset it for exactly this reason), the cache must be reset before
+    // any getter is used on `after`, or a stale in_check_cache from `board`
+    // could be returned instead of being recomputed for the post-move position.
+    after.lazy.reset();
     after.Board[piece_type] &= ~(1ULL << move.from);
     after.Board[piece_type] |= (1ULL << move.to);
-    return !in_check(after.Board, board.white_move);
+    return !after.get_in_check();
 }
 
 bool CuckooCycleTable::detect_upcoming_cycle(const BB& current_board, const BB& ancestor_board, int ply_gap, int& piece_type_out, Move& move_out) const

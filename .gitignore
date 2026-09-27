@@ -41,6 +41,13 @@ diagnostics/repetition_forced_draw_bug_test
 diagnostics/see_extension_overflow_repro
 diagnostics/see_probe
 diagnostics/null_move_probe
+diagnostics/bb_lazyfields_check
+diagnostics/engine_vs_engine_gui
+diagnostics/eval_component_profile
+diagnostics/eval_fuzz
+diagnostics/eval_regression_check
+diagnostics/pv_chunk_test
+tools/tt_stats_sweep
 *.gcda
 *.gcno
 

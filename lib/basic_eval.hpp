@@ -18,7 +18,7 @@ int piece_activity_eval(const BB* const original, const WEIGHTS& W = WEIGHTS_OG)
 
 float distance_to_king(int king_sq, int other_sq);// returns the distance of a sqare, to the kings square
 
-int king_safety_of_colour(const uint64_t Board[12],bool white, const WEIGHTS& W =WEIGHTS_OG);
+int king_safety_of_colour(const BB* const original,bool white, const WEIGHTS& W =WEIGHTS_OG);
 
 inline int material_eval(const BB* const original, const WEIGHTS& W = WEIGHTS_OG);
 

@@ -15,15 +15,9 @@ std::tuple<int,std::vector<Move>> all_moves(const BB* const original, BB* const 
     if(extensive_time_display)
     AM_INTRO.start_time();
     bool WM= (*original).white_move;
-    uint64_t Enemy_P=0;
-    uint64_t Own_P=0;
-    
-    for(int i=0;i<6;i++)
-    {
-        Own_P |= (*original).Board[i+6*!WM];
-        Enemy_P |= (*original).Board[i+6*WM];
-    }
-    uint64_t occupancy=Own_P | Enemy_P;
+    uint64_t Own_P = original->get_pieces_of_colour(WM);
+    uint64_t Enemy_P = original->get_pieces_of_colour(!WM);
+    uint64_t occupancy = original->get_occupancy();
     if(extensive_time_display)
     AM_INTRO.end_time();
 
@@ -1041,15 +1035,134 @@ bool Move::operator==(const Move& other) const
     return from == other.from && to == other.to && promotion_piece_type == other.promotion_piece_type;
 }
 
+Chunk_pool<PV_extension, PV_POOL_CAP>& pv_extension_pool()
+{
+    static Chunk_pool<PV_extension, PV_POOL_CAP> pool;
+    return pool;
+}
+
+//returned for any read past current_lenght, so at() can never go out of bounds
+static const Move pv_line_no_move;
+
+const Move& PV_Line::at(int i) const
+{
+    if(i<0 || i>=current_lenght)
+    return pv_line_no_move;
+    if(i<PV_CHUNK)
+    return moves[i];
+    const PV_extension* chunk = extension;
+    const int block = i/PV_CHUNK - 1;//block 0 is the first extension chunk
+    for(int b=0;b<block && chunk;b++)
+    chunk = chunk->next;
+    if(!chunk)
+    return pv_line_no_move;//pool ran dry while this line was being built
+    return chunk->moves[i%PV_CHUNK];
+}
+
+bool PV_Line::set_move(int i, const Move& move)
+{
+    if(i<0 || i>=MAX_PV_Lenght)
+    return false;
+    if(i<PV_CHUNK)
+    {
+        moves[i]=move;
+        return true;
+    }
+    const int block = i/PV_CHUNK - 1;
+    PV_extension** slot = &extension;
+    for(int b=0;b<=block;b++)
+    {
+        if(!*slot)
+        {
+            PV_extension* chunk = pv_extension_pool().acquire();
+            if(!chunk)
+            {
+                truncated = true;//pool empty: caller keeps what already fits
+                return false;
+            }
+            *slot = chunk;
+        }
+        if(b==block)
+        {
+            (*slot)->moves[i%PV_CHUNK]=move;
+            return true;
+        }
+        slot = &(*slot)->next;
+    }
+    return false;
+}
+
+std::vector<Move> PV_Line::first_n(int n) const
+{
+    if(n>current_lenght)
+    n=current_lenght;
+    std::vector<Move> out;
+    if(n<=0)
+    return out;
+    out.reserve(n);
+    for(int i=0;i<n;i++)
+    out.push_back(at(i));
+    return out;
+}
+
+void PV_Line::clear_extension()
+{
+    if(extension)
+    {
+        pv_extension_pool().release_chain(extension);
+        extension=nullptr;
+    }
+}
+
+//Deep-copies other's moves. Chunks are cloned a whole chunk at a time rather
+//than move by move, so a long line costs one acquire() per 8 moves instead of a
+//chain walk per move. If the pool runs dry the copy keeps the moves that fit and
+//current_lenght is pulled back to match, so it never reports moves it lacks.
+void PV_Line::clone_moves_from(const PV_Line& other)
+{
+    const int inline_moves = other.current_lenght<PV_CHUNK ? other.current_lenght : PV_CHUNK;
+    for(int i=0;i<inline_moves;i++)
+    moves[i]=other.moves[i];
+    current_lenght=other.current_lenght;
+    truncated=other.truncated;
+    extension=nullptr;
+
+    const PV_extension* src = other.extension;
+    PV_extension** dst = &extension;
+    int stored = PV_CHUNK;
+    while(src)
+    {
+        PV_extension* chunk = pv_extension_pool().acquire();
+        if(!chunk)
+        {
+            truncated = true;
+            if(current_lenght>stored)
+            current_lenght = stored;
+            return;
+        }
+        for(int k=0;k<PV_CHUNK;k++)
+        chunk->moves[k]=src->moves[k];
+        chunk->next=nullptr;
+        *dst=chunk;
+        dst=&chunk->next;
+        stored+=PV_CHUNK;
+        src=src->next;
+    }
+}
+
+//Appends one move at the end of the line. NOTE: the previous version
+//incremented current_lenght BEFORE writing, so the first append landed at
+//moves[1] and moves[0] stayed unset; it had no callers, so this writes at
+//current_lenght instead, which is what the name says.
 void PV_Line::append(const Move move,int eval)
 {
-    current_lenght++;
     if(current_lenght>=MAX_PV_Lenght)
     {
         std::cout<<"PV_Line::append: current_lenght>=MAX_PV_Lenght"<<std::endl;
         exit(1);
     }
-    moves[current_lenght]=move;
+    if(set_move(current_lenght,move))
+    current_lenght++;
     this->eval=eval;
 }
 
@@ -1058,17 +1171,82 @@ PV_Line::PV_Line(const Move move,int depth, const PV_Line* const pv_line)//move 
 {
     this->depth=depth;
     moves[0]=move;
-    for(int i=0;i<pv_line->current_lenght;i++)
-    {
-        moves[i+1]=pv_line->moves[i];
-    }
-    current_lenght=pv_line->current_lenght+1;
+    current_lenght=1;
+    if(!pv_line)
+    return;
     this->eval=pv_line->eval;
+    truncated=pv_line->truncated;
+    const int n=pv_line->current_lenght;
+    for(int i=0;i<n;i++)
+    {
+        if(!set_move(i+1,pv_line->at(i)))
+        break;//pool empty: keep the prefix, truncated is already set
+        current_lenght=i+2;
+    }
 }
 PV_Line::PV_Line(){};
 PV_Line::PV_Line(int eval)
 {
     this->eval=eval;
+}
+
+PV_Line::PV_Line(const PV_Line& other)
+{
+    depth=other.depth;
+    eval=other.eval;
+    bound_type=other.bound_type;
+    clone_moves_from(other);
+}
+
+PV_Line::PV_Line(PV_Line&& other) noexcept
+{
+    depth=other.depth;
+    eval=other.eval;
+    bound_type=other.bound_type;
+    current_lenght=other.current_lenght;
+    truncated=other.truncated;
+    const int inline_moves = other.current_lenght<PV_CHUNK ? other.current_lenght : PV_CHUNK;
+    for(int i=0;i<inline_moves;i++)
+    moves[i]=other.moves[i];
+    extension=other.extension;//stolen, no chunk changes hands
+    other.extension=nullptr;
+    other.current_lenght=0;
+}
+
+PV_Line& PV_Line::operator=(const PV_Line& other)
+{
+    if(this==&other)
+    return *this;
+    clear_extension();//our old chain goes back before we take on another
+    depth=other.depth;
+    eval=other.eval;
+    bound_type=other.bound_type;
+    clone_moves_from(other);
+    return *this;
+}
+
+PV_Line& PV_Line::operator=(PV_Line&& other) noexcept
+{
+    if(this==&other)
+    return *this;
+    clear_extension();
+    depth=other.depth;
+    eval=other.eval;
+    bound_type=other.bound_type;
+    current_lenght=other.current_lenght;
+    truncated=other.truncated;
+    const int inline_moves = other.current_lenght<PV_CHUNK ? other.current_lenght : PV_CHUNK;
+    for(int i=0;i<inline_moves;i++)
+    moves[i]=other.moves[i];
+    extension=other.extension;
+    other.extension=nullptr;
+    other.current_lenght=0;
+    return *this;
+}
+
+PV_Line::~PV_Line()
+{
+    clear_extension();
 }
 
 

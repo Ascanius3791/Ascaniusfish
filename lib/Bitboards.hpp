@@ -18,23 +18,42 @@
 // cache. A raw memberwise copy (e.g. `BB temp = *original;`) followed by directly
 // mutating temp.Board[...] does NOT reset it automatically - call temp.lazy.reset()
 // yourself before using the getters below on a BB that was patched up that way.
+struct BB;
+
 struct BB_lazyfields
 {
+    void reset(){ *this = BB_lazyfields(); }
+
+    // Getters: each looks up the cached value if valid, otherwise computes it from
+    // `owner` (the BB this BB_lazyfields instance lives on, i.e. the BB whose `lazy`
+    // member this is called through - e.g. `owner->lazy.get_occupancy(owner)`) and
+    // fills the cache before returning. This is the only way to read the fields
+    // below - they are private precisely so nothing can read a stale/unset value
+    // or mark a slot valid without actually computing it.
+    //
+    // Cheap getters: defined right here in src/Bitboards.cpp, no dependency on
+    // later headers.
+    uint64_t get_occupancy(const BB* const owner);
+    uint64_t get_pieces_of_colour(const BB* const owner, bool white);
+
+    // Expensive getters: need get_bishop_attacks()/get_rook_attacks()/attacked_squares()
+    // (src/magics.cpp), in_check() (src/checks.cpp) and one_move() (src/move_generation.cpp) -
+    // none of which are declared yet at this point in the header chain. So only the
+    // prototypes live here; the bodies are defined in src/BB_lazyfields.cpp, which is
+    // only pulled in (via lib/BB_lazyfields.hpp) once those headers are available.
+    uint64_t get_attacked_squares(const BB* const owner, bool by_white);
+    bool get_in_check(const BB* const owner);
+    bool get_has_legal_move(const BB* const owner);
+
+private:
     uint64_t occupancy=0;          bool occupancy_valid=false;
     uint64_t white_pieces=0;       bool white_pieces_valid=false;
     uint64_t black_pieces=0;       bool black_pieces_valid=false;
 
-    // These need get_bishop_attacks()/get_rook_attacks()/attacked_squares() (src/magics.cpp),
-    // in_check() (src/checks.cpp) and one_move() (src/move_generation.cpp) - none of which
-    // are declared yet at this point in the header chain. So only the cache slots and the
-    // getter *prototypes* live here; the getter bodies are defined in src/BB_lazyfields.cpp,
-    // which is only pulled in (via lib/BB_lazyfields.hpp) once those headers are available.
     uint64_t white_attacks=0;      bool white_attacks_valid=false;
     uint64_t black_attacks=0;      bool black_attacks_valid=false;
     int in_check_cache=-1;         // -1 = not yet known, 0 = false, 1 = true
     int has_legal_move_cache=-1;   // -1 = not yet known, 0 = false, 1 = true ("one_move")
-
-    void reset(){ *this = BB_lazyfields(); }
 };
 
 struct BB
@@ -77,6 +96,16 @@ struct BB
 
     bool operator==(const BB& rhs) const;
 
+    // Thin wrappers delegating to `lazy`'s own getters, always passing `this` as the
+    // owner - the caller never supplies that pointer, so it can never be mismatched
+    // with the `lazy` instance it's read through. See BB_lazyfields above for the
+    // cheap/expensive split between where these are defined.
+    uint64_t get_occupancy() const;
+    uint64_t get_pieces_of_colour(bool white) const;
+    uint64_t get_attacked_squares(bool by_white) const;
+    bool get_in_check() const;
+    bool get_has_legal_move() const;
+
 };
 
 void castling_right_rook_correction_for_col(BB* const original, int for_white);// corrects for presence of rooks
@@ -87,16 +116,6 @@ bool are_equal(const BB* const  BB_1,const BB* const BB_2);
 
 std::string get_coordinate_PGN(std::vector<BB> history);
 
-// BB_lazyfields getters, cheap half (no dependency on later headers, defined right here in Bitboards.cpp).
-uint64_t get_occupancy(const BB* const b);
-uint64_t get_pieces_of_colour(const BB* const b, bool white);
-
-// BB_lazyfields getters, expensive half - only declared here, defined in src/BB_lazyfields.cpp
-// once get_bishop_attacks/get_rook_attacks/attacked_squares, in_check and one_move exist.
-uint64_t get_attacked_squares(const BB* const b, bool by_white);
-bool get_in_check(const BB* const b);
-bool get_has_legal_move(const BB* const b);
-    
 
 
 

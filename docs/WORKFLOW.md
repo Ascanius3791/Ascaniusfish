@@ -62,8 +62,12 @@ A hook (`.claude/hooks/context_on_commit.py`) reports the context size after eve
   2. write a startup prompt for a new session:
      ```
      Read docs/WORKFLOW.md, then work on issue #N.
+     Issue: <1-line title> — <1–2 sentence plain-language summary of Goal and Done when,
+     so Ascanius doesn't have to open GitHub to know what's being asked>.
      State: <1–3 lines not captured in the issue or git log>.
      ```
+     This applies to any "work on issue #N" starter message Claude hands Ascanius, not
+     only at a STOP breakpoint.
      Then recommend a model and effort level:
      - Sonnet 5 / medium: mechanical work (refactors, tooling, docs).
      - Opus 5.5 / high: normal features and bugfixes.

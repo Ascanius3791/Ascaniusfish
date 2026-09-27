@@ -6,9 +6,9 @@
 int exception_eval(const BB* const original)//0=no exception, 1=stalemate, 2=checkmate
 {
     
-    if(one_move(original))
+    if(original->get_has_legal_move())
     return 0;
-    if(!in_check(original->Board,original->white_move))
+    if(!original->get_in_check())
     {
         return 1;
     }

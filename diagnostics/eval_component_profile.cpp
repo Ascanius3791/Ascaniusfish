@@ -58,7 +58,15 @@ static double time_component(const char* name, const std::vector<BB>& pool, int 
     auto start = std::chrono::high_resolution_clock::now();
     for(int r=0; r<repeats; r++)
         for(const BB& pos : pool)
+        {
+            // Components now read the BB_lazyfields cache (get_occupancy/get_in_check/...).
+            // Without resetting it, only the first repeat over `pool` would ever pay the
+            // real compute cost - every later repeat would just be a cache hit, making
+            // per-call cost fall toward zero as `repeats` grows instead of measuring the
+            // steady-state cost of computing this component once per position.
+            pos.lazy.reset();
             sink += fn(pos);
+        }
     auto end = std::chrono::high_resolution_clock::now();
     double ms = std::chrono::duration<double, std::milli>(end-start).count();
     double ns_per_call = ms*1e6/(repeats*pool.size());
@@ -94,7 +102,7 @@ int main()
         [](const BB& p){ return piecetable(&p, WEIGHTS_OG); });
 
     double t_king_safety = time_component("king_safety_of_colour", pool, repeats,
-        [](const BB& p){ return king_safety_of_colour(p.Board, true, WEIGHTS_OG); });
+        [](const BB& p){ return king_safety_of_colour(&p, true, WEIGHTS_OG); });
 
     double t_positional = time_component("positional_eval (pawns)", pool, repeats,
         [](const BB& p){ return positional_eval(&p, WEIGHTS_OG); });

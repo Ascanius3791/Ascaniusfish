@@ -20,7 +20,7 @@ int main()
     RuntimeSettings RS = load_runtime_settings();
 
     //reset_weights_txt_and_History_of_Weight();exit(0);
-    Zobrist new_zobrist = Zobrist();
+    Zobrist();
     initialize_rand();
     init_magics();
     init_sliders_attacks(1);//bishop
@@ -30,12 +30,11 @@ int main()
     const int depth=RS.depth;//1000000;//10^7 \approx 10 seconds of thinking time
     const int len=5000+depth*50;
     BB* ptr = new BB[len];
-    //initialize_FEN_to::Standartboard(ptr->Board);
+    initialize_FEN_to::Standartboard(ptr->Board);
     //initialize_FEN_to::ruy_lopez_berlin_defense(ptr->Board);
-    std::string FEN = "2nrkb2/2pppp2/7p/8/8/P7/2PPPP2/2BRKN2 w - - 0 1";
-    //std::string FEN = "2bqkb2/2pppp2/8/8/8/8/2PPPP2/2BQKB2 w - - 0 1";
-    FEN_to_BB(FEN,ptr);
-    //ptr->en_passant = 1ULL << 8*3+1;      
+    std::string FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/R1BQKBNR w KQkq - 0 1";
+    //std::string FEN = "2nrkb2/2pppp2/7p/8/8/P7/2PPPP2/2BRKN2 w - - 0 1";
+    FEN_to_BB(FEN,ptr);    
     
     castling_rights(ptr);
     ptr->zobrist_hash = Zobrist::compute_Zobrist_Hash(*ptr);

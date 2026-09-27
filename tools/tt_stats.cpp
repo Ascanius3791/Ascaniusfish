@@ -139,6 +139,7 @@ int main(int argc, char** argv)
             for(int i=0;i<seed_count;i++)
             path_history[i] = game.positions[game.positions.size()-seed_count+i];
 
+            table->new_search();
             PV_Line pv;
             int reached = 0;
             long long ply_nodes_before = search_nodes, ply_start_ns = steady_now_ns();

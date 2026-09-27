@@ -154,12 +154,12 @@ float distance_to_king(int king_sq, int other_sq)// returns the distance of a sq
     return sqrt(pow(king_row-other_row,2)+ pow(king_col-other_col,2));
 }
 
-int king_safety_of_colour(const uint64_t Board[12],bool white, const WEIGHTS& W )
-{   
-    
+int king_safety_of_colour(const BB* const original,bool white, const WEIGHTS& W )
+{
+    const uint64_t* Board = original->Board;
     float score=W.defensive_value[5];//the king can always defend itself
     int king_sq=__builtin_ctzll(Board[5+6*!white]);
-    uint64_t occupancy = Board[0]|Board[1]|Board[2]|Board[3]|Board[4]|Board[5]|Board[6]|Board[7]|Board[8]|Board[9]|Board[10]|Board[11];
+    uint64_t occupancy = original->get_occupancy();
     while(occupancy)
     {
         int i=find_and_delete_trailling_1(occupancy);
@@ -320,8 +320,8 @@ int basic_eval(const BB*const original , const WEIGHTS& W)// return the evaluati
     score += material_eval(original,W);
     score += piecetable(original,W);
     
-    score += king_safety_of_colour(original->Board,true,W);
-    score -= king_safety_of_colour(original->Board,false,W);
+    score += king_safety_of_colour(original,true,W);
+    score -= king_safety_of_colour(original,false,W);
     //return score;
     //score=score*0.1; //games get fun, when they DO NOT CARE ABOUT MATERIAL
     
@@ -330,7 +330,7 @@ int basic_eval(const BB*const original , const WEIGHTS& W)// return the evaluati
     score += positional_eval(original,W);
     
     
-    score+= 5*(count(get_attacked_squares(original,1))-count(get_attacked_squares(original,0)));
+    score+= 5*(count(original->get_attacked_squares(1))-count(original->get_attacked_squares(0)));
     
     score += piece_activity_eval(original,W);
 
@@ -345,9 +345,8 @@ int tactical_potential(const BB* const original, int king_safety_white, int king
         return 0;
     }
     const uint64_t* Board = original->Board;
-    uint64_t white_pieces = Board[0]|Board[1]|Board[2]|Board[3]|Board[4]|Board[5];
-    uint64_t black_pieces = Board[6]|Board[7]|Board[8]|Board[9]|Board[10]|Board[11];
-    uint64_t occupancy = white_pieces|black_pieces;
+    uint64_t white_pieces = original->get_pieces_of_colour(true);
+    uint64_t black_pieces = original->get_pieces_of_colour(false);
     int score=0;
     // king_safety_white/king_safety_black are king_safety_of_colour(Board,1/0,W), computed once
     // by the caller (sorting_eval already needs both) instead of redone here.
@@ -355,8 +354,8 @@ int tactical_potential(const BB* const original, int king_safety_white, int king
     score-=king_safety_white;
     if(king_safety_black<0)
     score-=king_safety_black;
-    uint64_t attacks_white = get_attacked_squares(original,1);
-    uint64_t attacks_black = get_attacked_squares(original,0);
+    uint64_t attacks_white = original->get_attacked_squares(1);
+    uint64_t attacks_black = original->get_attacked_squares(0);
     uint64_t white_captures = attacks_white & black_pieces;
     uint64_t black_captures = attacks_black & white_pieces;
     uint64_t white_defends = attacks_white & white_pieces;
@@ -444,8 +443,8 @@ int sorting_eval(const BB* const original, const WEIGHTS& W )// accelerates prun
     score +=material_eval(original,W);
     // king_safety_of_colour(white) and (black) computed once here and reused below for
     // tactical_potential, instead of each being computed twice more inside it.
-    int king_safety_white=king_safety_of_colour(original->Board,true,W);
-    int king_safety_black=king_safety_of_colour(original->Board,false,W);
+    int king_safety_white=king_safety_of_colour(original,true,W);
+    int king_safety_black=king_safety_of_colour(original,false,W);
     int king_s = original->white_move ? king_safety_black : king_safety_white;//king_safety_of_colour(!original->white_move)
     if(king_s<=0)//if the king may be in danger, we must attack!//is this even quicker? in a queen vs king endgame with gave 30% more pruning
     score -= W.value_of_king_safety_for_sorting*king_s*(1-2*!original->white_move);

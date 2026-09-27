@@ -8,37 +8,41 @@
 // in_check() (src/checks.cpp) and one_move() (src/move_generation.cpp), none of which exist yet
 // at the point Bitboards.hpp is first included.
 
-uint64_t get_attacked_squares(const BB* const b, bool by_white)
+uint64_t BB_lazyfields::get_attacked_squares(const BB* const owner, bool by_white)
 {
     if(by_white)
     {
-        if(!b->lazy.white_attacks_valid)
+        if(!white_attacks_valid)
         {
-            b->lazy.white_attacks = attacked_squares(b->Board, true);
-            b->lazy.white_attacks_valid = true;
+            white_attacks = attacked_squares(owner->Board, true);
+            white_attacks_valid = true;
         }
-        return b->lazy.white_attacks;
+        return white_attacks;
     }
-    if(!b->lazy.black_attacks_valid)
+    if(!black_attacks_valid)
     {
-        b->lazy.black_attacks = attacked_squares(b->Board, false);
-        b->lazy.black_attacks_valid = true;
+        black_attacks = attacked_squares(owner->Board, false);
+        black_attacks_valid = true;
     }
-    return b->lazy.black_attacks;
+    return black_attacks;
 }
 
-bool get_in_check(const BB* const b)
+bool BB_lazyfields::get_in_check(const BB* const owner)
 {
-    if(b->lazy.in_check_cache == -1)
-    b->lazy.in_check_cache = in_check(b->Board, b->white_move) ? 1 : 0;
-    return b->lazy.in_check_cache == 1;
+    if(in_check_cache == -1)
+    in_check_cache = in_check(owner->Board, owner->white_move) ? 1 : 0;
+    return in_check_cache == 1;
 }
 
-bool get_has_legal_move(const BB* const b)
+bool BB_lazyfields::get_has_legal_move(const BB* const owner)
 {
-    if(b->lazy.has_legal_move_cache == -1)
-    b->lazy.has_legal_move_cache = one_move(b) ? 1 : 0;
-    return b->lazy.has_legal_move_cache == 1;
+    if(has_legal_move_cache == -1)
+    has_legal_move_cache = one_move(owner) ? 1 : 0;
+    return has_legal_move_cache == 1;
 }
+
+uint64_t BB::get_attacked_squares(bool by_white) const { return lazy.get_attacked_squares(this, by_white); }
+bool BB::get_in_check() const { return lazy.get_in_check(this); }
+bool BB::get_has_legal_move() const { return lazy.get_has_legal_move(this); }
 
 #endif

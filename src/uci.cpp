@@ -220,7 +220,7 @@ std::vector<std::string> UCI_Engine::pv_to_uci(const BB& root, const PV_Line& pv
         const std::vector<Move>& moves = std::get<1>(result);
         int found = -1;
         for(int i=0;i<n;i++)
-        if(moves[i]==pv.moves[k]) { found=i; break; }
+        if(moves[i]==pv.at(k)) { found=i; break; }
         if(found<0)
         break;
         out.push_back(get_UCI(&cur, pv_buf+found));
@@ -310,6 +310,7 @@ void UCI_Engine::handle_go(const std::vector<std::string>& tokens)
 
 void UCI_Engine::search(UCI_Limits limits, long long start_ns)
 {
+    if(table) table->new_search();
     const BB root = game.back();
     auto result = all_moves(&root, wfh);
     int n = std::get<0>(result);

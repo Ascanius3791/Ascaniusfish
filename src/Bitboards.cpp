@@ -576,35 +576,38 @@ bool are_equal(const BB* const  BB_1,const BB* const BB_2)
     }
 
     
-uint64_t get_occupancy(const BB* const b)
+uint64_t BB_lazyfields::get_occupancy(const BB* const owner)
 {
-    if(!b->lazy.occupancy_valid)
+    if(!occupancy_valid)
     {
-        b->lazy.occupancy = b->Board[0]|b->Board[1]|b->Board[2]|b->Board[3]|b->Board[4]|b->Board[5]
-                           |b->Board[6]|b->Board[7]|b->Board[8]|b->Board[9]|b->Board[10]|b->Board[11];
-        b->lazy.occupancy_valid = true;
+        occupancy = owner->Board[0]|owner->Board[1]|owner->Board[2]|owner->Board[3]|owner->Board[4]|owner->Board[5]
+                   |owner->Board[6]|owner->Board[7]|owner->Board[8]|owner->Board[9]|owner->Board[10]|owner->Board[11];
+        occupancy_valid = true;
     }
-    return b->lazy.occupancy;
+    return occupancy;
 }
 
-uint64_t get_pieces_of_colour(const BB* const b, bool white)
+uint64_t BB_lazyfields::get_pieces_of_colour(const BB* const owner, bool white)
 {
     if(white)
     {
-        if(!b->lazy.white_pieces_valid)
+        if(!white_pieces_valid)
         {
-            b->lazy.white_pieces = b->Board[0]|b->Board[1]|b->Board[2]|b->Board[3]|b->Board[4]|b->Board[5];
-            b->lazy.white_pieces_valid = true;
+            white_pieces = owner->Board[0]|owner->Board[1]|owner->Board[2]|owner->Board[3]|owner->Board[4]|owner->Board[5];
+            white_pieces_valid = true;
         }
-        return b->lazy.white_pieces;
+        return white_pieces;
     }
-    if(!b->lazy.black_pieces_valid)
+    if(!black_pieces_valid)
     {
-        b->lazy.black_pieces = b->Board[6]|b->Board[7]|b->Board[8]|b->Board[9]|b->Board[10]|b->Board[11];
-        b->lazy.black_pieces_valid = true;
+        black_pieces = owner->Board[6]|owner->Board[7]|owner->Board[8]|owner->Board[9]|owner->Board[10]|owner->Board[11];
+        black_pieces_valid = true;
     }
-    return b->lazy.black_pieces;
+    return black_pieces;
 }
+
+uint64_t BB::get_occupancy() const { return lazy.get_occupancy(this); }
+uint64_t BB::get_pieces_of_colour(bool white) const { return lazy.get_pieces_of_colour(this, white); }
 
 std::string get_coordinate_PGN(std::vector<BB> history)
 {

@@ -63,7 +63,7 @@ int main()
     {
         int mat = material_eval(&pos, WEIGHTS_OG);
         int pt = piecetable(&pos, WEIGHTS_OG);
-        int ks = king_safety_of_colour(pos.Board,true,WEIGHTS_OG) - king_safety_of_colour(pos.Board,false,WEIGHTS_OG);
+        int ks = king_safety_of_colour(&pos,true,WEIGHTS_OG) - king_safety_of_colour(&pos,false,WEIGHTS_OG);
         int posn = positional_eval(&pos, WEIGHTS_OG);
         int mob = 5*(count(attacked_squares(pos.Board,1))-count(attacked_squares(pos.Board,0)));
         int pa = piece_activity_eval(&pos, WEIGHTS_OG);

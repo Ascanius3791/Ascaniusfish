@@ -6,6 +6,7 @@
 #include "../lib/tt_stats.hpp"
 #include <fstream>
 #include <cstdint>
+#include <utility>
 
     template<int EXPONENT_FOR_SIZE, int BUCKET_SIZE>
     lookup_table_base<EXPONENT_FOR_SIZE, BUCKET_SIZE>::lookup_table_base()
@@ -17,12 +18,12 @@
     template<int EXPONENT_FOR_SIZE, int BUCKET_SIZE>
     float lookup_table_base<EXPONENT_FOR_SIZE, BUCKET_SIZE>::value_for_victim_index(const TT_entry& entry) const
     {
-#ifndef LOOKUP_TABLE_LAMBDA
-#define LOOKUP_TABLE_LAMBDA 0.5f
+#ifndef LOOKUP_TABLE_AGE_PENALTY
+#define LOOKUP_TABLE_AGE_PENALTY 2.0f
 #endif
-        float lambda = LOOKUP_TABLE_LAMBDA;
-                                // +-?
-        return entry.pv_line.depth + lambda * entry.board.move;
+        // age in searches, not plies: within one search only depth counts
+        int age = entry.is_from_opening_book ? 0 : current_search_id - entry.search_id;
+        return entry.pv_line.depth - LOOKUP_TABLE_AGE_PENALTY * age;
     }
 
     template<int EXPONENT_FOR_SIZE, int BUCKET_SIZE>
@@ -46,35 +47,13 @@
         for(int i=0;i<bucket_size;i++)
         {
             float value=value_for_victim_index(bucket[i]);
-            if(value<min_value)
+            if(value<=min_value)// a tie evicts too: with age-based scoring, entries from the same search at the same depth tie exactly, and rejecting the candidate outright (old strict '<') starved the table of fresh same-depth results all game
             {
                 min_value=value;
                 victim_index=i;
             }
         }
         return victim_index;
-    }
-
-    template<int EXPONENT_FOR_SIZE, int BUCKET_SIZE>
-    bool lookup_table_base<EXPONENT_FOR_SIZE, BUCKET_SIZE>::there_are_doubles()
-    {
-        int sum=0;
-        for(int i=0;i<size;i++)
-        for(int j=0;j<fill_count[i];j++)
-        {
-            for(int k=j+1;k<fill_count[i];k++)
-            {
-                if(are_equal(&table[i][j].board,&table[i][k].board))
-                {
-                    sum++;
-                }
-            }
-        }
-        std::cout << "There are " << sum << " doubles in the table!" << std::endl;
-        //std::cout << "There are no doubles in the table!" << std::endl;
-        if(sum>0)
-        return true;
-        return false;
     }
 
     template<int EXPONENT_FOR_SIZE, int BUCKET_SIZE>
@@ -95,7 +74,7 @@
         TT_readout readout;
         for(int i=0;i<fill_count_for_bucket;i++)
         {
-            if((are_equal(&(bucket[i].board),original) && 0) || are_equal(&(bucket[i].board),original))//just comparing the hashes give at this stage no speedup, so we might as wel keep the cleaner version
+            if(bucket[i].zobrist_hash==zobrist_hash)//no full-board check backing this up anymore - a hash collision would silently misidentify the position
             {
                 readout.is_found=1;
                 readout.is_from_opening_book=bucket[i].is_from_opening_book;
@@ -117,6 +96,7 @@
             {
                 bool is_already_in_table=0;
                 number_of_inserions++;
+                new_entry.search_id=current_search_id;// before find_victim_index, which values the candidate too
                 size_t zobrist_hash=new_entry.zobrist_hash;
                 size_t hash = get_hash(zobrist_hash);
                 short fill_count_for_bucket = fill_count[hash];
@@ -134,7 +114,7 @@
                 for(int i=0;i<fill_count_for_bucket;i++)
                 {
                     TT_entry& old_entry = bucket[i];
-                    if(are_equal(&old_entry.board,&new_entry.board))//if they are equal
+                    if(old_entry.zobrist_hash==new_entry.zobrist_hash)//if they are equal
                     {
                         is_already_in_table=1;
                         if(new_entry.pv_line.depth>old_entry.pv_line.depth)
@@ -146,6 +126,7 @@
                         {
                             old_entry=new_entry;
                         }
+                        old_entry.search_id=current_search_id;// still needed by this search: don't let it age
                         break;
                     }
                 }
@@ -167,7 +148,10 @@
                 {
                     TT_STATS_HOOK(tt_stats::on_discard(bucket[victim_index], tt_stats::EVICTED));
                 }
-                bucket[victim_index]=new_entry;
+                //moved, not copied: new_entry is dead after this, and a copy here
+                //would clone the whole extension chain a second time (the first
+                //clone is the by-value parameter itself).
+                bucket[victim_index]=std::move(new_entry);
             }
 
     template<int EXPONENT_FOR_SIZE, int BUCKET_SIZE>
@@ -195,6 +179,7 @@
             for(int j=0;j<bucket_size;j++)
             {
                 table[i][j].initialized=0;
+                table[i][j].pv_line.clear_extension();//give any extension chunks back to the pool
             }
         }
         for(int i=0;i<size;i++)
@@ -204,6 +189,7 @@
         number_of_inserions=0;
         number_of_succ_readouts=0;
         number_of_attemted_readouts=0;
+        current_search_id=0;
         TT_STATS_HOOK(tt_stats::on_reset());
     };
 
@@ -216,9 +202,9 @@
             {
                 table[i][j].initialized=0;
                 table[i][j].pv_line = PV_Line();
-                table[i][j].board = BB();
                 table[i][j].zobrist_hash = 0;
                 table[i][j].is_from_opening_book = 0;
+                table[i][j].search_id = 0;
             }
         }
         for(int i=0;i<size;i++)
@@ -228,6 +214,7 @@
         number_of_inserions=0;
         number_of_succ_readouts=0;
         number_of_attemted_readouts=0;
+        current_search_id=0;
     };
 
     template<int EXPONENT_FOR_SIZE, int BUCKET_SIZE>
@@ -235,31 +222,6 @@
     {
         size_t index = zobrist_hash & mask;
         return index;
-    }
-
-    template<int EXPONENT_FOR_SIZE, int BUCKET_SIZE>
-    int lookup_table_base<EXPONENT_FOR_SIZE, BUCKET_SIZE>::get_number_of_full_collisions() const//count how many entrys have the same zobrist hash, but are not equal
-    {
-        int sum=0;
-        for(int i=0;i<size;i++)
-        {
-            const TT_entry* bucket = table[i];
-            short fill_count_for_bucket = fill_count[i];
-            for(int j=0;j<fill_count_for_bucket;j++)
-            {
-                for(int k=j+1;k<fill_count_for_bucket;k++)
-                {
-                    if(bucket[j].zobrist_hash==bucket[k].zobrist_hash)
-                    {
-                        if(!are_equal(&bucket[j].board,&bucket[k].board))
-                        {
-                            sum++;
-                        }
-                    }
-                }
-            }
-        }
-        return sum;
     }
 
     template<int EXPONENT_FOR_SIZE, int BUCKET_SIZE>
@@ -314,6 +276,77 @@
         return entry.pv_line.depth * 4 + (entry.pv_line.bound_type==0 ? 1 : 0);
     }
 
+    // A TT_entry is no longer a flat blob (PV_Line owns a chunk chain), so the
+    // PTT file stores each entry's scalars followed by exactly current_lenght
+    // moves. Move is still a fixed-size POD, so the moves themselves round-trip
+    // raw. Same-binary/platform assumption as before.
+    static void write_entry(std::ofstream& file, const TT_entry& entry)
+    {
+        const uint8_t from_book = entry.is_from_opening_book ? 1 : 0;
+        const int32_t search_id = entry.search_id;
+        const int32_t depth = entry.pv_line.depth;
+        const int32_t eval = entry.pv_line.eval;
+        const int32_t bound_type = entry.pv_line.bound_type;
+        const int32_t length = entry.pv_line.current_lenght;
+        const uint8_t truncated = entry.pv_line.truncated ? 1 : 0;
+
+        file.write(reinterpret_cast<const char*>(&entry.zobrist_hash), sizeof(entry.zobrist_hash));
+        file.write(reinterpret_cast<const char*>(&from_book), sizeof(from_book));
+        file.write(reinterpret_cast<const char*>(&search_id), sizeof(search_id));
+        file.write(reinterpret_cast<const char*>(&depth), sizeof(depth));
+        file.write(reinterpret_cast<const char*>(&eval), sizeof(eval));
+        file.write(reinterpret_cast<const char*>(&bound_type), sizeof(bound_type));
+        file.write(reinterpret_cast<const char*>(&length), sizeof(length));
+        file.write(reinterpret_cast<const char*>(&truncated), sizeof(truncated));
+        for(int k=0;k<length;k++)
+        {
+            const Move move = entry.pv_line.at(k);
+            file.write(reinterpret_cast<const char*>(&move), sizeof(Move));
+        }
+    }
+
+    static bool read_entry(std::ifstream& file, TT_entry& entry)
+    {
+        uint64_t zobrist_hash=0;
+        int32_t search_id=0, depth=0, eval=0, bound_type=0, length=0;
+        uint8_t from_book=0, truncated=0;
+
+        file.read(reinterpret_cast<char*>(&zobrist_hash), sizeof(zobrist_hash));
+        file.read(reinterpret_cast<char*>(&from_book), sizeof(from_book));
+        file.read(reinterpret_cast<char*>(&search_id), sizeof(search_id));
+        file.read(reinterpret_cast<char*>(&depth), sizeof(depth));
+        file.read(reinterpret_cast<char*>(&eval), sizeof(eval));
+        file.read(reinterpret_cast<char*>(&bound_type), sizeof(bound_type));
+        file.read(reinterpret_cast<char*>(&length), sizeof(length));
+        file.read(reinterpret_cast<char*>(&truncated), sizeof(truncated));
+        if(!file.good() || length<0 || length>MAX_PV_Lenght)
+        return false;
+
+        entry = TT_entry();
+        entry.initialized = true;
+        entry.zobrist_hash = zobrist_hash;
+        entry.is_from_opening_book = from_book!=0;
+        entry.search_id = search_id;
+        entry.pv_line.depth = depth;
+        entry.pv_line.eval = eval;
+        entry.pv_line.bound_type = bound_type;
+        entry.pv_line.truncated = truncated!=0;
+
+        int stored=0;
+        for(int k=0;k<length;k++)
+        {
+            Move move;
+            file.read(reinterpret_cast<char*>(&move), sizeof(Move));
+            if(!file.good())
+            return false;
+            if(!entry.pv_line.set_move(k, move))
+            break;//pool empty: keep the prefix, set_move already flagged it
+            stored=k+1;
+        }
+        entry.pv_line.current_lenght = stored;
+        return true;
+    }
+
     bool PTT::save(const std::string& path) const
     {
         std::ofstream file(path, std::ios::binary);
@@ -324,7 +357,11 @@
         }
 
         const uint32_t MAGIC_NUMBER = 0x50545401; // "PTT" + version nibble
-        const uint32_t CURRENT_VERSION = 1;
+        // v3: PV_Line owns a chain of extension chunks, so a TT_entry is no
+        // longer a flat blob and cannot be dumped raw - each entry is written
+        // field by field with its moves flattened. Bumped from 2, which was the
+        // raw-TT_entry format; a v2 file would be read as pointers.
+        const uint32_t CURRENT_VERSION = 3;
 
         uint64_t entry_count = 0;
         for(int i=0;i<size;i++)
@@ -338,7 +375,7 @@
         {
             for(int j=0;j<fill_count[i];j++)
             {
-                file.write(reinterpret_cast<const char*>(&table[i][j]), sizeof(TT_entry));
+                write_entry(file, table[i][j]);
             }
         }
 
@@ -366,7 +403,7 @@
         file.read(reinterpret_cast<char*>(&version), sizeof(version));
         file.read(reinterpret_cast<char*>(&entry_count), sizeof(entry_count));
 
-        if(!file.good() || magic_number != 0x50545401 || version != 1)
+        if(!file.good() || magic_number != 0x50545401 || version != 3)
         {
             std::cout << "Error: '" << path << "' is not a valid/compatible PTT file!" << std::endl;
             return false;
@@ -376,10 +413,9 @@
         TT_entry entry;
         for(uint64_t i=0;i<entry_count && file.good();i++)
         {
-            file.read(reinterpret_cast<char*>(&entry), sizeof(TT_entry));
-            if(!file.good())
+            if(!read_entry(file, entry))
             break;
-            insert(entry);// insert() already keeps whichever of (loaded, already in memory) has greater depth
+            insert(std::move(entry));// insert() already keeps whichever of (loaded, already in memory) has greater depth
             loaded++;
         }
 

@@ -90,7 +90,7 @@ vector<int> sorting_moves(const BB* const Base, const vector<Move>& moves, int n
     sort_by_sorting_eval(Base, num, indices, WM, W);
     if (pv_line && pv_line->current_lenght !=0)
     {
-        Move pv_move = pv_line->moves[index_of_pv_line_to_compare_against];
+        Move pv_move = pv_line->at(index_of_pv_line_to_compare_against);
 
         for (int i = 0; i < num; ++i)
         {
@@ -184,7 +184,7 @@ PV_Line minimax_tactical(const BB* const original, BB* const wfh, const WEIGHTS&
     {
         if(number_of_new_moves==0)
         {
-            int best_eval = in_check(original->Board, original->white_move) ? (original->white_move ? INT_MIN : INT_MAX) : 0;
+            int best_eval = original->get_in_check() ? (original->white_move ? INT_MIN : INT_MAX) : 0;
             PV_Line exception_pv_line = PV_Line(best_eval);
             exception_pv_line.current_lenght = 0;
             exception_pv_line.bound_type = 0;
@@ -206,7 +206,7 @@ PV_Line minimax_tactical(const BB* const original, BB* const wfh, const WEIGHTS&
     PV_Line pv_line = PV_Line(original->white_move ? INT_MIN : INT_MAX);
     // Stand pat: out of check the side to move may decline every capture, so
     // the static eval is already a bound - cut off if it alone beats beta/alpha.
-    if(!in_check(original->Board, original->white_move))
+    if(!original->get_in_check())
     {
         int stand_pat = eval(original, W, 0); // number_of_new_moves>0 here, see above
         pv_line = PV_Line(stand_pat);
@@ -379,7 +379,6 @@ PV_Line minimax(const BB*const original ,BB* const wfh ,int depth = 0, const WEI
             {
                 TT_entry entry;
                 entry.zobrist_hash=original->zobrist_hash;
-                entry.board = *original;
                 entry.initialized = true;
                 entry.pv_line = exception_pv_line;
                 entry.pv_line.bound_type = 0;
@@ -402,7 +401,7 @@ PV_Line minimax(const BB*const original ,BB* const wfh ,int depth = 0, const WEI
        && ply != effective_root_ply
        && null_move_allowed
        && !side_to_move_lacks_non_pawn_material(original)
-       && !in_check(original->Board, original->white_move))
+       && !original->get_in_check())
     {
         BB null_child(original, "base"); // flips side to move, clears en passant, keeps castling rights
         Zobrist::update_zobrist_hash_null_move(*original, null_child);
@@ -427,7 +426,6 @@ PV_Line minimax(const BB*const original ,BB* const wfh ,int depth = 0, const WEI
                 if(table)
                 {
                     TT_entry entry;
-                    entry.board = *original;
                     entry.zobrist_hash = original->zobrist_hash;
                     entry.pv_line = cutoff_pv;
                     entry.initialized = true;
@@ -455,7 +453,6 @@ PV_Line minimax(const BB*const original ,BB* const wfh ,int depth = 0, const WEI
                 if(table)
                 {
                     TT_entry entry;
-                    entry.board = *original;
                     entry.zobrist_hash = original->zobrist_hash;
                     entry.pv_line = cutoff_pv;
                     entry.initialized = true;
@@ -556,7 +553,6 @@ PV_Line minimax(const BB*const original ,BB* const wfh ,int depth = 0, const WEI
     if(table)
     {
         TT_entry entry;
-        entry.board = *original;
         entry.zobrist_hash=original->zobrist_hash;
         entry.pv_line = pv_line;
         entry.initialized = true;
@@ -1104,6 +1100,7 @@ class Play  : public initialize_FEN_to
     // alpha-beta, TT insertion) is not duplicated here.
     int engine_move(BB* original, BB* wfh, bool pretty_print=0,int depth=1, const WEIGHTS& W=WEIGHTS_OG,lookup_table* table=0,FILE* pipe=0)
     {
+        if(table) table->new_search();
         auto result = all_moves(original,wfh);
         int number_of_new_moves = std::get<0>(result);
         vector<Move> moves = std::get<1>(result);
@@ -1134,7 +1131,7 @@ class Play  : public initialize_FEN_to
             if(pipe)
             {
                 const int displayed_length = min(pv_line.depth,pv_line.current_lenght);
-                vector<Move> pv_moves(pv_line.moves,pv_line.moves+displayed_length);
+                vector<Move> pv_moves = pv_line.first_n(displayed_length);
                 write_to_python_script(pipe, "PV depth=" + to_string(d) +
                                             " eval=" + to_string(pv_line.eval) +
                                             " " + moves_to_PGN(*original, pv_moves));
@@ -1158,7 +1155,7 @@ class Play  : public initialize_FEN_to
         if(pretty_print)
         {
             const int displayed_length = min(pv_line.depth,pv_line.current_lenght);
-            vector<Move> pv_moves(pv_line.moves,pv_line.moves+displayed_length);
+            vector<Move> pv_moves = pv_line.first_n(displayed_length);
             cout << "Engine line: " << moves_to_PGN(*original, pv_moves) << std::endl;
             cout << "Evaluation after this move: " << pv_line.eval << std::endl;
         }
@@ -1176,6 +1173,7 @@ class Play  : public initialize_FEN_to
     // always returns a legal move.
     int timed_engine_move(BB* original, BB* wfh, DepthTimeStats& stats, bool pretty_print=0, chrono::duration<double> time_limit=chrono::duration<double>(5.0), const WEIGHTS& W=WEIGHTS_OG,lookup_table* table=0,FILE* pipe=0)
     {
+        if(table) table->new_search();
         auto result = all_moves(original,wfh);
         int number_of_new_moves = std::get<0>(result);
         vector<Move> moves = std::get<1>(result);
@@ -1286,7 +1284,7 @@ class Play  : public initialize_FEN_to
             if(pipe)
             {
                 const int displayed_length = min(pv_line.depth,pv_line.current_lenght);
-                vector<Move> pv_moves(pv_line.moves,pv_line.moves+displayed_length);
+                vector<Move> pv_moves = pv_line.first_n(displayed_length);
                 write_to_python_script(pipe, "PV depth=" + to_string(d) +
                                             " eval=" + to_string(pv_line.eval) +
                                             " " + moves_to_PGN(*original, pv_moves));
@@ -1314,7 +1312,7 @@ class Play  : public initialize_FEN_to
         if(pretty_print)
         {
             const int displayed_length = min(pv_line.depth,pv_line.current_lenght);
-            vector<Move> pv_moves(pv_line.moves,pv_line.moves+displayed_length);
+            vector<Move> pv_moves = pv_line.first_n(displayed_length);
             cout << "Engine line: " << moves_to_PGN(*original, pv_moves) << std::endl;
             cout << "Evaluation after this move: " << pv_line.eval << std::endl;
             cout << "Time spent: " << elapsed.count() << "s (limit " << time_limit.count() << "s), reached depth " << pv_line.depth << std::endl;
@@ -1413,13 +1411,6 @@ class Play  : public initialize_FEN_to
             if(p.table)
             {
                 p.table->get_number_of_entrys();
-                int number_of_full_collosion = p.table->get_number_of_full_collisions();
-                bool there_are_doubles = p.table->there_are_doubles();
-                cout << "Number of full collisions in the lookup table: " << number_of_full_collosion << endl;
-                if(there_are_doubles)
-                cout << "There are doubles in the lookup table!" << endl;
-                else
-                cout << "There are no doubles in the lookup table!" << endl;
                 p.table->print_readout_delta(tt_insertions_before, tt_succ_before, tt_attempted_before);
                 p.table->print_depth_bound_type_histogram();
             }
@@ -1437,11 +1428,6 @@ class Play  : public initialize_FEN_to
             
         }
 
-        
-        if(p.table)
-        {
-            p.table->there_are_doubles();
-        }
         if(p.is_supposed_to_print_PGN)
         cout << "\nPGN\n" << get_PGN(history,get_FEN(*p.original)) << endl;
         if(p.is_pretty_print)
