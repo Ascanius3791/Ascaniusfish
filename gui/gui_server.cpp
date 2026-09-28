@@ -9,10 +9,20 @@
 // position of its own, so reloading it just asks for the state again.
 //
 // Options:
-//   port=8173      first port to try; the next 20 are tried if it is taken
-//   root=gui/web   directory the static files come from
-//   fen=<fen>      starting position of the "main" session
-//   engine=...     the UCI binary Play mode drives (default ./ascaniusfish_uci)
+//   port=8173         first port to try; the next 20 are tried if it is taken
+//   bind=127.0.0.1    address to listen on; 0.0.0.0 reaches the LAN (issue #27)
+//   root=gui/web      directory the static files come from
+//   fen=<fen>         starting position of the "main" session
+//   engine=...        the UCI binary Play mode drives (default ./ascaniusfish_uci)
+//   tunnel=cloudflared  also launch `cloudflared tunnel --url` at this port and
+//                     print the combined shareable link once it comes up
+//
+// A token, new every run and printed once below, gates every route including
+// static files and /api/events: without it (as a "token=" cookie, set once a
+// request's "?token=" query matches, or that query itself) the answer is 401
+// before a session or an engine is ever touched. That is what makes bind=
+// anything but 127.0.0.1 — a LAN, or a tunnel's public port — safe to use;
+// see docs/REMOTE_PLAY.md for sharing a game over one with no hosting cost.
 //
 // Play, Analyse and Watch mode make this a UCI client of ./ascaniusfish_uci
 // (gui/engine_link.hpp): the search runs on a worker thread, so a request never
@@ -25,13 +35,17 @@
 #include "http_server.hpp"
 #include "session.hpp"
 
+#include <cctype>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
+#include <fcntl.h>
 #include <fstream>
 #include <memory>
+#include <random>
 #include <sstream>
 #include <string>
+#include <sys/wait.h>
 
 constexpr int DEFAULT_PORT = 8173;
 constexpr int MAX_DEPTH = 40;
@@ -45,6 +59,191 @@ static Sessions sessions;
 static Http_Server server;
 static std::string web_root;
 static std::string engine_path = ENGINE_PATH;
+
+// ---------------------------------------------------------------- access token (#27)
+//
+// New every run, printed once at startup and never logged with a request
+// afterwards. A request authenticates with a "token=" cookie, or (only to
+// obtain that cookie) a "?token=" query parameter — needed because EventSource
+// and a plain <script src> cannot carry a custom header. handle_get/handle_post
+// check it before doing anything else, so an unauthenticated request never
+// reaches session_of() and never creates a session or starts an engine.
+static std::string gui_token;
+
+static std::string generate_token()
+{
+    unsigned char raw[24];
+    std::ifstream urandom("/dev/urandom", std::ios::binary);
+    if(urandom)
+    urandom.read((char*)raw, sizeof raw);
+    if(!urandom)
+    {
+        std::random_device rd;   // /dev/urandom missing: still not attacker-predictable
+        for(unsigned char& b : raw)
+        b = (unsigned char)rd();
+    }
+    static const char* hex = "0123456789abcdef";
+    std::string out(sizeof raw*2, '0');
+    for(size_t i=0;i<sizeof raw;i++)
+    {
+        out[2*i]   = hex[raw[i]>>4];
+        out[2*i+1] = hex[raw[i]&0xF];
+    }
+    return out;
+}
+
+// Constant-time-ish compare: this is a home server, not a bank, but a token
+// comparison is exactly the kind of thing that costs nothing to do properly.
+static bool tokens_equal(const std::string& a, const std::string& b)
+{
+    if(a.empty() || a.size()!=b.size())
+    return false;
+    unsigned char diff = 0;
+    for(size_t i=0;i<a.size();i++)
+    diff |= (unsigned char)a[i] ^ (unsigned char)b[i];
+    return diff==0;
+}
+
+// The "token" pair out of a Cookie header's "name=value; name=value" list.
+static std::string cookie_token(const std::string& cookie_header)
+{
+    for(size_t i=0;i<cookie_header.size();)
+    {
+        while(i<cookie_header.size() && cookie_header[i]==' ')
+        i++;
+        size_t semi = cookie_header.find(';', i);
+        size_t end = semi==std::string::npos ? cookie_header.size() : semi;
+        size_t eq = cookie_header.find('=', i);
+        if(eq!=std::string::npos && eq<end && cookie_header.compare(i, eq-i, "token")==0)
+        return cookie_header.substr(eq+1, end-eq-1);
+        if(semi==std::string::npos)
+        break;
+        i = semi+1;
+    }
+    return "";
+}
+
+struct Auth
+{
+    bool ok = false;
+    bool set_cookie = false;  // authenticated via the query token: hand back a cookie
+};
+
+static Auth check_auth(const Request& req)
+{
+    auto cookie = req.headers.find("cookie");
+    if(cookie!=req.headers.end() && tokens_equal(cookie_token(cookie->second), gui_token))
+    return {true, false};
+    if(tokens_equal(req.param("token"), gui_token))
+    return {true, true};
+    return {false, false};
+}
+
+static std::string auth_cookie()
+{
+    return "token=" + gui_token + "; Path=/; HttpOnly; SameSite=Lax";
+}
+
+// -------------------------------------------------------------- cloudflared tunnel (#27)
+//
+// tunnel=cloudflared launches `cloudflared tunnel --url http://localhost:<port>`
+// as a child process, its own stdout+stderr redirected to a log file (a pipe
+// would risk cloudflared blocking on a full one hours into a quiet session,
+// since nothing here keeps reading it after startup) so its trycloudflare.com
+// URL can be scraped out and combined with the token into one link.
+static pid_t tunnel_pid = -1;
+static std::string tunnel_log_path;
+
+// The first "https://...trycloudflare.com..." word in cloudflared's log text.
+static std::string extract_tunnel_url(const std::string& text)
+{
+    for(size_t pos = text.find("https://"); pos!=std::string::npos; pos = text.find("https://", pos+1))
+    {
+        size_t end = pos;
+        while(end<text.size() && !std::isspace((unsigned char)text[end]))
+        end++;
+        std::string candidate = text.substr(pos, end-pos);
+        if(candidate.find("trycloudflare.com")!=std::string::npos)
+        return candidate;
+    }
+    return "";
+}
+
+// Forks cloudflared and waits (polling its log file, not the main event loop —
+// this runs once at startup, before server.run()) up to timeout_ms for its
+// URL. Empty with `error` set on a bad fork, a missing cloudflared binary, an
+// early exit, or a timeout; the local link still works in every one of those.
+static std::string start_tunnel_and_wait(int port, long long timeout_ms, std::string& error)
+{
+    tunnel_log_path = "/tmp/ascaniusfish_gui_tunnel_" + std::to_string(getpid()) + ".log";
+    int fd = open(tunnel_log_path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if(fd<0)
+    {
+        error = "could not create " + tunnel_log_path + " for cloudflared's output";
+        tunnel_log_path.clear();
+        return "";
+    }
+    pid_t pid = fork();
+    if(pid<0)
+    {
+        error = "fork failed";
+        close(fd);
+        return "";
+    }
+    if(pid==0)
+    {
+        dup2(fd, 1);
+        dup2(fd, 2);
+        close(fd);
+        std::string local_url = "http://localhost:" + std::to_string(port);
+        execlp("cloudflared", "cloudflared", "tunnel", "--url", local_url.c_str(), (char*)nullptr);
+        _exit(127);   // execlp only returns on failure
+    }
+    close(fd);
+    tunnel_pid = pid;
+
+    long long deadline = now_ms()+timeout_ms;
+    for(;;)
+    {
+        std::ifstream log(tunnel_log_path);
+        std::ostringstream buffer;
+        buffer << log.rdbuf();
+        std::string url = extract_tunnel_url(buffer.str());
+        if(!url.empty())
+        return url;
+        int status;
+        if(waitpid(pid, &status, WNOHANG)==pid)
+        {
+            tunnel_pid = -1;
+            error = WIFEXITED(status) && WEXITSTATUS(status)==127
+                  ? "cloudflared not found on PATH — install it first (see docs/REMOTE_PLAY.md)"
+                  : "cloudflared exited before printing a tunnel URL (see " + tunnel_log_path + ")";
+            return "";
+        }
+        if(now_ms()>=deadline)
+        {
+            error = "still waiting on cloudflared after " + std::to_string(timeout_ms/1000)
+                  + "s — it may yet come up; see " + tunnel_log_path;
+            return "";
+        }
+        usleep(150000);
+    }
+}
+
+// Ctrl-C must take the tunnel down too, or it keeps forwarding to a server
+// that is no longer there.
+static void stop_tunnel()
+{
+    if(tunnel_pid>0)
+    {
+        kill(tunnel_pid, SIGTERM);
+        int status;
+        waitpid(tunnel_pid, &status, 0);
+        tunnel_pid = -1;
+    }
+    if(!tunnel_log_path.empty())
+    unlink(tunnel_log_path.c_str());
+}
 
 // A session's engine processes. Play and Analyse share one; Watch needs one
 // per side, so the two self-play engines keep their own transposition tables
@@ -450,7 +649,7 @@ static Session& session_of(const Request& req, const std::map<std::string, std::
     return sessions.get(it!=body.end() ? it->second : req.param("id"));
 }
 
-static Response handle_get(const Request& req)
+static Response handle_get_authed(const Request& req)
 {
     if(req.path=="/api/state")
     return Response::json(sessions.get(req.param("id")).state_json());
@@ -470,7 +669,7 @@ static Response handle_get(const Request& req)
     return Response::file(body, mime_type(path));
 }
 
-static Response handle_post(const Request& req)
+static Response handle_post_authed(const Request& req)
 {
     std::map<std::string, std::string> body;
     if(!req.body.empty() && !json::parse_flat_object(req.body, body))
@@ -775,6 +974,33 @@ static Response handle_post(const Request& req)
     return Response::json(session.state_json());
 }
 
+// The token check runs before either _authed function, so a request that
+// fails it never reaches session_of() — no session is created and no engine
+// is touched for someone who only guessed at a path. A request authenticated
+// by its query token gets the cookie back, so the browser's next request (the
+// very next asset load, in practice) carries it instead.
+static Response handle_get(const Request& req)
+{
+    Auth auth = check_auth(req);
+    if(!auth.ok)
+    return Response::text("unauthorized", 401);
+    Response res = handle_get_authed(req);
+    if(auth.set_cookie)
+    res.set_cookie = auth_cookie();
+    return res;
+}
+
+static Response handle_post(const Request& req)
+{
+    Auth auth = check_auth(req);
+    if(!auth.ok)
+    return Response::json(json::error("unauthorized"), 401);
+    Response res = handle_post_authed(req);
+    if(auth.set_cookie)
+    res.set_cookie = auth_cookie();
+    return res;
+}
+
 // Ctrl-C. Every search is asked to stop, and once the workers are idle the
 // links go, which sends each engine a "quit" and reaps it. A worker still
 // waiting for a bestmove would make ~Engine_Link block — "go infinite" waits a
@@ -821,7 +1047,7 @@ int main(int argc, char** argv)
     init_sliders_attacks(0);  // rook
 
     int port = DEFAULT_PORT;
-    std::string root_option, start_fen, engine_option;
+    std::string root_option, start_fen, engine_option, bind_option = "127.0.0.1", tunnel_option;
     for(int i=1;i<argc;i++)
     {
         std::string arg = argv[i];
@@ -833,15 +1059,24 @@ int main(int argc, char** argv)
         }
         std::string key = arg.substr(0, eq), value = arg.substr(eq+1);
         if(key=="port")      port = std::atoi(value.c_str());
+        else if(key=="bind") bind_option = value;
         else if(key=="root") root_option = value;
         else if(key=="fen")  start_fen = value;
         else if(key=="engine") engine_option = value;
+        else if(key=="tunnel") tunnel_option = value;
         else
         {
             std::fprintf(stderr, "gui: unknown option \"%s\"\n", key.c_str());
             return 2;
         }
     }
+    if(!tunnel_option.empty() && tunnel_option!="cloudflared")
+    {
+        std::fprintf(stderr, "gui: tunnel= only supports \"cloudflared\" (got \"%s\")\n", tunnel_option.c_str());
+        return 2;
+    }
+
+    gui_token = generate_token();
 
     engine_path = find_engine(engine_option);
     web_root = find_web_root(root_option);
@@ -881,18 +1116,38 @@ int main(int argc, char** argv)
     // at the old fixed interval and costs nothing.
     server.poll_timeout = [] { return any_clock_ticking ? CLOCK_POLL_MS : IDLE_POLL_MS; };
 
-    if(!server.listen_on(port))
+    if(!server.listen_on(port, bind_option))
     {
-        std::fprintf(stderr, "gui: could not bind a port from %d upwards\n", port);
+        std::fprintf(stderr, "gui: could not bind %s on a port from %d upwards"
+                              " (bind= must be a valid IPv4 address)\n", bind_option.c_str(), port);
         return 2;
     }
 
-    std::printf("Ascaniusfish GUI on http://localhost:%d  (serving %s, Ctrl-C to stop)\n",
-                server.port(), web_root.c_str());
+    std::printf(
+        "Ascaniusfish GUI on http://localhost:%d  (serving %s, Ctrl-C to stop)\n"
+        "Token for this run: %s\n"
+        "Local link: http://localhost:%d/?token=%s\n",
+        server.port(), web_root.c_str(), gui_token.c_str(), server.port(), gui_token.c_str());
+    if(tunnel_option=="cloudflared")
+    {
+        std::printf("Starting a Cloudflare quick tunnel (cloudflared)...\n");
+        std::fflush(stdout);
+        std::string error;
+        std::string url = start_tunnel_and_wait(server.port(), 20000, error);
+        if(!url.empty())
+        std::printf("Shareable link: %s/?token=%s\n", url.c_str(), gui_token.c_str());
+        else
+        std::fprintf(stderr, "gui: tunnel: %s\n", error.c_str());
+    }
+    else
+    std::printf("Append the same \"?token=...\" to a LAN IP or a tunnel's URL to share it\n"
+                 "(see docs/REMOTE_PLAY.md, or pass tunnel=cloudflared to do it automatically).\n");
+    std::printf("The page keeps the token in a cookie after the first open. A new run makes a new token.\n");
     std::fflush(stdout);
     server.run();
     std::printf("\nStopping.\n");
     quit_engines();
+    stop_tunnel();
     std::fflush(nullptr);
     std::_Exit(0);   // anything still thinking is left to EOF on its stdin
 }

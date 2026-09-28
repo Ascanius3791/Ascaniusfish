@@ -24,6 +24,8 @@ MOVETIME_TT ?=
 PLIES ?=
 TT_EXPONENT ?=
 GUI_PORT ?=
+GUI_BIND ?=
+GUI_TUNNEL ?=
 TOOL_TARGETS := tools/perft tools/bench tools/speed_compare tools/match tools/make_openings tools/gui_match tools/tt_stats
 PROFILE_CXXFLAGS ?= -O2 -g -pg -Wall -Wno-unknown-pragmas -Wno-parentheses -Wno-unused-variable
 
@@ -117,7 +119,12 @@ gui-match: tools/gui_match
 # The board in the browser: prints a http://localhost:<port> URL and serves it.
 # Play mode drives $(UCI_TARGET) over pipes, so that has to exist too.
 gui: $(GUI_TARGET) $(UCI_TARGET)
-	./$(GUI_TARGET) $(if $(GUI_PORT),port=$(GUI_PORT))
+	./$(GUI_TARGET) $(if $(GUI_PORT),port=$(GUI_PORT)) $(if $(GUI_BIND),bind=$(GUI_BIND)) $(if $(GUI_TUNNEL),tunnel=$(GUI_TUNNEL))
+
+# make gui plus a cloudflared quick tunnel, so the printed link is already
+# shareable — no separate terminal, no combining a token by hand (issue #27).
+gui-remote: $(GUI_TARGET) $(UCI_TARGET)
+	./$(GUI_TARGET) $(if $(GUI_PORT),port=$(GUI_PORT)) tunnel=cloudflared
 
 # TT discard statistics over self-play games (issue #11). The only build with
 # -DTT_STATS; rebuilt every time so TT_EXPONENT=n always takes effect.

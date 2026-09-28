@@ -20,6 +20,20 @@ import { playForTransition, initMuteToggle } from './sound.js';
 const sessionId = new URLSearchParams(location.search).get('id') || 'main';
 const el = id => document.getElementById(id);
 
+// The server already turned a valid "?token=" on this load into a cookie
+// (gui_server.cpp's check_auth); every request from here on rides that
+// cookie, so the token has no further reason to sit in the address bar where
+// a screenshot or a shared link would carry it along (#27).
+{
+    const params = new URLSearchParams(location.search);
+    if(params.has('token'))
+    {
+        params.delete('token');
+        const query = params.toString();
+        history.replaceState(null, '', location.pathname + (query ? `?${query}` : ''));
+    }
+}
+
 let state = null;              // last state the server sent
 let pendingPromotion = null;   // {orig, dest, color, queued?} while the chooser is open
 

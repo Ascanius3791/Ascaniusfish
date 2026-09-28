@@ -11,11 +11,15 @@
 // touches a socket: it calls wake(), and the loop runs on_tick() to collect
 // whatever finished. All writing stays on the one thread.
 //
-// Only 127.0.0.1 is bound: the server reads files from disk and takes commands
-// without authentication, so it must not be reachable from the network.
+// listen_on() binds 127.0.0.1 by default; a caller passing another address
+// (gui_server.cpp's bind=) is exposing this on a LAN or behind a tunnel, and
+// the token check gui_server.cpp does before touching a session is what makes
+// that safe — this header itself knows nothing about auth, only that a
+// Response may carry a Set-Cookie.
 #ifndef GUI_HTTP_SERVER_HPP
 #define GUI_HTTP_SERVER_HPP
 #include <algorithm>
+#include <arpa/inet.h>
 #include <cerrno>
 #include <csignal>
 #include <cstdio>
@@ -38,6 +42,7 @@ struct Request
     std::string path;   // percent-decoded, without the query string
     std::string query;  // raw, after '?'
     std::string body;
+    std::map<std::string, std::string> headers;  // lowercased name -> value, e.g. "cookie"
 
     // Value of a query parameter, or "" if it isn't there.
     std::string param(const std::string& name) const
@@ -79,6 +84,7 @@ struct Response
     std::string body;
     bool sse = false;      // keep the connection open as an event stream instead
     std::string topic;     // which stream, when sse
+    std::string set_cookie;  // Set-Cookie value, or "" for none (a plain response only)
 
     static Response json(const std::string& body, int status = 200)
     {
@@ -183,9 +189,14 @@ class Http_Server
         if(wake_fds[1]>=0 && write(wake_fds[1], "", 1)<0) {}  // a full pipe already means "wake up"
     }
 
-    // Binds the first free port in [first_port, first_port+tries).
-    bool listen_on(int first_port, int tries = 20)
+    // Binds the first free port in [first_port, first_port+tries) on bind_ip
+    // (an IPv4 address, e.g. "127.0.0.1" or "0.0.0.0"). False on a bad address
+    // too, same as no free port.
+    bool listen_on(int first_port, const std::string& bind_ip = "127.0.0.1", int tries = 20)
     {
+        in_addr addr_in;
+        if(inet_pton(AF_INET, bind_ip.c_str(), &addr_in)!=1)
+        return false;
         // SOCK_CLOEXEC: an engine process started later (gui/engine_link.hpp)
         // must not inherit the listening socket and hold the port open.
         listen_fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
@@ -197,7 +208,7 @@ class Http_Server
         {
             sockaddr_in addr = {};
             addr.sin_family = AF_INET;
-            addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+            addr.sin_addr = addr_in;
             addr.sin_port = htons((uint16_t)p);
             if(bind(listen_fd, (sockaddr*)&addr, sizeof addr)==0 && ::listen(listen_fd, 16)==0)
             {
@@ -300,6 +311,7 @@ class Http_Server
         bool done = false;            // close once `out` is drained
         size_t content_length = 0;
         size_t header_end = 0;        // 0 until the blank line arrived
+        std::map<std::string, std::string> headers;  // filled once header_end is set
     };
 
     int listen_fd = -1;
@@ -385,11 +397,17 @@ class Http_Server
                 size_t nl = std::min(head.find('\n', i), head.size());
                 std::string line = head.substr(i, nl-i);
                 i = nl+1;
+                if(!line.empty() && line.back()=='\r')
+                line.pop_back();
                 size_t colon = line.find(':');
                 if(colon==std::string::npos)
                 continue;
                 std::string name = line.substr(0, colon);
                 std::transform(name.begin(), name.end(), name.begin(), ::tolower);
+                size_t vstart = colon+1;
+                while(vstart<line.size() && line[vstart]==' ')
+                vstart++;
+                c.headers[name] = line.substr(vstart);
                 if(name=="content-length")
                 c.content_length = (size_t)strtoul(line.c_str()+colon+1, nullptr, 10);
             }
@@ -416,9 +434,11 @@ class Http_Server
         }
         req.path = Request::decode(target);
         req.body = c.in.substr(c.header_end, c.content_length);
+        req.headers = c.headers;
         c.in.erase(0, c.header_end+c.content_length);
         c.header_end = 0;
         c.content_length = 0;
+        c.headers.clear();
 
         Response res = handler ? handler(req) : Response::text("no handler", 500);
         if(res.sse)
@@ -445,6 +465,7 @@ class Http_Server
 
     void respond(Client& c, const Response& res)
     {
+        std::string cookie_line = res.set_cookie.empty() ? "" : "Set-Cookie: " + res.set_cookie + "\r\n";
         char head[512];
         int n = snprintf(head, sizeof head,
             "HTTP/1.1 %d %s\r\n"
@@ -452,8 +473,9 @@ class Http_Server
             "Content-Length: %zu\r\n"
             "Cache-Control: no-store\r\n"
             "Connection: close\r\n"
+            "%s"
             "\r\n",
-            res.status, status_text(res.status), res.content_type.c_str(), res.body.size());
+            res.status, status_text(res.status), res.content_type.c_str(), res.body.size(), cookie_line.c_str());
         queue(c, std::string(head, n));
         queue(c, res.body);
     }
