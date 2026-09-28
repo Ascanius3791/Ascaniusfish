@@ -24,13 +24,11 @@ constexpr long long ENGINE_MAX_WAIT_MS = 600000;   // a fixed-depth search may t
 constexpr long long ENGINE_ANALYSIS_WAIT_MS = 86400000;  // "go infinite" ends on "stop", not on a clock
 constexpr int ENGINE_DEFAULT_DEPTH = 6;
 
-// What the engine is told about one move. Fixed depth, a fixed time per move,
-// or — for Analyse mode — no limit at all; the clock fields are here so M4 only
-// has to fill them in rather than reshape everything that carries a limit around.
+// What the engine is told about one move. Fixed depth, a clock, or — for
+// Analyse mode — no limit at all.
 struct Go_Limits
 {
     int depth = ENGINE_DEFAULT_DEPTH;
-    long long movetime_ms = 0;
     long long wtime_ms = 0, btime_ms = 0, winc_ms = 0, binc_ms = 0;
     bool infinite = false;   // think until "stop": what Analyse mode asks for
 
@@ -46,13 +44,13 @@ struct Go_Limits
 
     bool clocked() const { return wtime_ms>0 || btime_ms>0; }
 
-    // Which of the four the engine will be given.
+    // Which of the three the engine will be given.
     const char* kind() const
     {
-        return infinite ? "infinite" : clocked() ? "clock" : movetime_ms>0 ? "movetime" : "depth";
+        return infinite ? "infinite" : clocked() ? "clock" : "depth";
     }
 
-    long long value() const { return infinite || clocked() ? 0 : movetime_ms>0 ? movetime_ms : depth; }
+    long long value() const { return infinite || clocked() ? 0 : depth; }
 
     std::string go_command() const
     {
@@ -61,20 +59,19 @@ struct Go_Limits
         if(clocked())
         return "go wtime " + std::to_string(wtime_ms) + " btime " + std::to_string(btime_ms)
              + " winc " + std::to_string(winc_ms) + " binc " + std::to_string(binc_ms);
-        if(movetime_ms>0)
-        return "go movetime " + std::to_string(movetime_ms);
         return "go depth " + std::to_string(depth>0 ? depth : ENGINE_DEFAULT_DEPTH);
     }
 
-    // How long to wait for a bestmove before calling the engine hung.
-    long long deadline_ms() const
+    // How long to wait for a bestmove before calling the engine hung. A
+    // clocked search waits on the mover's own remaining time, not the max of
+    // both sides' — with asymmetric clocks that would let the side with less
+    // time hang for as long as its opponent's whole clock.
+    long long deadline_ms(bool white_to_move) const
     {
         if(infinite)
         return ENGINE_ANALYSIS_WAIT_MS;   // only a dead engine (EOF) ends the wait early
-        if(movetime_ms>0)
-        return movetime_ms+ENGINE_GRACE_MS;
         if(clocked())
-        return std::max(wtime_ms, btime_ms)+ENGINE_GRACE_MS;
+        return (white_to_move ? wtime_ms : btime_ms)+ENGINE_GRACE_MS;
         return ENGINE_MAX_WAIT_MS;
     }
 };
@@ -86,7 +83,8 @@ struct Search_Request
     std::string start_fen;
     std::vector<std::string> moves;
     Go_Limits limits;
-    bool new_game = false;   // send "ucinewgame" first
+    bool new_game = false;       // send "ucinewgame" first
+    bool white_to_move = true;   // for a clocked search's own hang deadline
 };
 
 struct Search_Result
@@ -241,7 +239,7 @@ class Engine_Link
                 if(abort_requested)   // aborted before the "go" was out: end it now
                 send_locked("stop");
                 lock.unlock();
-                read_bestmove(request.limits, my_token, answer);
+                read_bestmove(request.limits, request.white_to_move, my_token, answer);
                 lock.lock();
             }
             result = answer;
@@ -258,9 +256,9 @@ class Engine_Link
     }
 
     // Reads until "bestmove", publishing every finished iteration as progress.
-    void read_bestmove(const Go_Limits& limits, long long my_token, Search_Result& answer)
+    void read_bestmove(const Go_Limits& limits, bool white_to_move, long long my_token, Search_Result& answer)
     {
-        long long deadline = now_ms()+limits.deadline_ms();
+        long long deadline = now_ms()+limits.deadline_ms(white_to_move);
         std::string line;
         while(engine.read_line(line, deadline))
         {

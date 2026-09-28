@@ -29,6 +29,37 @@ squares and all 12 piece images as embedded `data:` URIs, so the page needs no n
 Files are copied verbatim. To update, repeat the commands above with a new version and
 bump the version in this file.
 
+## Sound effects — lichess.org's "standard" theme
+
+Three files from `lichess-org/lila`'s `public/sound/standard/`: `Move.mp3`,
+`Capture.mp3`, `GenericNotify.mp3`. Used by `gui/web/sound.js` for a plain move, a
+capture, and a game start/end respectively — see the comment there for how that
+maps to lila's own `ui/site/src/sound.ts`.
+
+**Licensing is unresolved, unlike chessground above.** lila's own `COPYING.md`
+lists "the other sounds in `public/sound`" (the standard theme among them) under
+"Exceptions (non-free)" — outside its AGPLv3-or-later grant, with no license
+named. This repo is public. Ascanius chose to vendor the standard set anyway
+(2026-09-27, decided while filing issue #30) rather than switch to one of lila's
+AGPLv3+ themes (`sfx`, `futuristic`, `nes`, `piano`, all by Enigmahack) or
+CC-BY-NC-SA `lisp`, which would have been the license-clean alternative with the
+same event set but different audio.
+
+### How these files got here (not part of `make gui`)
+
+```
+curl -o gui/web/vendor/sound/standard/Move.mp3 \
+  https://raw.githubusercontent.com/lichess-org/lila/master/public/sound/standard/Move.mp3
+curl -o gui/web/vendor/sound/standard/Capture.mp3 \
+  https://raw.githubusercontent.com/lichess-org/lila/master/public/sound/standard/Capture.mp3
+curl -o gui/web/vendor/sound/standard/GenericNotify.mp3 \
+  https://raw.githubusercontent.com/lichess-org/lila/master/public/sound/standard/GenericNotify.mp3
+```
+
+Files are copied verbatim, mp3 only (no `.ogg` fallback — every browser this GUI
+targets plays mp3 natively, and chessground's own vendoring above sets the
+precedent of keeping one format rather than both).
+
 ## Why the board is drawn from CSS, and what that costs
 
 Both stylesheets above paint with **CSS backgrounds**, not `<img>` elements:

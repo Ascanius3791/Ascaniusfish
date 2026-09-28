@@ -138,6 +138,7 @@ inline std::string mime_type(const std::string& path)
     if(ext=="png")  return "image/png";
     if(ext=="ico")  return "image/x-icon";
     if(ext=="woff2") return "font/woff2";
+    if(ext=="mp3")  return "audio/mpeg";
     if(ext=="md")   return "text/plain; charset=utf-8";
     return "application/octet-stream";
 }
@@ -152,6 +153,11 @@ class Http_Server
     // Called on every poll iteration, so a wake() from another thread turns
     // into work done here: this is where a finished search reaches the pages.
     std::function<void()> on_tick;
+    // How long the next poll may block, asked fresh before each one. Unset
+    // keeps the old fixed 30s; a clocked game running (gui_server.cpp) wants a
+    // short one, or a flag falls only when something else happens to wake the
+    // loop rather than within about as long as this returns.
+    std::function<int()> poll_timeout;
 
     Http_Server()
     {
@@ -239,7 +245,7 @@ class Http_Server
     void run()
     {
         while(!stopping)
-        poll_once(30000);
+        poll_once(poll_timeout ? poll_timeout() : 30000);
     }
 
     // One poll iteration: accepts, reads, answers, writes. Also sends an SSE

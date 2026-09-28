@@ -184,12 +184,28 @@ When editing engine internals, `lib/*.hpp` is the declaration/interface layer an
 `GET /api/state`. All chess logic stays in C++; the JS is presentation only. Routes:
 `GET /api/state`, `GET /api/events` (SSE),
 `POST /api/{move,fen,reset,undo,resign,play,watch,mode,flip,analyse,line,settings}`, all taking
-`id` (default `main`). `POST /api/play` carries the Play settings (`side` = white/black/random,
-`kind` = depth/movetime, `value`); applying them starts a new game, since a colour cannot change
-mid-game. `POST /api/watch` carries both a side's setting (`side` = white/black plus
-`kind`/`value`, which applies from the next move and does *not* stop the game) and a run control
-(`action` = start/pause/step). Pause is deliberately **not** an abort: the move being thought
-about is finished and played, which is what "after the current move" means.
+`id` (default `main`). Both Play and Watch play under a Clock or a fixed depth (#21); a `kind` of
+`depth` carries `value` (Watch: per side), and a `kind` of `clock` carries `baseMs`/`incMs` in
+ms — presets and Custom base+increment are entirely a page-side concept (`gui/web/app.js`'s
+`CLOCK_PRESETS`/`HYPERBULLET_PRESETS`), resolved to a plain base+increment before the request is
+sent, so the server only ever sees one shape either way a clock was chosen. `POST /api/play`
+carries the Play settings (`side` = white/black/random, plus `kind`/`value`, or `kind=clock` with
+`baseMs`/`incMs` and, for an asymmetric Custom clock, `blackBaseMs`/`blackIncMs`); applying any of
+it starts a new game, since none of a colour, a depth or a clock can sensibly change mid-game.
+`POST /api/watch` carries both a side's setting (`side` = white/black plus the same `kind` shape)
+and a run control (`action` = start/pause/step); unlike Play's one call, a clock's two colours are
+set with two requests, one per side. A setting change **also** restarts the game here now (#21) —
+earlier it applied from the next move without stopping the game; that behaviour is gone, so both
+panels' settings picker can be hidden once a game is on the same way (`gui/web/app.js`'s
+`settingsLocked()`) and a "Change settings" button reopens it. Pause is deliberately **not** an
+abort: the move being thought about is finished and played, which is what "after the current
+move" means — and, since a clock counts through Pause for exactly that reason, `GET /api/state`'s
+top-level `clock` object (`whiteMs`, `blackMs`, `running`) is live only while something is
+actually ticking; the page interpolates it locally between pushes rather than being sent one every
+tick (`Session::clock_sync()`/`clock_ticking()`, `gui/session.hpp`). The server itself notices a
+flag falling — not just a clocked engine's own time management — on every poll iteration
+(`Session::check_flag()`; `gui/http_server.hpp`'s `poll_timeout` shortens while any clock ticks),
+ending the game the way a resignation does, with a `TimeControl` PGN tag alongside it.
 `POST /api/settings` carries the gear's switches (`evalBar`, `engineLine`), each applied only
 when the body names it, so one can be flipped without saying anything about the other.
 `POST /api/analyse` is the engine on/off toggle; `POST /api/line` walks the board along a

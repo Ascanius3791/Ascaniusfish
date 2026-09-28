@@ -45,11 +45,18 @@
     </label>
     <p class="note">Both apply in every mode. They last as long as the server
     runs and are not saved to a file.</p>
+    <label class="switch">
+      <input type="checkbox" id="set-sound">
+      <span>Sound</span>
+    </label>
+    <p class="note">Whether this browser plays sound, so it stays a
+    per-browser choice (in localStorage) rather than one the server holds.</p>
   </section>
 </header>
 
 <main>
   <section class="board-column">
+    <p id="clock-top" class="clock-chip" hidden></p>
     <div class="board-row">
       <div id="evalbar" class="evalbar" hidden aria-hidden="true">
         <div class="evalbar-fill"></div>
@@ -61,6 +68,7 @@
         </div>
       </div>
     </div>
+    <p id="clock-bottom" class="clock-chip" hidden></p>
     <p id="status" class="status"></p>
   </section>
 
@@ -72,6 +80,7 @@
       <button id="undo">Take back</button>
       <button id="flip">Flip board</button>
       <button id="resign" hidden>Resign</button>
+      <button id="to-analyse" hidden>Analyse this game</button>
     </div>
 
     <section class="panel" id="play-panel" hidden>
@@ -85,18 +94,45 @@
           <button data-side="random">Random</button>
         </div>
       </div>
-      <form id="limit-form" class="field" autocomplete="off">
-        <span class="label">Engine thinks</span>
-        <div class="controls">
-          <select id="limit-kind" aria-label="Search limit">
-            <option value="depth">to depth</option>
-            <option value="movetime">for ms</option>
-          </select>
-          <input id="limit-value" type="number" min="1" step="1" aria-label="Limit value">
-          <button type="submit">Apply</button>
+
+      <p id="play-setting-summary" class="setting-summary" hidden>
+        <span id="play-setting-text"></span>
+        <button type="button" id="play-setting-change">Change settings</button>
+      </p>
+
+      <div id="play-setting-form">
+        <div class="field">
+          <span class="label">Engine thinks</span>
+          <div id="play-kind" class="controls">
+            <button type="button" data-kind="depth">Fixed depth</button>
+            <button type="button" data-kind="clock">Clock</button>
+          </div>
         </div>
-      </form>
-      <p class="note">Changing either setting starts a new game from the position
+
+        <form id="play-depth-form" class="field" autocomplete="off">
+          <div class="controls">
+            <input id="play-depth-value" type="number" min="1" step="1" aria-label="Depth">
+            <button type="submit">Apply</button>
+          </div>
+        </form>
+
+        <div id="play-clock-form" class="field">
+          <div id="play-presets" class="controls presets"></div>
+          <form id="play-custom-form" autocomplete="off" hidden>
+            <div class="clock-custom">
+              <label>White base (s) <input id="play-custom-white-base" type="number" min="1" step="1"></label>
+              <label>White inc (s) <input id="play-custom-white-inc" type="number" min="0" step="1"></label>
+              <label>Black base (s) <input id="play-custom-black-base" type="number" min="1" step="1"></label>
+              <label>Black inc (s) <input id="play-custom-black-inc" type="number" min="0" step="1"></label>
+            </div>
+            <div class="controls">
+              <button type="submit">Apply</button>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <p class="note">Changing a setting starts a new game from the position
       the current game started from.</p>
     </section>
 
@@ -107,31 +143,57 @@
         <button id="watch-run"></button>
         <button id="watch-step" title="Play one move, then pause">Step</button>
       </div>
-      <form class="field watch-side" data-side="white" autocomplete="off">
-        <span class="label">White thinks</span>
-        <div class="controls">
-          <select class="watch-kind" aria-label="White search limit">
-            <option value="depth">to depth</option>
-            <option value="movetime">for ms</option>
-          </select>
-          <input class="watch-value" type="number" min="1" step="1" aria-label="White limit value">
-          <button type="submit">Apply</button>
+
+      <p id="watch-setting-summary" class="setting-summary" hidden>
+        <span id="watch-setting-text"></span>
+        <button type="button" id="watch-setting-change">Change settings</button>
+      </p>
+
+      <div id="watch-setting-form">
+        <div class="field">
+          <span class="label">Engine thinks</span>
+          <div id="watch-kind" class="controls">
+            <button type="button" data-kind="depth">Fixed depth</button>
+            <button type="button" data-kind="clock">Clock</button>
+          </div>
         </div>
-      </form>
-      <form class="field watch-side" data-side="black" autocomplete="off">
-        <span class="label">Black thinks</span>
-        <div class="controls">
-          <select class="watch-kind" aria-label="Black search limit">
-            <option value="depth">to depth</option>
-            <option value="movetime">for ms</option>
-          </select>
-          <input class="watch-value" type="number" min="1" step="1" aria-label="Black limit value">
-          <button type="submit">Apply</button>
+
+        <div id="watch-depth-form">
+          <form class="field watch-side" data-side="white" autocomplete="off">
+            <span class="label">White thinks</span>
+            <div class="controls">
+              <input class="watch-depth-value" type="number" min="1" step="1" aria-label="White depth">
+              <button type="submit">Apply</button>
+            </div>
+          </form>
+          <form class="field watch-side" data-side="black" autocomplete="off">
+            <span class="label">Black thinks</span>
+            <div class="controls">
+              <input class="watch-depth-value" type="number" min="1" step="1" aria-label="Black depth">
+              <button type="submit">Apply</button>
+            </div>
+          </form>
         </div>
-      </form>
-      <p class="note">A setting applies from the next move on, so you can change
-      it without stopping the game. Load a FEN below to start from a position of
-      your own — the side to move in it plays first.</p>
+
+        <div id="watch-clock-form" class="field">
+          <div id="watch-presets" class="controls presets"></div>
+          <form id="watch-custom-form" autocomplete="off" hidden>
+            <div class="clock-custom">
+              <label>White base (s) <input id="watch-custom-white-base" type="number" min="1" step="1"></label>
+              <label>White inc (s) <input id="watch-custom-white-inc" type="number" min="0" step="1"></label>
+              <label>Black base (s) <input id="watch-custom-black-base" type="number" min="1" step="1"></label>
+              <label>Black inc (s) <input id="watch-custom-black-inc" type="number" min="0" step="1"></label>
+            </div>
+            <div class="controls">
+              <button type="submit">Apply</button>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <p class="note">Changing a setting starts a new self-play game. Load a
+      FEN below to start Watch from a position of your own — the side to move
+      in it plays first.</p>
     </section>
 
     <!-- What the engine thinks of the position on the board, in every mode: the

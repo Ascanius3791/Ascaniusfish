@@ -90,6 +90,7 @@ struct Pgn_Tags
     std::string white = "?";
     std::string black = "?";
     std::string result = "*";
+    std::string time_control;   // "<base>+<inc>" in seconds, PGN's own unit; empty omits the tag
 };
 
 class Move_Tree
@@ -313,6 +314,8 @@ class Move_Tree
         out += tag("Event", tags.event) + tag("Site", tags.site) + tag("Date", tags.date)
              + tag("Round", tags.round) + tag("White", tags.white) + tag("Black", tags.black)
              + tag("Result", tags.result);
+        if(!tags.time_control.empty())
+        out += tag("TimeControl", tags.time_control);
         std::string start = Game::fen_of(nodes[0].pos, nodes[0].key[13], start_halfmove, start_fullmove);
         if(start!=std::string(UCI_STARTPOS))
         out += tag("SetUp", "1") + tag("FEN", start);

@@ -34,8 +34,12 @@
 #include <string>
 
 constexpr int DEFAULT_PORT = 8173;
-constexpr long long MAX_MOVETIME_MS = 600000;
 constexpr int MAX_DEPTH = 40;
+constexpr long long MIN_CLOCK_BASE_MS = 100;            // permissive enough for hyperbullet's 1s
+constexpr long long MAX_CLOCK_BASE_MS = 24LL*3600*1000; // a day
+constexpr long long MAX_CLOCK_INC_MS = 3600*1000;       // an hour
+constexpr int CLOCK_POLL_MS = 200;   // how often a running clock is checked for a flag fall
+constexpr int IDLE_POLL_MS = 30000;  // the old fixed interval, when nothing is ticking
 
 static Sessions sessions;
 static Http_Server server;
@@ -59,6 +63,11 @@ struct Engine_Set
 };
 
 static std::map<std::string, std::unique_ptr<Engine_Set>> engines;
+
+// Whether any session's clock is ticking right now, refreshed once a tick by
+// collect_all() and read by the poll loop's timeout below — a running clock
+// wants to be checked for a flag fall often, an idle server does not.
+static bool any_clock_ticking = false;
 
 static Engine_Set& engines_of(const Session& session)
 {
@@ -125,9 +134,11 @@ static bool maybe_start_search(Session& session)
     Search_Request request;
     request.start_fen = session.root_fen();
     request.moves = session.moves();
-    request.limits = kind==Search_Kind::PLAY  ? session.limits
-                   : kind==Search_Kind::WATCH ? session.watch_limits_now()
-                   : Go_Limits::analysis();
+    request.white_to_move = session.white_to_move();
+    request.limits = kind==Search_Kind::ANALYSIS ? Go_Limits::analysis()
+                    : session.clocked_now()       ? session.clock_go_limits(now_ms())
+                    : kind==Search_Kind::PLAY     ? session.limits
+                                                   : session.watch_limits_now();
     // A "ucinewgame" only when this engine has not seen this game before: in
     // Watch mode each side's process meets the game once, and in Analyse mode
     // moving around a game is not a reason to throw its table away.
@@ -169,6 +180,20 @@ static void collect_search(Session& session)
     return;
     if(result.token!=set.awaiting)
     return;                          // an aborted search's answer: not wanted any more
+    // Checked here, with `session.searching` still what it was through the
+    // whole search: clock_ticking() reads it (via watching()) to keep a Watch
+    // clock counting through a Pause pressed mid-search, so ending the game
+    // on time has to see the same thing collect_all()'s per-tick check does.
+    if(session.check_flag(now_ms()))
+    {
+        set.active = -1;
+        set.awaiting = 0;
+        session.searching = Search_Kind::NONE;
+        session.live_valid = false;
+        session.watch_pause();
+        broadcast(session);
+        return;
+    }
     Search_Kind kind = session.searching;
     set.active = -1;
     set.awaiting = 0;
@@ -200,6 +225,7 @@ static void collect_search(Session& session)
         broadcast(session);
         return;
     }
+    session.clock_credit_increment(mover_was_white);
     session.annotate_last(result.info, mover_was_white);
     if(kind==Search_Kind::WATCH)
     {
@@ -264,14 +290,29 @@ static void collect_all()
     std::vector<std::string> ids;
     for(auto& entry : engines)
     ids.push_back(entry.first);
+    long long now = now_ms();
+    bool ticking = false;
     for(const std::string& id : ids)
     {
         Session& session = sessions.get(id);
-        collect_search(session);
-        if(maybe_start_search(session))
-        broadcast(session);   // a search that had to wait for the last one
+        // A flag can fall with nothing else happening — nobody moving, no
+        // search finishing — so it is checked before anything else touches
+        // this session this tick, not only when one of those does.
+        if(session.check_flag(now))
+        {
+            abort_search(session);
+            broadcast(session);
+        }
+        else
+        {
+            collect_search(session);
+            if(maybe_start_search(session))
+            broadcast(session);   // a search that had to wait for the last one
+        }
+        ticking = ticking || session.clock_ticking();
         release_idle_engines(id, session);
     }
+    any_clock_ticking = ticking;
 }
 
 // The UCI binary Play mode drives: as given, else next to the working directory
@@ -333,40 +374,72 @@ static bool read_web_file(const std::string& path, std::string& out)
     return true;
 }
 
-// A depth/movetime setting out of a request body, as both the Play and the
-// Watch panel send it. Returns false and fills `error` if it is out of range;
-// leaves `limits` alone when the body carries no "kind" at all.
-static bool read_limits(const std::map<std::string, std::string>& body, Go_Limits& limits, std::string& error)
+// A depth or clock setting parsed out of a request body: "kind" is "depth" or
+// "clock", as both the Play and the Watch panel send it. `given` is false
+// (everything else left default) when the body carries no "kind" at all — the
+// caller then leaves whatever was already chosen alone.
+struct Setting_Body
+{
+    bool given = false;
+    bool clock = false;
+    int depth = ENGINE_DEFAULT_DEPTH;
+    long long base_ms = 0, inc_ms = 0;             // clock: White's, or the only side's (Watch)
+    bool black_given = false;                      // Play's Custom only: an explicit override
+    long long black_base_ms = 0, black_inc_ms = 0;
+};
+
+// "baseMs"/"incMs", or "blackBaseMs"/"blackIncMs" with `prefix` "black".
+static bool read_clock_pair(const std::map<std::string, std::string>& body, const std::string& prefix,
+                            long long& base_ms, long long& inc_ms, std::string& error)
+{
+    auto base = body.find(prefix + (prefix.empty() ? "baseMs" : "BaseMs"));
+    auto inc = body.find(prefix + (prefix.empty() ? "incMs" : "IncMs"));
+    base_ms = base==body.end() ? 0 : std::atoll(base->second.c_str());
+    inc_ms = inc==body.end() ? 0 : std::atoll(inc->second.c_str());
+    if(base_ms<MIN_CLOCK_BASE_MS || base_ms>MAX_CLOCK_BASE_MS)
+    {
+        error = "clock base must be " + std::to_string(MIN_CLOCK_BASE_MS) + " to "
+              + std::to_string(MAX_CLOCK_BASE_MS) + " ms";
+        return false;
+    }
+    if(inc_ms<0 || inc_ms>MAX_CLOCK_INC_MS)
+    {
+        error = "clock increment must be 0 to " + std::to_string(MAX_CLOCK_INC_MS) + " ms";
+        return false;
+    }
+    return true;
+}
+
+static bool read_setting(const std::map<std::string, std::string>& body, Setting_Body& out, std::string& error)
 {
     auto kind = body.find("kind");
     if(kind==body.end())
     return true;
-    auto value = body.find("value");
-    long long n = value==body.end() ? 0 : std::atoll(value->second.c_str());
+    out.given = true;
     if(kind->second=="depth")
     {
+        auto value = body.find("value");
+        long long n = value==body.end() ? 0 : std::atoll(value->second.c_str());
         if(n<1 || n>MAX_DEPTH)
         {
             error = "depth must be 1 to " + std::to_string(MAX_DEPTH);
             return false;
         }
-        limits = Go_Limits();
-        limits.depth = (int)n;
+        out.clock = false;
+        out.depth = (int)n;
         return true;
     }
-    if(kind->second=="movetime")
+    if(kind->second=="clock")
     {
-        if(n<1 || n>MAX_MOVETIME_MS)
-        {
-            error = "move time must be 1 to " + std::to_string(MAX_MOVETIME_MS) + " ms";
-            return false;
-        }
-        limits = Go_Limits();
-        limits.depth = 0;
-        limits.movetime_ms = n;
+        if(!read_clock_pair(body, "", out.base_ms, out.inc_ms, error))
+        return false;
+        out.clock = true;
+        out.black_given = body.count("blackBaseMs")>0 || body.count("blackIncMs")>0;
+        if(out.black_given && !read_clock_pair(body, "black", out.black_base_ms, out.black_inc_ms, error))
+        return false;
         return true;
     }
-    error = "kind must be depth or movetime";
+    error = "kind must be depth or clock";
     return false;
 }
 
@@ -406,6 +479,16 @@ static Response handle_post(const Request& req)
     Session& session = session_of(req, body);
     std::string error;
     bool ok = true;
+    // Charges whatever ticked since the last sync to whoever is on the move
+    // *before* this request's own handler below touches the tree or the mode —
+    // several of them (nav, goto, delete, undo, fen) mutate first and only
+    // call abort_search() after, so syncing there would attribute the elapsed
+    // time to the position they just moved to rather than the one it was
+    // actually spent on. /api/move and /api/watch's start/step sync again,
+    // moments later, against the position/state their own handling settles
+    // on — clock_sync() is incremental, so charging a negligible extra sliver
+    // twice here is harmless.
+    session.clock_sync(now_ms());
 
     if(req.path=="/api/move")
     {
@@ -420,9 +503,19 @@ static Response handle_post(const Request& req)
         // In Play mode a move of yours is also the answer to a failed search:
         // it clears the error, so the engine is asked again.
         session.engine_error.clear();
+        if(session.check_flag(now_ms()))
+        {
+            abort_search(session);   // your clock had already run out
+            broadcast(session);
+            return Response::json(json::error("the game is over"), 409);
+        }
+        bool mover_white = session.white_to_move();
         ok = session.play(uci->second, error);
         if(ok)
-        abort_search(session);   // the analysis was about the position you just left
+        {
+            session.clock_credit_increment(mover_white);
+            abort_search(session);   // the analysis was about the position you just left
+        }
     }
     else if(req.path=="/api/line")
     {
@@ -534,40 +627,95 @@ static Response handle_post(const Request& req)
         Mode parsed;
         if(mode==body.end() || !mode_from_name(mode->second, parsed))
         return Response::json(json::error("mode must be analyse, play or watch"), 400);
+        // "Analyse this game", after a Play or Watch game ends, wants the tree
+        // kept; a plain click on the mode selector wants a fresh board, the
+        // same as switching into Play always does.
+        auto keep = body.find("keepGame");
+        bool keep_game = keep!=body.end() && keep->second=="true";
         abort_search(session);
-        session.mode = parsed;
         if(parsed==Mode::PLAY)
         session.start_play();
+        else if(parsed==Mode::ANALYSE && !keep_game)
+        session.start_analyse();
+        else
+        session.mode = parsed;
     }
     else if(req.path=="/api/play")
     {
         // The settings of a game against the engine. Applying them starts a new
-        // game: a colour or a search limit cannot sensibly change mid-game.
+        // game: a colour, a depth or a clock cannot sensibly change mid-game.
         Side_Choice side = session.side_choice;
         Go_Limits limits = session.limits;
+        bool clock_on = session.play_clock_on;
+        long long base_ms[2] = {session.play_base_ms[0], session.play_base_ms[1]};
+        long long inc_ms[2] = {session.play_inc_ms[0], session.play_inc_ms[1]};
         auto given = body.find("side");
         if(given!=body.end() && !side_choice_from_name(given->second, side))
         return Response::json(json::error("side must be white, black or random"), 400);
-        if(!read_limits(body, limits, error))
+        Setting_Body setting;
+        if(!read_setting(body, setting, error))
         return Response::json(json::error(error), 400);
+        if(setting.given)
+        {
+            clock_on = setting.clock;
+            if(setting.clock)
+            {
+                base_ms[0] = base_ms[1] = setting.base_ms;
+                inc_ms[0] = inc_ms[1] = setting.inc_ms;
+                if(setting.black_given)
+                {
+                    base_ms[1] = setting.black_base_ms;
+                    inc_ms[1] = setting.black_inc_ms;
+                }
+            }
+            else
+            limits.depth = setting.depth;
+        }
         abort_search(session);
         session.side_choice = side;
         session.limits = limits;
+        session.play_clock_on = clock_on;
+        session.play_base_ms[0] = base_ms[0];
+        session.play_base_ms[1] = base_ms[1];
+        session.play_inc_ms[0] = inc_ms[0];
+        session.play_inc_ms[1] = inc_ms[1];
         session.start_play();
     }
     else if(req.path=="/api/watch")
     {
         // Ascaniusfish against itself. One request carries both a side's
-        // setting ("side" plus "kind"/"value") and a run control ("action"), so
-        // the page can change how a side thinks without stopping the game: the
-        // next move simply uses the new setting.
+        // setting ("side" plus "kind"/"value" or the clock fields) and a run
+        // control ("action"). Unlike a side's setting alone, a Clock/Fixed-
+        // depth or preset/Custom choice restarts the game, matching Play — the
+        // settings selector is hidden once a game is on for exactly this
+        // reason (a preset click sends this twice, once per side).
         auto side = body.find("side");
+        bool restart = false;
         if(side!=body.end())
         {
             if(side->second!="white" && side->second!="black")
             return Response::json(json::error("side must be white or black"), 400);
-            if(!read_limits(body, session.watch_limits[side->second=="white" ? 0 : 1], error))
+            int i = side->second=="white" ? 0 : 1;
+            Setting_Body setting;
+            if(!read_setting(body, setting, error))
             return Response::json(json::error(error), 400);
+            if(setting.given)
+            {
+                restart = true;
+                session.watch_clock_on = setting.clock;
+                if(setting.clock)
+                {
+                    session.watch_base_ms[i] = setting.base_ms;
+                    session.watch_inc_ms[i] = setting.inc_ms;
+                }
+                else
+                session.watch_limits[i].depth = setting.depth;
+            }
+        }
+        if(restart)
+        {
+            abort_search(session);
+            session.start_watch();
         }
         auto action = body.find("action");
         if(action!=body.end())
@@ -588,6 +736,7 @@ static Response handle_post(const Request& req)
                 session.engine_error.clear();
                 session.watch_running = action->second=="start";
                 session.watch_step = action->second=="step";
+                session.clock_sync(now_ms());   // arm the resuming mover's clock from this press
             }
             else
             return Response::json(json::error("action must be start, pause or step"), 400);
@@ -728,6 +877,9 @@ int main(int argc, char** argv)
     // Where a finished search becomes a move on the board: on this thread, so
     // nothing the worker produced ever touches a socket itself.
     server.on_tick = collect_all;
+    // A running clock is checked for a flag fall often; an idle server sits
+    // at the old fixed interval and costs nothing.
+    server.poll_timeout = [] { return any_clock_ticking ? CLOCK_POLL_MS : IDLE_POLL_MS; };
 
     if(!server.listen_on(port))
     {

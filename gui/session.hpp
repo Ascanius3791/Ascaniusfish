@@ -169,6 +169,28 @@ class Session
     bool watch_running = false;
     bool watch_step = false;
 
+    // The Clock/Fixed-depth switch and the clock it is set to, one pair per
+    // mode (Play's applies to both colours from a preset, or per colour from
+    // Custom; Watch's the same, scoped by the existing per-side setting
+    // calls). [0] white, [1] black. A preset or Custom choice, like a side or
+    // a depth, restarts the game — see start_play()/start_watch().
+    bool play_clock_on = false;
+    long long play_base_ms[2] = {0, 0}, play_inc_ms[2] = {0, 0};
+    bool watch_clock_on = false;
+    long long watch_base_ms[2] = {0, 0}, watch_inc_ms[2] = {0, 0};
+
+    // The live clock of whichever game is on. Charged and re-armed by
+    // clock_sync(), fed an explicit `now` by every call site rather than
+    // reading one itself, so a flag falls within about however often the
+    // server's poll loop calls it (gui/http_server.hpp's poll_timeout
+    // shortens while clock_ticking(), for exactly that reason) and so this is
+    // testable with synthetic timestamps. `mutable` so state_json() (const)
+    // can report numbers accurate to the moment of the request, the same
+    // reason state_serial below is mutable.
+    mutable long long clock_remaining_ms[2] = {0, 0};
+    mutable long long clock_mover_since_ms = 0;   // 0 = not currently ticking
+    bool flagged = false, flagged_white = false;  // a clock reaching zero, like a resignation
+
     Search_Kind searching = Search_Kind::NONE;
 
     // A serial on every state this session hands out, so the page can tell two
@@ -244,6 +266,28 @@ class Session
         mode = Mode::PLAY;
         human_white = side_choice==Side_Choice::RANDOM ? coin_flip() : side_choice==Side_Choice::WHITE;
         flipped = !human_white;
+        set_start(start_pos, start_halfmove, start_fullmove);
+    }
+
+    // Watch's analogue of start_play(): a new Clock/Fixed-depth or preset/
+    // Custom choice restarts the self-play game from the position it began
+    // from, the same as changing Play's setting does.
+    void start_watch()
+    {
+        mode = Mode::WATCH;
+        set_start(start_pos, start_halfmove, start_fullmove);
+    }
+
+    // The mode selector's plain switch into Analyse: begins fresh from the
+    // position the session starts from, the same as start_play()/
+    // start_watch() do for their modes, rather than silently continuing
+    // whatever tree a finished Play or Watch game left behind. "Analyse this
+    // game" (POST /api/mode with keepGame=true, gui_server.cpp) is the one
+    // path that keeps the tree, for jumping straight into analysing a game
+    // that just ended.
+    void start_analyse()
+    {
+        mode = Mode::ANALYSE;
         set_start(start_pos, start_halfmove, start_fullmove);
     }
 
@@ -402,6 +446,93 @@ class Session
         watch_step = false;
     }
 
+    // ---------------------------------------------------------------- clock
+
+    // Is the *current* mode's Clock switch on.
+    bool clocked_now() const
+    {
+        return mode==Mode::PLAY ? play_clock_on : mode==Mode::WATCH ? watch_clock_on : false;
+    }
+
+    long long clock_base_ms(int colour) const { return mode==Mode::WATCH ? watch_base_ms[colour] : play_base_ms[colour]; }
+    long long clock_inc_ms(int colour)  const { return mode==Mode::WATCH ? watch_inc_ms[colour]  : play_inc_ms[colour]; }
+
+    // Should the clock be counting down right now. Neither side's clock runs
+    // before the game's first move — the time to decide it is free, the same
+    // as Ascaniusfish not booking any of its own thinking time before it has
+    // made a move — so this stays false until the tree has left the root.
+    // Play then always runs once a clocked game is on; Watch also counts
+    // while a search it started is still out even after Pause is pressed,
+    // since "after the current move" means the move being thought about is
+    // not aborted — only once it lands does pausing actually freeze the clock.
+    bool clock_ticking() const
+    {
+        if(!clocked_now() || !tree.at_tip() || tree.at_root())
+        return false;
+        std::string reason;
+        if(result(reason)!=Outcome::ONGOING)
+        return false;
+        if(mode==Mode::WATCH)
+        return watching() || watch_running || watch_step;
+        return true;
+    }
+
+    // Brings the live clock up to date with `now`: charges whatever ticked
+    // since the last sync to whoever was on the move then, clamped at 0, then
+    // re-arms (or freezes) for whoever should be ticking now. Idempotent and
+    // safe to call as often as wanted — each call only narrows the gap to
+    // `now` — which is what lets every clock-relevant read and action call it
+    // without tracking transitions of its own.
+    void clock_sync(long long now) const
+    {
+        if(clock_mover_since_ms)
+        {
+            int mover = white_to_move() ? 0 : 1;
+            clock_remaining_ms[mover] = std::max(0LL, clock_remaining_ms[mover]-(now-clock_mover_since_ms));
+        }
+        clock_mover_since_ms = clock_ticking() ? now : 0;
+    }
+
+    // True the moment this call ends the game on time. Called on every server
+    // tick and before anything that would otherwise play a move, so a flag is
+    // noticed at latest one tick after it actually fell rather than only when
+    // something else happens to ask.
+    bool check_flag(long long now)
+    {
+        clock_sync(now);
+        if(flagged || !clock_ticking())
+        return false;
+        int mover = white_to_move() ? 0 : 1;
+        if(clock_remaining_ms[mover]>0)
+        return false;
+        flagged = true;
+        flagged_white = white_to_move();
+        return true;
+    }
+
+    // Credits the increment of whoever's move just landed.
+    void clock_credit_increment(bool mover_white)
+    {
+        if(!clocked_now())
+        return;
+        int i = mover_white ? 0 : 1;
+        clock_remaining_ms[i] += clock_inc_ms(i);
+    }
+
+    // The limits for the next "go" under a clock: live remaining time, synced
+    // to `now` first.
+    Go_Limits clock_go_limits(long long now) const
+    {
+        clock_sync(now);
+        Go_Limits limits;
+        limits.depth = 0;
+        limits.wtime_ms = clock_remaining_ms[0];
+        limits.btime_ms = clock_remaining_ms[1];
+        limits.winc_ms = clock_inc_ms(0);
+        limits.binc_ms = clock_inc_ms(1);
+        return limits;
+    }
+
     // Whether Analyse mode wants a search running: the toggle is on, the
     // engine is alive, and the position is one that still has moves.
     bool analysis_wanted() const
@@ -447,6 +578,11 @@ class Session
     // position you chose.
     bool undo(std::string& error)
     {
+        if(flagged)
+        {
+            error = "the game ended on time — start a new game";
+            return false;
+        }
         if(resigned)
         {
             resigned = false;   // taking back a resignation plays the game on
@@ -483,14 +619,19 @@ class Session
             && tree.position().white_move!=human_white;
     }
 
-    // The game's result, resignation included. A resignation belongs to the
-    // game that was played, so it does not follow the cursor into a side line.
+    // The game's result, resignation and a flag fall included. Both belong to
+    // the game that was played, so neither follows the cursor into a side line.
     Outcome result(std::string& reason) const
     {
         if(resigned)
         {
             reason = resigned_white ? "white resigns" : "black resigns";
             return resigned_white ? Outcome::BLACK_WINS : Outcome::WHITE_WINS;
+        }
+        if(flagged)
+        {
+            reason = std::string(flagged_white ? "white" : "black") + " loses on time";
+            return flagged_white ? Outcome::BLACK_WINS : Outcome::WHITE_WINS;
         }
         return tree.outcome(reason);
     }
@@ -518,10 +659,15 @@ class Session
         start_fullmove = tree.start_fullmove_number();
         start_fen = Game::fen_of(start_pos, tree.node(0).key[13], start_halfmove, start_fullmove);
         resigned = false;
+        flagged = false;
+        flagged_white = false;
         engine_error.clear();
         live_valid = false;
         watch_pause();
         forget_analysis();
+        clock_remaining_ms[0] = clocked_now() ? clock_base_ms(0) : 0;
+        clock_remaining_ms[1] = clocked_now() ? clock_base_ms(1) : 0;
+        clock_mover_since_ms = 0;
         return true;
     }
 
@@ -554,11 +700,17 @@ class Session
         const BB& pos = tree.position();
         const Tree_Node& here = tree.current();
         std::string reason;
+        // Brings the live clock up to the moment of this request, so a page
+        // load and every field below it that reads clock_remaining_ms agree —
+        // including check_flag() having already ended the game (called by the
+        // server before this), rather than a stale "ongoing" outcome.
+        clock_sync(now_ms());
         Outcome outcome = result(reason);
 
         json::Out o;
         o.obj();
         o.key("seq").num(++state_serial);
+        o.key("gameSerial").num(game_serial());
         o.key("id").str(id);
         o.key("mode").str(mode_name(mode));
         o.key("orientation").str(flipped ? "black" : "white");
@@ -631,6 +783,17 @@ class Session
         o.key("reason").str(outcome==Outcome::ONGOING ? "" : reason);
         o.end_obj();
 
+        // The live clock of whichever game is on — one, since a session is
+        // one game at a time. Meaningful only when play.clockOn or
+        // watch.clockOn (for the current mode); the page hides it otherwise.
+        // The page interpolates locally between states from these two numbers
+        // and "running" rather than being pushed one every tick itself.
+        o.key("clock").obj();
+        o.key("whiteMs").num(clock_remaining_ms[0]);
+        o.key("blackMs").num(clock_remaining_ms[1]);
+        o.key("running").boolean(clock_ticking());
+        o.end_obj();
+
         // Everything the Play panel shows. It is sent in every mode so the page
         // can draw the settings form before a game has started.
         o.key("play").obj();
@@ -638,6 +801,9 @@ class Session
         o.key("humanColor").str(human_white ? "white" : "black");
         o.key("engineColor").str(human_white ? "black" : "white");
         o.key("limit").obj().key("kind").str(limits.kind()).key("value").num(limits.value()).end_obj();
+        o.key("clockOn").boolean(play_clock_on);
+        write_clock_setting(o, "clockWhite", play_base_ms[0], play_inc_ms[0]);
+        write_clock_setting(o, "clockBlack", play_base_ms[1], play_inc_ms[1]);
         o.key("thinking").boolean(thinking());
         o.key("engineTurn").boolean(engine_to_move());
         o.key("resigned").boolean(resigned);
@@ -664,6 +830,9 @@ class Session
             .key("kind").str(watch_limits[side].kind())
             .key("value").num(watch_limits[side].value())
          .end_obj();
+        o.key("clockOn").boolean(watch_clock_on);
+        write_clock_setting(o, "clockWhite", watch_base_ms[0], watch_inc_ms[0]);
+        write_clock_setting(o, "clockBlack", watch_base_ms[1], watch_inc_ms[1]);
         o.key("search");
         if(watching() && live_valid)
         write_search(o, live);
@@ -723,6 +892,10 @@ class Session
         t.result = outcome==Outcome::WHITE_WINS ? "1-0" :
                    outcome==Outcome::BLACK_WINS ? "0-1" :
                    outcome==Outcome::DRAW ? "1/2-1/2" : "*";
+        // PGN's TimeControl has no per-colour form; White's numbers stand in
+        // for a Custom clock that gave the two sides different ones.
+        if(clocked_now())
+        t.time_control = std::to_string(clock_base_ms(0)/1000) + "+" + std::to_string(clock_inc_ms(0)/1000);
         return t;
     }
 
@@ -804,6 +977,13 @@ class Session
         else
         o.obj().key("kind").str(note.score_kind).key("value").num(std::atoll(note.score_value.c_str())).end_obj();
         o.end_obj();
+    }
+
+    // One colour's chosen clock (Custom's own base+increment, or a preset's —
+    // the page's own table decides which preset that matches, if any).
+    static void write_clock_setting(json::Out& o, const std::string& key, long long base_ms, long long inc_ms)
+    {
+        o.key(key).obj().key("baseMs").num(base_ms).key("incMs").num(inc_ms).end_obj();
     }
 
     // The running search. Its score stays the mover's view, which is what a
@@ -981,12 +1161,22 @@ class Session
         start_halfmove = halfmove;
         start_fullmove = fullmove;
         resigned = false;
+        flagged = false;
+        flagged_white = false;
         engine_error.clear();
         live_valid = false;
         watch_pause();
         forget_analysis();
         tree.start(start_pos, start_halfmove, start_fullmove);
         start_fen = tree.fen();
+        // Re-seeds the live clock from whichever mode's setting is current
+        // (mode is already set by the time start_play()/start_watch() get
+        // here). Left unarmed (clock_mover_since_ms stays 0) — the very next
+        // clock_sync(), moments later from state_json() or the server's tick,
+        // arms it from that real timestamp instead of one taken here.
+        clock_remaining_ms[0] = clocked_now() ? clock_base_ms(0) : 0;
+        clock_remaining_ms[1] = clocked_now() ? clock_base_ms(1) : 0;
+        clock_mover_since_ms = 0;
     }
 
     // The clock fields of an already-validated FEN (fields 5 and 6); a FEN that

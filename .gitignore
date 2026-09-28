@@ -50,6 +50,7 @@ diagnostics/eval_component_profile
 diagnostics/eval_fuzz
 diagnostics/eval_regression_check
 diagnostics/pv_chunk_test
+diagnostics/clock_test
 tools/tt_stats_sweep
 *.gcda
 *.gcno

@@ -213,6 +213,26 @@ main {
 
 .status.over { color: var(--text); font-weight: 600; }
 
+/* Above and below the board, flipping with orientation (app.js's
+   renderClockVisibility()/tickClocks()); hidden outside a clocked game, which
+   is also what boardRoom() reads via outerHeight() to give the board back the
+   space. */
+.clock-chip {
+  margin: 0 0 8px;
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  font-size: 20px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.clock-chip[hidden] { display: none; }
+.clock-chip.low { color: var(--bad); }
+.clock-chip.out { color: var(--bad); animation: pulse 1.4s ease-in-out infinite; }
+
 aside {
   flex: 0 0 300px;
   min-height: 0;
@@ -332,6 +352,42 @@ a.button:hover { border-color: var(--accent); }
   border-color: var(--accent);
   color: var(--accent-text);
 }
+
+/* Once a game is on, the Clock/Fixed-depth picker gives way to this one line
+   plus a button back into it (app.js's settingsLocked()) — so a stray click
+   while reviewing a game can't restart it. */
+.setting-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0 0 10px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* The Clock/Fixed-depth toggle and the preset grid read like #sides: plain
+   buttons, the chosen one picked out in the accent colour. */
+#play-kind button.active, #watch-kind button.active,
+.presets button.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+}
+
+.presets { margin-bottom: 8px; }
+
+.clock-custom {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 10px;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.clock-custom label { display: block; }
+.clock-custom input { width: 100%; margin-top: 3px; }
 
 select, input[type="number"] {
   font: inherit;

@@ -15,6 +15,7 @@
 // iteration of the running search: the page never waits for a search, it is
 // simply sent a new state whenever there is one.
 import { Chessground } from './vendor/chessground.min.js';
+import { playForTransition, initMuteToggle } from './sound.js';
 
 const sessionId = new URLSearchParams(location.search).get('id') || 'main';
 const el = id => document.getElementById(id);
@@ -33,6 +34,179 @@ let queueSending = false;      // true while the front of the queue is in flight
 let lastBoardKey = null;       // (fen, queue) last actually drawn, so an unrelated
                                 // render (a search depth ticking up) doesn't re-set the
                                 // position and animate it away from the queue and back
+
+// ------------------------------------------------------------------- clocks
+
+// Presets a click resolves to base/increment in ms before it ever reaches the
+// server — the server only ever sees "clock: baseMs+incMs" or "depth: value",
+// the same shape either way it got there.
+const CLOCK_PRESETS = [
+  { label: '1+0', baseMs: 60000, incMs: 0 },
+  { label: '1+1', baseMs: 60000, incMs: 1000 },
+  { label: '2+1', baseMs: 120000, incMs: 1000 },
+  { label: '3+2', baseMs: 180000, incMs: 2000 },
+  { label: '5+0', baseMs: 300000, incMs: 0 },
+  { label: '5+5', baseMs: 300000, incMs: 5000 },
+  { label: '10+0', baseMs: 600000, incMs: 0 },
+  { label: '10+5', baseMs: 600000, incMs: 5000 },
+  { label: '15+10', baseMs: 900000, incMs: 10000 },
+];
+const HYPERBULLET_PRESETS = [
+  { label: '1s+0', baseMs: 1000, incMs: 0 },
+  { label: '1s+1', baseMs: 1000, incMs: 1000 },
+  { label: '10s+0', baseMs: 10000, incMs: 0 },
+  { label: '30s+0', baseMs: 30000, incMs: 0 },
+];
+
+// Local-only settings-form state: which sub-form is showing, whether Custom's
+// fields are open, and whether the picker is forced open over the collapsed
+// summary while a game is on. None of this is server state — it resyncs to
+// what the server actually applied whenever that changes (renderPlayPanel/
+// renderWatchPanel, via lastPlayClockOn/lastWatchClockOn), which is also what
+// resets it after a successful Apply.
+let playExpanded = false, watchExpanded = false;
+let playKindChoice = 'depth', watchKindChoice = 'depth';
+let playCustomOpen = false, watchCustomOpen = false;
+let lastPlayClockOn = null, lastWatchClockOn = null;
+
+// The last state's live clock, anchored to when this page applied it, so
+// tickClocks() can interpolate locally between server pushes without asking
+// for one every tick itself ("the server owns the clocks; the page only
+// interpolates").
+let clockAnchor = null;
+
+function hasMoves(s) {
+  const root = s.tree.nodes.find(n => n.id === 0);
+  return !!root && root.children.length > 0;
+}
+
+// Whether a game is on for the purposes of collapsing the settings picker:
+// once a move has been played and the game isn't over, changing a setting
+// would restart it, so the picker gives way to a summary instead.
+function settingsLocked(s) {
+  return hasMoves(s) && s.outcome.state === 'ongoing';
+}
+
+function matchPreset(baseMs, incMs) {
+  return [...CLOCK_PRESETS, ...HYPERBULLET_PRESETS].find(p => p.baseMs === baseMs && p.incMs === incMs);
+}
+
+function formatClockValue(baseMs) {
+  return baseMs < 60000 ? `${Math.round(baseMs / 1000)}s` : `${Math.round(baseMs / 60000)}`;
+}
+
+// "3+2", or "5+0 / 3+0" when White and Black differ (only reachable via
+// Custom — a preset always gives both the same clock).
+function clockLabel(white, black) {
+  const same = white.baseMs === black.baseMs && white.incMs === black.incMs;
+  const preset = same && matchPreset(white.baseMs, white.incMs);
+  const fmt = c => `${formatClockValue(c.baseMs)}+${Math.round(c.incMs / 1000)}`;
+  if (preset) return preset.label;
+  return same ? fmt(white) : `${fmt(white)} / ${fmt(black)}`;
+}
+
+function playSettingSummary(play) {
+  return play.clockOn ? `Clock: ${clockLabel(play.clockWhite, play.clockBlack)}` : `Fixed depth: ${play.limit.value}`;
+}
+
+function watchSettingSummary(w) {
+  return w.clockOn ? `Clock: ${clockLabel(w.clockWhite, w.clockBlack)}`
+                   : `White: depth ${w.white.value} · Black: depth ${w.black.value}`;
+}
+
+// Draws one settings form's preset grid plus its Custom button, rebuilt from
+// scratch each render like the move list and the analysis line are — cheap
+// for a handful of buttons, and it keeps "which one is active" a draw-time
+// question rather than state to keep in sync by hand.
+function renderPresets(container, presets, white, black, customOpen, onPick, onCustom) {
+  container.replaceChildren();
+  const same = white.baseMs === black.baseMs && white.incMs === black.incMs;
+  const active = same && matchPreset(white.baseMs, white.incMs);
+  for (const preset of presets) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = preset.label;
+    button.classList.toggle('active', !customOpen && preset === active);
+    button.addEventListener('click', () => onPick(preset));
+    container.append(button);
+  }
+  const custom = document.createElement('button');
+  custom.type = 'button';
+  custom.textContent = 'Custom';
+  custom.classList.toggle('active', customOpen);
+  custom.addEventListener('click', onCustom);
+  container.append(custom);
+}
+
+// Fills a Custom form's four fields (in seconds — the unit the fields use)
+// from the clock they'd apply to, leaving one being typed alone.
+function fillCustomForm(prefix, white, black) {
+  const set = (id, seconds) => { if (document.activeElement !== el(id)) el(id).value = seconds; };
+  set(`${prefix}-custom-white-base`, Math.round(white.baseMs / 1000));
+  set(`${prefix}-custom-white-inc`, Math.round(white.incMs / 1000));
+  set(`${prefix}-custom-black-base`, Math.round(black.baseMs / 1000));
+  set(`${prefix}-custom-black-inc`, Math.round(black.incMs / 1000));
+}
+
+function applyPlayPreset(preset) {
+  clearQueueSilently();
+  command('/api/play', { kind: 'clock', baseMs: preset.baseMs, incMs: preset.incMs });
+}
+
+// Watch's settings are scoped per side server-side, so a preset (both sides
+// alike) is two calls, white then black.
+function applyWatchClock(side, baseMs, incMs) {
+  return post('/api/watch', { side, kind: 'clock', baseMs, incMs })
+    .then(apply)
+    .catch(err => { showMessage(err.message); if (state) render(state); });
+}
+
+function applyWatchPreset(preset) {
+  return applyWatchClock('white', preset.baseMs, preset.incMs)
+    .then(() => applyWatchClock('black', preset.baseMs, preset.incMs));
+}
+
+// Brings the local clock display up to date with a just-applied state: the
+// two remaining times and whether either is ticking, anchored to now so
+// tickClocks() can count down from here without another request.
+function updateClockAnchor(s) {
+  clockAnchor = {
+    whiteMs: s.clock.whiteMs,
+    blackMs: s.clock.blackMs,
+    running: s.clock.running,
+    turn: s.turn,
+    at: performance.now(),
+  };
+}
+
+function formatClock(ms) {
+  const total = Math.max(0, Math.ceil(ms / 1000));
+  const m = Math.floor(total / 60), sec = total % 60;
+  return `${m}:${String(sec).padStart(2, '0')}`;
+}
+
+// Runs on its own timer rather than from render(): a running clock has to
+// keep moving between server states, not just when one arrives.
+function tickClocks() {
+  if (!state || el('clock-top').hidden || !clockAnchor) return;
+  const elapsed = clockAnchor.running ? performance.now() - clockAnchor.at : 0;
+  let whiteMs = clockAnchor.whiteMs, blackMs = clockAnchor.blackMs;
+  if (clockAnchor.running) {
+    if (clockAnchor.turn === 'white') whiteMs = Math.max(0, whiteMs - elapsed);
+    else blackMs = Math.max(0, blackMs - elapsed);
+  }
+  const top = state.orientation === 'white' ? 'black' : 'white';
+  drawClockChip(el('clock-top'), top === 'white' ? whiteMs : blackMs);
+  drawClockChip(el('clock-bottom'), top === 'white' ? blackMs : whiteMs);
+}
+
+function drawClockChip(chip, ms) {
+  chip.textContent = formatClock(ms);
+  chip.classList.toggle('low', ms > 0 && ms < 10000);
+  chip.classList.toggle('out', ms <= 0);
+}
+
+setInterval(tickClocks, 100);
 
 const board = Chessground(el('board'), {
   orientation: 'white',
@@ -272,10 +446,34 @@ el('sides').addEventListener('click', event => {
   if (button) { clearQueueSilently(); command('/api/play', { side: button.dataset.side }); }
 });
 
-el('limit-form').addEventListener('submit', event => {
+el('play-depth-form').addEventListener('submit', event => {
   event.preventDefault();
   clearQueueSilently();
-  command('/api/play', { kind: el('limit-kind').value, value: Number(el('limit-value').value) });
+  command('/api/play', { kind: 'depth', value: Number(el('play-depth-value').value) });
+});
+
+el('play-kind').addEventListener('click', event => {
+  const button = event.target.closest('button');
+  if (!button) return;
+  playKindChoice = button.dataset.kind;
+  render(state);
+});
+
+el('play-setting-change').addEventListener('click', () => {
+  playExpanded = true;
+  render(state);
+});
+
+el('play-custom-form').addEventListener('submit', event => {
+  event.preventDefault();
+  clearQueueSilently();
+  command('/api/play', {
+    kind: 'clock',
+    baseMs: Number(el('play-custom-white-base').value) * 1000,
+    incMs: Number(el('play-custom-white-inc').value) * 1000,
+    blackBaseMs: Number(el('play-custom-black-base').value) * 1000,
+    blackIncMs: Number(el('play-custom-black-inc').value) * 1000,
+  });
 });
 
 el('fen-form').addEventListener('submit', event => {
@@ -295,10 +493,31 @@ for (const form of document.querySelectorAll('.watch-side'))
     event.preventDefault();
     command('/api/watch', {
       side: form.dataset.side,
-      kind: form.querySelector('.watch-kind').value,
-      value: Number(form.querySelector('.watch-value').value),
+      kind: 'depth',
+      value: Number(form.querySelector('.watch-depth-value').value),
     });
   });
+
+el('watch-kind').addEventListener('click', event => {
+  const button = event.target.closest('button');
+  if (!button) return;
+  watchKindChoice = button.dataset.kind;
+  render(state);
+});
+
+el('watch-setting-change').addEventListener('click', () => {
+  watchExpanded = true;
+  render(state);
+});
+
+el('watch-custom-form').addEventListener('submit', event => {
+  event.preventDefault();
+  const whiteBase = Number(el('watch-custom-white-base').value) * 1000;
+  const whiteInc = Number(el('watch-custom-white-inc').value) * 1000;
+  const blackBase = Number(el('watch-custom-black-base').value) * 1000;
+  const blackInc = Number(el('watch-custom-black-inc').value) * 1000;
+  applyWatchClock('white', whiteBase, whiteInc).then(() => applyWatchClock('black', blackBase, blackInc));
+});
 
 el('watch-run').addEventListener('click', () => {
   if (state) command('/api/watch', { action: state.watch.running ? 'pause' : 'start' });
@@ -320,6 +539,7 @@ el('set-evalbar').addEventListener('change', event =>
   command('/api/settings', { evalBar: event.target.checked }));
 el('set-engine-line').addEventListener('change', event =>
   command('/api/settings', { engineLine: event.target.checked }));
+initMuteToggle(el('set-sound'));
 
 // Anywhere else closes it, as a menu does; the gear itself is its own toggle.
 document.addEventListener('pointerdown', event => {
@@ -331,6 +551,14 @@ document.addEventListener('pointerdown', event => {
 el('modes').addEventListener('click', event => {
   const button = event.target.closest('button');
   if (button) { clearQueueSilently(); command('/api/mode', { mode: button.dataset.mode }); }
+});
+
+// Unlike the mode selector's own Analyse button, which always starts blank
+// (see render()'s `to-analyse` visibility below), this carries the game that
+// just ended over into Analyse mode.
+el('to-analyse').addEventListener('click', () => {
+  clearQueueSilently();
+  command('/api/mode', { mode: 'analyse', keepGame: true });
 });
 
 el('nav').addEventListener('click', event => {
@@ -421,7 +649,9 @@ function apply(next) {
   if (typeof next.seq === 'number' && next.seq <= appliedSeq) return;
   appliedSeq = typeof next.seq === 'number' ? next.seq : appliedSeq;
   const first = state === null;
+  playForTransition(state, next);
   state = next;
+  updateClockAnchor(next);
   advanceQueue(next);   // may send the front of the queue for real, before it is drawn
   render(next);
   // Animating from chessground's default start position into the real one on
@@ -478,7 +708,9 @@ function render(s) {
   el('undo').disabled = (!s.tree.canBack && !s.play.resigned) || s.play.thinking;
   el('resign').hidden = !playing;
   el('resign').disabled = over;
+  el('to-analyse').hidden = !over || s.mode === 'analyse';
 
+  renderClockVisibility(s);
   renderPlayPanel(s);
   renderWatchPanel(s);
   renderEngine(s);
@@ -493,18 +725,59 @@ function render(s) {
   if (pendingPromotion) openPromotion();
 }
 
+// -------------------------------------------------------------------- clock
+
+// Two chips above and below the board, flipping with orientation like a real
+// chess site's; hidden entirely outside a clocked Play or Watch game. Only
+// visibility is decided here — tickClocks() draws the numbers on its own
+// timer — but a visibility change moves how much height the board may have,
+// so it also re-fits it, the same as a resize.
+function renderClockVisibility(s) {
+  const on = (s.mode === 'play' && s.play.clockOn) || (s.mode === 'watch' && s.watch.clockOn);
+  const changed = el('clock-top').hidden === on;
+  el('clock-top').hidden = el('clock-bottom').hidden = !on;
+  if (changed) fitBoard();
+  if (on) tickClocks();
+}
+
 // ------------------------------------------------------------------ play panel
 
 function renderPlayPanel(s) {
   const play = s.play;
   el('play-panel').hidden = s.mode !== 'play';
+  if (s.mode !== 'play') return;
 
   for (const button of el('sides').children)
     button.classList.toggle('active', button.dataset.side === play.side);
 
-  // Don't fight a value being typed or a select being opened.
-  if (document.activeElement !== el('limit-kind')) el('limit-kind').value = play.limit.kind;
-  if (document.activeElement !== el('limit-value')) el('limit-value').value = play.limit.value;
+  // The picker resyncs to what actually got applied whenever that changes —
+  // including resetting back out of "Change settings" and out of Custom —
+  // and otherwise leaves whatever the user is mid-editing alone.
+  if (play.clockOn !== lastPlayClockOn) {
+    lastPlayClockOn = play.clockOn;
+    playKindChoice = play.clockOn ? 'clock' : 'depth';
+    playExpanded = false;
+    playCustomOpen = false;
+  }
+
+  const collapsed = settingsLocked(s) && !playExpanded;
+  el('play-setting-summary').hidden = !collapsed;
+  el('play-setting-form').hidden = collapsed;
+  if (collapsed) el('play-setting-text').textContent = playSettingSummary(play);
+
+  for (const button of el('play-kind').children)
+    button.classList.toggle('active', button.dataset.kind === playKindChoice);
+  el('play-depth-form').hidden = playKindChoice !== 'depth';
+  el('play-clock-form').hidden = playKindChoice !== 'clock';
+
+  // Don't fight a value being typed.
+  if (document.activeElement !== el('play-depth-value')) el('play-depth-value').value = play.limit.value;
+
+  renderPresets(el('play-presets'), CLOCK_PRESETS, play.clockWhite, play.clockBlack, playCustomOpen,
+    preset => applyPlayPreset(preset),
+    () => { playCustomOpen = !playCustomOpen; render(state); });
+  el('play-custom-form').hidden = !playCustomOpen;
+  fillCustomForm('play', play.clockWhite, play.clockBlack);
 
   el('engine').textContent = engineLine(s);
   el('engine').classList.toggle('bad', !!play.error);
@@ -540,14 +813,36 @@ function renderWatchPanel(s) {
   el('watch-panel').hidden = s.mode !== 'watch';
   if (s.mode !== 'watch') return;
 
+  if (w.clockOn !== lastWatchClockOn) {
+    lastWatchClockOn = w.clockOn;
+    watchKindChoice = w.clockOn ? 'clock' : 'depth';
+    watchExpanded = false;
+    watchCustomOpen = false;
+  }
+
+  const collapsed = settingsLocked(s) && !watchExpanded;
+  el('watch-setting-summary').hidden = !collapsed;
+  el('watch-setting-form').hidden = collapsed;
+  if (collapsed) el('watch-setting-text').textContent = watchSettingSummary(w);
+
+  for (const button of el('watch-kind').children)
+    button.classList.toggle('active', button.dataset.kind === watchKindChoice);
+  el('watch-depth-form').hidden = watchKindChoice !== 'depth';
+  el('watch-clock-form').hidden = watchKindChoice !== 'clock';
+
   for (const form of document.querySelectorAll('.watch-side')) {
     const limit = w[form.dataset.side];
-    const kind = form.querySelector('.watch-kind');
-    const value = form.querySelector('.watch-value');
-    // Don't fight a value being typed or a select being opened.
-    if (document.activeElement !== kind) kind.value = limit.kind;
+    const value = form.querySelector('.watch-depth-value');
+    // Don't fight a value being typed.
     if (document.activeElement !== value) value.value = limit.value;
   }
+
+  renderPresets(el('watch-presets'), [...CLOCK_PRESETS, ...HYPERBULLET_PRESETS], w.clockWhite, w.clockBlack,
+    watchCustomOpen,
+    preset => applyWatchPreset(preset),
+    () => { watchCustomOpen = !watchCustomOpen; render(state); });
+  el('watch-custom-form').hidden = !watchCustomOpen;
+  fillCustomForm('watch', w.clockWhite, w.clockBlack);
 
   const over = s.outcome.state !== 'ongoing';
   // Start and Step only make sense at the end of a line, which is the only
@@ -880,12 +1175,15 @@ function fitBoard() {
 // fixed height. Stacked, the column is as tall as its content, so measuring it
 // would chase the board's own size — there the page scrolls and only the width
 // decides.
+function outerHeight(node) {
+  const style = getComputedStyle(node);
+  return node.offsetHeight + (parseFloat(style.marginTop) || 0) + (parseFloat(style.marginBottom) || 0);
+}
+
 function boardRoom() {
   if (stacked.matches) return Infinity;
   const column = document.querySelector('.board-column');
-  const status = el('status');
-  return column.clientHeight - status.offsetHeight
-         - (parseFloat(getComputedStyle(status).marginTop) || 0);
+  return column.clientHeight - outerHeight(el('status')) - outerHeight(el('clock-top')) - outerHeight(el('clock-bottom'));
 }
 
 const boardFit = new ResizeObserver(fitBoard);
