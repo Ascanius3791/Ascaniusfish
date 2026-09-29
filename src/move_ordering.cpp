@@ -48,7 +48,7 @@ void store_quiet_cutoff(const BB* const parent, int ply_from_root, int depth, co
     // never initialised and there are none.
     if(order.moves==nullptr)
     return;
-    const std::vector<Move>& moves = *order.moves;
+    const Move* const moves = order.moves;
     if(order.quiet_tt_index>=0)
     update_history(history[moves[order.quiet_tt_index].from][moves[order.quiet_tt_index].to], -bonus);
     const int searched_end = std::min(order.cursor, order.quiet_end);
@@ -103,9 +103,8 @@ static void sort_captures(Scored_Capture* c, int n)
     });
 }
 
-void order_tactical_moves(const BB* const parent, const std::vector<Move>& moves, std::vector<int>& indices)
+void order_tactical_moves(const BB* const parent, const Move* const moves, int* const indices, int n)
 {
-    const int n = (int)indices.size();
     if(n<2)
     return;
     Scored_Capture scored[MAX_ORDERED_MOVES];
@@ -119,10 +118,9 @@ void order_tactical_moves(const BB* const parent, const std::vector<Move>& moves
     indices[k] = scored[k].index;
 }
 
-void Staged_Move_Order::init(const BB* const parent, const BB* const /*children*/, const std::vector<Move>& moves, int num,
-                             int skip_index, int ply_from_root, const WEIGHTS& /*W*/)
+void Staged_Move_Order::init(const BB* const parent, const Move* const moves, int num, int skip_index, int ply_from_root)
 {
-    this->moves = &moves;
+    this->moves = moves;
     white_move = parent->white_move;
     count = cursor = 0;
     quiets_sorted = false;
@@ -173,7 +171,7 @@ void Staged_Move_Order::sort_quiets()
 {
     quiets_sorted = true;
     const int (&history)[64][64] = quiet_history[white_move];
-    const std::vector<Move>& m = *moves;
+    const Move* const m = moves;
     // Stable: moves without history keep the move generator's order.
     std::stable_sort(order+quiet_begin, order+quiet_end, [&history, &m](int a, int b)
     {
