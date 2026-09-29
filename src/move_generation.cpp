@@ -935,26 +935,9 @@ static inline int castling_key_index(const BB* const pos)
     return pos->castle[1][1] << 3 | pos->castle[1][0] << 2 | pos->castle[0][1] << 1 | pos->castle[0][0];
 }
 
-// An empty cache to copy from. Base_BB()'s lazy.reset() builds a temporary and
-// costs ~15 ns, most of a make_move(); copying this one costs ~3.
-static const BB_lazyfields empty_lazyfields;
-
 void make_move(const BB* const parent, const Move& move, BB* const child)
 {
-    // Base_BB(parent,child), with the cache cleared by copy
-    for(int i=0;i<12;i++)
-    child->Board[i]=parent->Board[i];
-    child->white_move=!parent->white_move;
-    child->castle[0][0]=parent->castle[0][0];
-    child->castle[0][1]=parent->castle[0][1];
-    child->castle[1][0]=parent->castle[1][0];
-    child->castle[1][1]=parent->castle[1][1];
-    child->en_passant=0;
-    child->number_of_repetitions=parent->number_of_repetitions;
-    child->move=parent->move+1;
-    child->halfmoves_since_last_capture_or_pawn_move=parent->halfmoves_since_last_capture_or_pawn_move+1;
-    child->lazy=empty_lazyfields;
-
+    Base_BB(parent,child);
     const bool WM = parent->white_move;
     const int OWN = 6*!WM, ENE = 6*WM;
     const int from = move.from, to = move.to;

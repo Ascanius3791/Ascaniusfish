@@ -22,7 +22,9 @@ struct BB;
 
 struct BB_lazyfields
 {
-    void reset(){ *this = BB_lazyfields(); }
+    // Copies a ready empty instance: `*this = BB_lazyfields()` built a temporary
+    // with narrow stores and read it back wide, ~15 ns per reset (most of Base_BB()).
+    void reset(){ static constexpr BB_lazyfields empty{}; *this = empty; }
 
     // Getters: each looks up the cached value if valid, otherwise computes it from
     // `owner` (the BB this BB_lazyfields instance lives on, i.e. the BB whose `lazy`
