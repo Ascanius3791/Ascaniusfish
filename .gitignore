@@ -64,3 +64,12 @@ __pycache__/
 
 # Browser GUI server binary (make gui)
 gui/ascaniusfish_gui
+
+# Syzygy tablebases (issue #37): ~1 GB, kept outside the repo (e.g. ~/syzygy),
+# ignored in case someone puts them inside it
+syzygy/
+syzygy-nr/
+*.rtbw
+*.rtbz
+tools/syzygy_reference
+diagnostics/syzygy_test
