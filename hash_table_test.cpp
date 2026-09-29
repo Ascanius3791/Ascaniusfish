@@ -82,7 +82,7 @@ int main()
     // full-board fallback), so the Zobrist random tables need to be up before
     // any test that inserts/looks up an entry - previously test_direct_lookup
     // didn't need real hashes since it relied on full-board equality.
-    Zobrist zobrist_init = Zobrist();
+    Zobrist zobrist_keys;
 
     lookup_table* table = new lookup_table;
 
