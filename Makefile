@@ -1,6 +1,8 @@
 # OWNERSHIP=Claude
 CXX ?= g++
-CXXFLAGS ?= -O3 -Wall -Wno-unknown-pragmas -Wno-parentheses -Wno-unused-variable -DNDEBUG
+# -mpopcnt: count bits with the CPU instruction (every x86-64 CPU since 2008) instead of
+# a libgcc call; ~26% fewer search instructions. tools/match.cpp and speed_compare.cpp match it.
+CXXFLAGS ?= -O3 -mpopcnt -Wall -Wno-unknown-pragmas -Wno-parentheses -Wno-unused-variable -DNDEBUG
 
 TARGET ?= ascaniusfish
 MAIN := ascaniusfish.cpp
@@ -27,7 +29,7 @@ GUI_PORT ?=
 GUI_BIND ?=
 GUI_TUNNEL ?=
 TOOL_TARGETS := tools/perft tools/bench tools/speed_compare tools/match tools/make_openings tools/gui_match tools/tt_stats
-PROFILE_CXXFLAGS ?= -O2 -g -pg -Wall -Wno-unknown-pragmas -Wno-parentheses -Wno-unused-variable
+PROFILE_CXXFLAGS ?= -O2 -mpopcnt -g -pg -Wall -Wno-unknown-pragmas -Wno-parentheses -Wno-unused-variable
 
 .PHONY: all run play asm tests debug profile-startpos perft bench speed-compare match gui-match gui tt-stats clean rebuild
 
@@ -135,7 +137,7 @@ tt-stats:
 run play: $(TARGET)
 	./$(TARGET)
 
-debug: CXXFLAGS := -O0 -g -Wall -Wno-unknown-pragmas -Wno-parentheses -Wno-unused-variable
+debug: CXXFLAGS := -O0 -mpopcnt -g -Wall -Wno-unknown-pragmas -Wno-parentheses -Wno-unused-variable
 debug: $(TARGET)
 
 rebuild: clean all

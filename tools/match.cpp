@@ -39,7 +39,7 @@
 #include <thread>
 #include <unistd.h>
 
-static const char* const CXXFLAGS = "-O3 -Wall -Wno-unknown-pragmas -Wno-parentheses -Wno-unused-variable -DNDEBUG -pthread";
+static const char* const CXXFLAGS = "-O3 -mpopcnt -Wall -Wno-unknown-pragmas -Wno-parentheses -Wno-unused-variable -DNDEBUG -pthread";
 constexpr int MAX_GAME_PLIES = 1000;          // adjudicated a draw beyond this; the rules end almost every game long before
 constexpr long long DEPTH_MOVE_TIMEOUT_MS = 600000;
 constexpr long long TC_GRACE_MS = 1000;       // how long past its clock an engine may take before it counts as hung
