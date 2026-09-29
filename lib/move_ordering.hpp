@@ -19,7 +19,6 @@
 #include "Settings.hpp"
 #include "move_generation.hpp"
 #include "see.hpp"
-#include <vector>
 
 constexpr int MAX_ORDERED_MOVES = 256;  // more than the 218 legal moves any position can have
 
@@ -38,9 +37,6 @@ bool is_quiet_move(const BB* const parent, const Move& move);  // no capture, no
 // minimax_tactical()'s ordering of its captures and queen promotions (the n
 // `indices` into moves): pure material - SEE (incl. promotion gain), then MVV-LVA.
 void order_tactical_moves(const BB* const parent, const Move* const moves, int* const indices, int n);
-// Old vector form, until minimax_tactical() moves to Move_List (#34).
-inline void order_tactical_moves(const BB* const parent, const std::vector<Move>& moves, std::vector<int>& indices)
-{ order_tactical_moves(parent, moves.data(), indices.data(), (int)indices.size()); }
 
 class Staged_Move_Order;
 // A quiet move cut off at `depth`: it becomes a killer and gains history, the
@@ -54,10 +50,6 @@ class Staged_Move_Order
     // Orders moves[0..num), which must stay in place until the search is done
     // with them; `skip_index` is the already searched TT move, or -1.
     void init(const BB* const parent, const Move* const moves, int num, int skip_index, int ply_from_root);
-    // Old vector form, until minimax() moves to Move_List (#34).
-    void init(const BB* const parent, const BB* const, const std::vector<Move>& moves, int num,
-              int skip_index, int ply_from_root, const WEIGHTS&)
-    { init(parent, moves.data(), num, skip_index, ply_from_root); }
     int next();  // index into moves of the next move to search, -1 when done
 
     private:
