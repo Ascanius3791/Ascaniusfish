@@ -578,11 +578,11 @@ bool are_equal(const BB* const  BB_1,const BB* const BB_2)
     
 uint64_t BB_lazyfields::get_occupancy(const BB* const owner)
 {
-    if(!occupancy_valid)
+    if(!(valid & OCCUPANCY))
     {
         occupancy = owner->Board[0]|owner->Board[1]|owner->Board[2]|owner->Board[3]|owner->Board[4]|owner->Board[5]
                    |owner->Board[6]|owner->Board[7]|owner->Board[8]|owner->Board[9]|owner->Board[10]|owner->Board[11];
-        occupancy_valid = true;
+        valid |= OCCUPANCY;
     }
     return occupancy;
 }
@@ -591,17 +591,17 @@ uint64_t BB_lazyfields::get_pieces_of_colour(const BB* const owner, bool white)
 {
     if(white)
     {
-        if(!white_pieces_valid)
+        if(!(valid & WHITE_PIECES))
         {
             white_pieces = owner->Board[0]|owner->Board[1]|owner->Board[2]|owner->Board[3]|owner->Board[4]|owner->Board[5];
-            white_pieces_valid = true;
+            valid |= WHITE_PIECES;
         }
         return white_pieces;
     }
-    if(!black_pieces_valid)
+    if(!(valid & BLACK_PIECES))
     {
         black_pieces = owner->Board[6]|owner->Board[7]|owner->Board[8]|owner->Board[9]|owner->Board[10]|owner->Board[11];
-        black_pieces_valid = true;
+        valid |= BLACK_PIECES;
     }
     return black_pieces;
 }

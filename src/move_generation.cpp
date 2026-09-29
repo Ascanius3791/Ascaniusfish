@@ -588,6 +588,32 @@ constexpr Between_Table make_between_table()
 
 inline constexpr Between_Table between_squares = make_between_table();
 
+// The whole line through a and b, both included; 0 if they are not aligned.
+// A piece pinned on square b may only move along line_squares.sq[king][b]:
+// the pinner and its own king bound it, so no move ever reaches the rest.
+constexpr Between_Table make_line_table()
+{
+    Between_Table t{};
+    for(int a=0;a<64;a++)
+    for(int b=0;b<64;b++)
+    {
+        const int ra=a/8, fa=a%8, rb=b/8, fb=b%8;
+        const bool aligned = a!=b && (ra==rb || fa==fb || ra-rb==fa-fb || ra-rb==fb-fa);
+        if(!aligned)
+        continue;
+        const int dr=(rb>ra)-(rb<ra), df=(fb>fa)-(fb<fa);
+        uint64_t bb=0;
+        for(int r=ra, f=fa; r>=0 && r<8 && f>=0 && f<8; r+=dr, f+=df)
+        bb |= 1ULL << (r*8+f);
+        for(int r=ra, f=fa; r>=0 && r<8 && f>=0 && f<8; r-=dr, f-=df)
+        bb |= 1ULL << (r*8+f);
+        t.sq[a][b]=bb;
+    }
+    return t;
+}
+
+inline constexpr Between_Table line_squares = make_line_table();
+
 // Is sq attacked by the side not to move, with occupancy occ? Same attacks
 // in_check() tests, the enemy king included.
 static inline bool enemy_attacks_square(const BB* const pos, int sq, uint64_t occ)
@@ -602,13 +628,13 @@ static inline bool enemy_attacks_square(const BB* const pos, int sq, uint64_t oc
         || (get_bishop_attacks(sq,occ) & (B[3+ENE]|B[4+ENE]));
 }
 
-// What decides legality at one node, computed once for all its moves.
+// What decides legality at one node. Checkers and pins come from the position's
+// lazy cache, so the several generators/counters run on one node share them.
 struct Legal_Masks
 {
     uint64_t own, enemy, occupancy;
     uint64_t checkmask;   // where a non-king move must land: everything, or capture/block the one checker, or nothing in double check
-    uint64_t pinned;      // own pieces pinned to the king
-    uint64_t pin_ray[64]; // for a pinned square: the ray it may move along, pinner included; unset elsewhere
+    uint64_t pinned;      // own pieces pinned to the king; one may only move along line_squares.sq[king_sq][its square]
     int king_sq;
     bool in_check;
 };
@@ -616,21 +642,13 @@ struct Legal_Masks
 static inline void compute_legal_masks(const BB* const pos, Legal_Masks& m)
 {
     const bool WM = pos->white_move;
-    const int OWN = 6*!WM, ENE = 6*WM;
-    const uint64_t* const B = pos->Board;
-    m.own = B[0+OWN]|B[1+OWN]|B[2+OWN]|B[3+OWN]|B[4+OWN]|B[5+OWN];
-    m.enemy = B[0+ENE]|B[1+ENE]|B[2+ENE]|B[3+ENE]|B[4+ENE]|B[5+ENE];
-    m.occupancy = m.own | m.enemy;
-    const int k = __builtin_ctzll(B[5+OWN]);
+    m.own = pos->get_pieces_of_colour(WM);
+    m.enemy = pos->get_pieces_of_colour(!WM);
+    m.occupancy = pos->get_occupancy();
+    const int k = __builtin_ctzll(pos->Board[5+6*!WM]);
     m.king_sq = k;
-    const uint64_t enemy_orth = B[1+ENE]|B[4+ENE];
-    const uint64_t enemy_diag = B[3+ENE]|B[4+ENE];
 
-    uint64_t checkers = ((WM ? BP_template[k] : WP_template[k]) & B[0+ENE])
-                      | (Kn_template[k] & B[2+ENE])
-                      | (K_template[k] & B[5+ENE])
-                      | (get_rook_attacks(k,m.occupancy) & enemy_orth)
-                      | (get_bishop_attacks(k,m.occupancy) & enemy_diag);
+    const uint64_t checkers = pos->get_checkers();
     m.in_check = checkers != 0;
     if(!checkers)
     m.checkmask = ~0ULL;
@@ -638,24 +656,7 @@ static inline void compute_legal_masks(const BB* const pos, Legal_Masks& m)
     m.checkmask = 0;
     else
     m.checkmask = checkers | between_squares.sq[k][__builtin_ctzll(checkers)];
-
-    // An enemy slider that sees the king through own pieces pins the one own
-    // piece between them, if there is exactly one.
-    m.pinned = 0;
-    uint64_t pinners = (get_rook_attacks(k,m.enemy) & enemy_orth)
-                     | (get_bishop_attacks(k,m.enemy) & enemy_diag);
-    while(pinners)
-    {
-        const int p = find_and_delete_trailling_1(pinners);
-        const uint64_t between = between_squares.sq[k][p];
-        const uint64_t blockers = between & m.own;
-        if(blockers && !(blockers & (blockers-1)))
-        {
-            const int b = __builtin_ctzll(blockers);
-            m.pinned |= blockers;
-            m.pin_ray[b] = between | 1ULL << p;
-        }
-    }
+    m.pinned = pos->get_pinned();
 }
 
 // En passant, tested the way all_moves() tests it: make it and ask in_check().
@@ -722,7 +723,7 @@ int generate_legal_moves(const BB* const pos, Move_List& list)
         while(p)
         {
             const int i = find_and_delete_trailling_1(p);
-            const uint64_t allowed = m.checkmask & (m.pinned >> i & 1 ? m.pin_ray[i] : ~0ULL);
+            const uint64_t allowed = m.checkmask & (m.pinned >> i & 1 ? line_squares.sq[m.king_sq][i] : ~0ULL);
             uint64_t t = (WM ? BP_template[i] : WP_template[i]) & (m.enemy | pos->en_passant);
             while(t)
             {
@@ -758,7 +759,7 @@ int generate_legal_moves(const BB* const pos, Move_List& list)
             const int s = WM ? i+8 : i-8;
             if(m.occupancy >> s & 1)
             continue;
-            const uint64_t allowed = m.checkmask & (m.pinned >> i & 1 ? m.pin_ray[i] : ~0ULL);
+            const uint64_t allowed = m.checkmask & (m.pinned >> i & 1 ? line_squares.sq[m.king_sq][i] : ~0ULL);
             if(allowed >> s & 1)
             {
                 if(last_rank >> s & 1)
@@ -790,7 +791,7 @@ int generate_legal_moves(const BB* const pos, Move_List& list)
         const int i = find_and_delete_trailling_1(orth);
         uint64_t t = get_rook_attacks(i,m.occupancy) & legal_targets;
         if(m.pinned >> i & 1)
-        t &= m.pin_ray[i];
+        t &= line_squares.sq[m.king_sq][i];
         while(t)
         *out++ = Move(i,find_and_delete_trailling_1(t));
     }
@@ -802,7 +803,7 @@ int generate_legal_moves(const BB* const pos, Move_List& list)
         const int i = find_and_delete_trailling_1(diag);
         uint64_t t = get_bishop_attacks(i,m.occupancy) & legal_targets;
         if(m.pinned >> i & 1)
-        t &= m.pin_ray[i];
+        t &= line_squares.sq[m.king_sq][i];
         while(t)
         *out++ = Move(i,find_and_delete_trailling_1(t));
     }
@@ -869,7 +870,7 @@ int count_legal_moves(const BB* const pos, int limit)
     while(p)
     {
         const int i = find_and_delete_trailling_1(p);
-        const uint64_t allowed = m.checkmask & (m.pinned >> i & 1 ? m.pin_ray[i] : ~0ULL);
+        const uint64_t allowed = m.checkmask & (m.pinned >> i & 1 ? line_squares.sq[m.king_sq][i] : ~0ULL);
         const uint64_t attacks = WM ? BP_template[i] : WP_template[i];
         const uint64_t caps = attacks & m.enemy & allowed;
         n += __builtin_popcountll(caps & ~last_rank) + 4*__builtin_popcountll(caps & last_rank);
@@ -904,7 +905,7 @@ int count_legal_moves(const BB* const pos, int limit)
         const int i = find_and_delete_trailling_1(orth);
         uint64_t t = get_rook_attacks(i,m.occupancy) & legal_targets;
         if(m.pinned >> i & 1)
-        t &= m.pin_ray[i];
+        t &= line_squares.sq[m.king_sq][i];
         n += __builtin_popcountll(t);
     }
     uint64_t diag = B[3+OWN] | B[4+OWN];
@@ -913,7 +914,7 @@ int count_legal_moves(const BB* const pos, int limit)
         const int i = find_and_delete_trailling_1(diag);
         uint64_t t = get_bishop_attacks(i,m.occupancy) & legal_targets;
         if(m.pinned >> i & 1)
-        t &= m.pin_ray[i];
+        t &= line_squares.sq[m.king_sq][i];
         n += __builtin_popcountll(t);
     }
     if(n>=limit)

@@ -22,9 +22,9 @@ struct BB;
 
 struct BB_lazyfields
 {
-    // Copies a ready empty instance: `*this = BB_lazyfields()` built a temporary
-    // with narrow stores and read it back wide, ~15 ns per reset (most of Base_BB()).
-    void reset(){ static constexpr BB_lazyfields empty{}; *this = empty; }
+    // Only the valid bits are cleared: a value whose bit is off is never read (the
+    // fields are private and every getter checks its bit), so it need not be zeroed.
+    void reset(){ valid = 0; }
 
     // Getters: each looks up the cached value if valid, otherwise computes it from
     // `owner` (the BB this BB_lazyfields instance lives on, i.e. the BB whose `lazy`
@@ -39,23 +39,31 @@ struct BB_lazyfields
     uint64_t get_pieces_of_colour(const BB* const owner, bool white);
 
     // Expensive getters: need get_bishop_attacks()/get_rook_attacks()/attacked_squares()
-    // (src/magics.cpp), in_check() (src/checks.cpp) and one_move() (src/move_generation.cpp) -
+    // (src/magics.cpp), between_squares and count_legal_moves() (src/move_generation.cpp) -
     // none of which are declared yet at this point in the header chain. So only the
     // prototypes live here; the bodies are defined in src/BB_lazyfields.cpp, which is
     // only pulled in (via lib/BB_lazyfields.hpp) once those headers are available.
     uint64_t get_attacked_squares(const BB* const owner, bool by_white);
+    uint64_t get_checkers(const BB* const owner); // enemy pieces giving check to the side to move
+    uint64_t get_pinned(const BB* const owner);   // side to move's pieces pinned to its king
     bool get_in_check(const BB* const owner);
     bool get_has_legal_move(const BB* const owner);
 
 private:
-    uint64_t occupancy=0;          bool occupancy_valid=false;
-    uint64_t white_pieces=0;       bool white_pieces_valid=false;
-    uint64_t black_pieces=0;       bool black_pieces_valid=false;
+    void fill_checkers_and_pinned(const BB* const owner);
 
-    uint64_t white_attacks=0;      bool white_attacks_valid=false;
-    uint64_t black_attacks=0;      bool black_attacks_valid=false;
-    int in_check_cache=-1;         // -1 = not yet known, 0 = false, 1 = true
-    int has_legal_move_cache=-1;   // -1 = not yet known, 0 = false, 1 = true ("one_move")
+    // one bit of `valid` per cached value
+    enum : uint8_t { OCCUPANCY=1, WHITE_PIECES=2, BLACK_PIECES=4, WHITE_ATTACKS=8,
+                     BLACK_ATTACKS=16, CHECKERS_AND_PINNED=32, HAS_LEGAL_MOVE=64 };
+    uint8_t valid=0;
+    bool has_legal_move=false;
+    uint64_t occupancy=0;
+    uint64_t white_pieces=0;
+    uint64_t black_pieces=0;
+    uint64_t white_attacks=0;
+    uint64_t black_attacks=0;
+    uint64_t checkers=0;
+    uint64_t pinned=0;
 };
 
 struct BB
@@ -105,6 +113,8 @@ struct BB
     uint64_t get_occupancy() const;
     uint64_t get_pieces_of_colour(bool white) const;
     uint64_t get_attacked_squares(bool by_white) const;
+    uint64_t get_checkers() const;
+    uint64_t get_pinned() const;
     bool get_in_check() const;
     bool get_has_legal_move() const;
 
