@@ -74,6 +74,23 @@ constexpr bool ENABLE_NULL_MOVE_PRUNING = 1;
 constexpr int NULL_MOVE_REDUCTION = 2;
 constexpr int NULL_MOVE_MIN_DEPTH = 3;
 
+//==================================================================================================================================
+//principal variation search and late move reductions (see minimax()'s move loop in
+//ascaniusfish_2.hpp). PVS: every move after the first is searched with a null
+//window first and re-searched with the full one only if it lands inside it.
+//LMR: quiet moves ordered after the first LMR_FULL_DEPTH_MOVES, at depth >=
+//LMR_MIN_DEPTH, are searched lmr_reduction(depth, move number) plies shallower -
+//never the TT move, a killer, a check or a move out of check - and re-searched at
+//full depth if they beat the bound. The reduction is
+//LMR_BASE + ln(depth)*ln(move number)/LMR_DIVISOR, rounded down, at least 1: the deeper the
+//node and the later the move, the less it is trusted to matter.
+constexpr bool ENABLE_PVS = 1;
+constexpr bool ENABLE_LMR = 1;
+constexpr int LMR_MIN_DEPTH = 3;
+constexpr int LMR_FULL_DEPTH_MOVES = 3;
+constexpr double LMR_BASE = 0.75;
+constexpr double LMR_DIVISOR = 2.25;
+
 
 
 

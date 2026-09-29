@@ -266,6 +266,22 @@ PV_Line minimax_tactical(const BB* const original, BB* const wfh, const WEIGHTS&
     return pv_line;
 }
 
+// Late move reduction in plies for the move_number-th move (0-based) of a node at
+// `depth`, see LMR_BASE/LMR_DIVISOR in lib/Settings.hpp. At least 1, and never
+// below the quiescence search: the child is searched at depth-1-r >= 0.
+int lmr_reduction(int depth, int move_number)
+{
+    static const auto table = []
+    {
+        std::array<std::array<unsigned char,64>,64> t{};
+        for(int d=1;d<64;d++)
+        for(int m=1;m<64;m++)
+        t[d][m] = (unsigned char)std::max(1.0, LMR_BASE + std::log(d)*std::log(m)/LMR_DIVISOR);
+        return t;
+    }();
+    return std::min((int)table[std::min(depth,63)][std::min(move_number,63)], depth-1);
+}
+
 PV_Line minimax(const BB*const original ,BB* const wfh ,int depth = 0, const WEIGHTS& W= WEIGHTS_OG,int alpha = INT_MIN, int beta = INT_MAX,lookup_table* const table=NULL, BB* const path_history=nullptr, int ply=0, const CuckooCycleTable* const cycle_table=nullptr, int root_ply=INT_MIN, bool null_move_allowed=true)
 {
     if(DEBUG_MODE)
@@ -482,6 +498,23 @@ PV_Line minimax(const BB*const original ,BB* const wfh ,int depth = 0, const WEI
     const int alpha_0 = alpha, beta_0 = beta;
     PV_Line pv_line =PV_Line(original->white_move ? INT_MIN : INT_MAX);//initialize with worst possible value for the player to move
     pv_line.depth=depth;
+    const int ply_from_root = ply-effective_root_ply;
+    const bool in_check = original->get_in_check();
+    // Searches one child and applies the mate-distance fixup, so every
+    // (re-)search below compares like the full-window one always did.
+    auto search_child = [&](BB* child, int child_depth, int a, int b)
+    {
+        PV_Line line = minimax(child,wfh+number_of_new_moves,child_depth,W,a,b,table,path_history,ply+1,cycle_table,effective_root_ply);
+        if(line.eval<INT_MIN+max_mating_seq)//this assures the quickest mate
+        line.eval++;
+        if(line.eval>INT_MAX-max_mating_seq)//this assures the quickest mate
+        line.eval--;
+        return line;
+    };
+    // Does `eval` beat what the side to move already has (alpha at a white
+    // node, beta at a black one)? And is it still short of a cutoff?
+    auto improves_bound = [&](int eval) { return original->white_move ? eval>alpha : eval<beta; };
+    auto inside_window  = [&](int eval) { return original->white_move ? eval<beta : eval>alpha; };
     for(int i=0;i<number_of_new_moves;i++)
     {    
         if(i==(tt_move_index>=0))//the TT move didn't cut off, or there is none
@@ -508,15 +541,37 @@ PV_Line minimax(const BB*const original ,BB* const wfh ,int depth = 0, const WEI
             forced_draw = true;
         }
 
-        PV_Line candidate_pv_line = forced_draw
-            ? make_repetition_draw_pv_line(child, wfh+number_of_new_moves, depth_to_use, ply+1, effective_root_ply, W)
-            : minimax(child,wfh+number_of_new_moves,depth_to_use,W,alpha,beta,table,path_history,ply+1,cycle_table,effective_root_ply);
+        PV_Line candidate_pv_line;
+        if(forced_draw)
+        candidate_pv_line = make_repetition_draw_pv_line(child, wfh+number_of_new_moves, depth_to_use, ply+1, effective_root_ply, W);
+        else if(i==0 || !ENABLE_PVS)
+        candidate_pv_line = search_child(child,depth_to_use,alpha,beta);
+        else
+        {
+            // PVS: the first move is expected to be the best, so the others
+            // only have to show they are not better - a null window around
+            // the bound this node has to beat (alpha,alpha+1 at a white node,
+            // beta-1,beta at a black one). Such a result is a bound only, and
+            // the child stores it as one.
+            const int null_alpha = original->white_move ? alpha : beta-1;
+            const int null_beta  = original->white_move ? alpha+1 : beta;
+            // LMR: a quiet move the ordering ranks late is searched shallower
+            // first; if even that beats the bound, it gets its full depth.
+            const bool reduce = ENABLE_LMR
+                && depth>=LMR_MIN_DEPTH
+                && i>=LMR_FULL_DEPTH_MOVES
+                && !in_check
+                && is_quiet_move(original,move)
+                && !(ply_from_root<MAX_SEARCH_PLY && (move==killer_moves[ply_from_root][0] || move==killer_moves[ply_from_root][1]))
+                && !child->get_in_check();
+            if(reduce)
+            candidate_pv_line = search_child(child,depth_to_use-lmr_reduction(depth,i),null_alpha,null_beta);
+            if(!reduce || improves_bound(candidate_pv_line.eval))
+            candidate_pv_line = search_child(child,depth_to_use,null_alpha,null_beta);
+            if(improves_bound(candidate_pv_line.eval) && inside_window(candidate_pv_line.eval))
+            candidate_pv_line = search_child(child,depth_to_use,alpha,beta);
+        }
         int eval = candidate_pv_line.eval;
-        if(eval<INT_MIN+max_mating_seq)//this assures the quickest mate
-        eval++;
-        if(eval>INT_MAX-max_mating_seq)//this assures the quickest mate
-        eval--;
-        candidate_pv_line.eval=eval;
         bool improves_pv;
         if(original->white_move)
         {
