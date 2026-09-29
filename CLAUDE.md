@@ -133,8 +133,8 @@ When editing engine internals, `lib/*.hpp` is the declaration/interface layer an
   result kept for it wins, and in Play and Watch the move you are on, so the search that chose it
   does. `source` is `live`/`stored`/`move`, or `none` for a position nothing has searched, which
   is what makes the bar show nothing rather than 0.00. The score is **in white's view** whichever
-  side moved (a bar that flipped with the mover would swing a board width every move), unlike the
-  mover's-view score in the Play and Watch panels' thinking indicator. `settings` carries the
+  side moved (a bar that flipped with the mover would swing a board width every move), and so is
+  every other score on the page, the Play and Watch panels' thinking indicator included. `settings` carries the
   gear's two switches (the eval gauge, the engine-line box); they live in the `Session` like the
   board orientation, so a reload and a second tab agree, and they are never written to a file.
   `diagnostics/eval_view_test.cpp` covers the choosing. A session

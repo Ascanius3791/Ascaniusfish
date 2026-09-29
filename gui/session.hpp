@@ -986,9 +986,9 @@ class Session
         o.key(key).obj().key("baseMs").num(base_ms).key("incMs").num(inc_ms).end_obj();
     }
 
-    // The running search. Its score stays the mover's view, which is what a
-    // thinking indicator wants: "+0.40" means the engine likes its position.
-    static void write_search(json::Out& o, const Search_Info& info)
+    // The running search, its score in white's view like every other score the
+    // page shows. It is about the position the cursor is on (see live_view()).
+    void write_search(json::Out& o, const Search_Info& info) const
     {
         o.obj();
         o.key("depth").num(info.depth);
@@ -999,7 +999,7 @@ class Session
         if(info.score_kind.empty())
         o.null();
         else
-        o.obj().key("kind").str(info.score_kind).key("value").num(std::atoll(info.score_value.c_str())).end_obj();
+        o.obj().key("kind").str(info.score_kind).key("value").num(white_view(std::atoll(info.score_value.c_str()))).end_obj();
         o.end_obj();
     }
 
