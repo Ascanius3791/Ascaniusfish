@@ -159,14 +159,35 @@ int king_safety_of_colour(const BB* const original,bool white, const WEIGHTS& W 
     const uint64_t* Board = original->Board;
     float score=W.defensive_value[5];//the king can always defend itself
     int king_sq=__builtin_ctzll(Board[5+6*!white]);
-    uint64_t occupancy = original->get_occupancy();
+    // #34 (branch-free king safety): each piece's term goes into term[] by square, then
+    // the terms are added in square order. That is the same float additions, in the same
+    // order, as the old single pass over the occupancy that tested each square against
+    // every board in an if/else chain (score -= x is score += -x exactly).
+    // The own king adds nothing, so it has no term.
+    float term[64];
+    for(int piece=0;piece<6;piece++)
+    {
+        uint64_t own = piece<5 ? Board[piece+6*!white] : 0;//the own king is always at distance 0, thats why it cannot defend itself with distance 0
+        while(own)
+        {
+            int i=find_and_delete_trailling_1(own);
+            term[i] = W.defensive_value[piece]/distance_to_king(king_sq,i);
+        }
+        uint64_t enemy = Board[piece+6*white];
+        while(enemy)
+        {
+            int i=find_and_delete_trailling_1(enemy);
+            term[i] = -(W.offensive_value[piece]/distance_to_king(king_sq,i));
+        }
+    }
+    uint64_t occupancy = original->get_occupancy() & ~Board[5+6*!white];
     while(occupancy)
     {
         int i=find_and_delete_trailling_1(occupancy);
-        float metric = distance_to_king(king_sq,i);//experimental
-        if(metric ==0) //should be redundant
-        metric=1;
-
+        score += term[i];
+    }
+// Old comment, from inside the per-square loop of the if/else-chain version that
+// "#34 (branch-free king safety)" above replaced; metric was distance_to_king(king_sq,i).
 /*
         if(own_captures & 1Ull << i)
         score += 200/metric*(2-1*white);
@@ -177,35 +198,6 @@ int king_safety_of_colour(const BB* const original,bool white, const WEIGHTS& W 
         if(enemy_attacks & 1Ull << i)
         score -= 300/metric*(2-1*white);
 */
-        if(Board[0+6*!white] & 1Ull << i)
-        score += W.defensive_value[0]/metric;
-        else if(Board[0+6*white] & 1Ull << i)
-        score -= W.offensive_value[0]/metric;
-
-        else if(Board[1+6*!white] & 1Ull << i)
-        score += W.defensive_value[1]/metric;
-        else if(Board[1+6*white] & 1Ull << i)
-        score -= W.offensive_value[1]/metric;
-
-        else if(Board[2+6*!white] & 1Ull << i)
-        score += W.defensive_value[2]/metric;
-        else if(Board[2+6*white] & 1Ull << i)
-        score -= W.offensive_value[2]/metric;
-
-        else if(Board[3+6*!white] & 1Ull << i)
-        score += W.defensive_value[3]/metric;
-        else if(Board[3+6*white] & 1Ull << i)
-        score -= W.offensive_value[3]/metric;
-
-        else if(Board[4+6*!white] & 1Ull << i)
-        score += W.defensive_value[4]/metric;
-        else if(Board[4+6*white] & 1Ull << i)
-        score -= W.offensive_value[4]/metric;
-
-//the own king is always at distance 0, thats why it cannot defend itself with distance 0
-        else if(Board[5+6*white] & 1Ull << i)
-        score -= W.offensive_value[5]/metric;
-    }
     if(score>0)//king is safe
     return W.king_safety_value*sqrt(score);
     return W.king_safety_value*score*100;
