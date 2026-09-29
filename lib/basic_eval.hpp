@@ -22,8 +22,6 @@ int king_safety_of_colour(const BB* const original,bool white, const WEIGHTS& W 
 
 inline int material_eval(const BB* const original, const WEIGHTS& W = WEIGHTS_OG);
 
-int central_pawn_presence(const BB* const original, bool white, const WEIGHTS& W = WEIGHTS_OG);//positive is good for both colours
-
 int pawn_struckture_eval_of_colour(const BB* const original, bool white, const WEIGHTS& W = WEIGHTS_OG);//positive is good for both colours
 
 int positional_eval(const BB* const original, const WEIGHTS& W = WEIGHTS_OG);

@@ -218,36 +218,14 @@ inline int material_eval(const BB* const original, const WEIGHTS& W)
     return (int)((score_W-score_B)*sqrt(2-(8*1+3*4*2*5+9+3.5)*2/material_left));
 }
 
-int central_pawn_presence(const BB* const original, bool white, const WEIGHTS& W)//positive is good for both colours
-{
-    int score=0;
-    uint64_t mask_center = 0B0000000000000000001111000011110000111100001111000000000000000000;
-    uint64_t central_pawns = original->Board[0+6*!white]&mask_center;
-    uint64_t virtual_pawns = central_pawns;
-    while(virtual_pawns)
-    {
-        int i=find_and_delete_trailling_1(virtual_pawns);
-        uint64_t attacks = white ? BP_template[i] : WP_template[i]; 
-        while(attacks)
-        {
-            int j=find_and_delete_trailling_1(attacks);
-            score+=W.piece_table_value_opening[0+6*!white][j];
-        }
-    }
-    return score/4/2;
-}
-
 int pawn_struckture_eval_of_colour(const BB* const original, bool white, const WEIGHTS& W)//positive is good for both colours
 {
     int score=0;
 
-    bool WM=original->white_move;
-    score += central_pawn_presence(original,white,W);
-    uint64_t occ_sq=0;
+    uint64_t occ_sq=0;//own pieces and pawns only: a pawn supports its own side (#36)
     for(int i=0;i<6;i++)
     {
-        occ_sq |= original->Board[i+6*WM];
-        occ_sq |= original->Board[i+6*!WM];
+        occ_sq |= original->Board[i+6*!white];
     }
     uint64_t pawns = original->Board[0+6*!white];
     uint64_t virtual_pawns = pawns;
@@ -273,7 +251,6 @@ int pawn_struckture_eval_of_colour(const BB* const original, bool white, const W
         {
             score+=W.pawn_supporting_value*count(occ_sq & WP_template[i]);
         }
-        continue;
         //punish isolated pawns
         int column = i%8;
         if(column==0)

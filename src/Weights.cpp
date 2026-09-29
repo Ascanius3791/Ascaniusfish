@@ -288,8 +288,11 @@ WEIGHTS::WEIGHTS()
         if(piece==0 || piece==6)
         {
             // white pawn table (row 0) is derived from this one below, mirrored - not set here
-            piece_table_value_opening[6][i*8+j] = (7-i)*30;
+            piece_table_value_opening[6][i*8+j] = (7-i)*10;
             piece_table_value_endgame[6][i*8+j] = (7-i)*(7-i)*5;
+            if((i==3 || i==4) && (j==3 || j==4))//d4/e4/d5/e5: centre bonus, in the opening only (#36)
+            piece_table_value_opening[6][i*8+j] = piece_table_value_opening[6][i*8+j]*3/2;
+            continue;//pawns get no file bonus below, the centre bonus above replaces it (#36)
         }
         else
         {
