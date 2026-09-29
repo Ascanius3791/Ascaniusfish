@@ -45,7 +45,7 @@ Refs #12        (or: Closes #12)
 Co-Authored-By: ...
 ```
 
-- `area` ∈ `search`, `eval`, `movegen`, `tt`, `book`, `gui`, `tools`, `build`, `docs`.
+- `area` ∈ `search`, `eval`, `movegen`, `tt`, `tb`, `book`, `gui`, `tools`, `build`, `docs`.
 - One logical change per commit. The build (`make`) must succeed.
 - If the change affects strength or speed, add the measurement to the body, e.g. `nps 1.21M → 1.34M`.
 - Commits touching search, eval or move ordering put `bench: <nodes>` (from `make bench`) in the body; commits touching move generation must pass `make perft`. See `docs/BENCHMARKS.md`.

@@ -263,6 +263,13 @@ leaves room for several engine processes at once. `main()` ignores `SIGPIPE` —
 not the end of the server — and takes `SIGINT`/`SIGTERM` as "leave through `main()`", which
 aborts every search and quits the engines rather than orphaning them.
 
+### Syzygy tablebases
+`lib/syzygy.hpp` is our own prober (written from the file format, no Fathom) for 3-5 piece positions. API, all in namespace `Syzygy`: `init(dir)` maps every `*.rtbw`/`*.rtbz` file, `probe_wdl(pos, wdl)` gives the 5-valued WDL and `probe_dtz(pos, dtz, &rounded)` the DTZ in plies, both for the side to move and as if the halfmove clock were 0; they return false for castling rights, too many pieces or a missing table. WDL files leave captures as "don't care", so every probe searches the captures first (en passant included, it is not in the files); a DTZ file stores one side to move only, so the other side is a 1-ply search.
+
+The files are `mmap`'d and their headers are parsed **lazily**: `init()` costs ~6 ms and ~90 kB RSS, the first probe of a table ~1 ms, later ones 4 us (WDL) / 14 us (DTZ). An eager background read is possible if wanted. Numbers: `docs/measurements/syzygy_probe_2026-09-30.md`.
+
+The table set is `~/syzygy-nr` (default `SYZYGY_PATH`): the standard `.rtbw` files (symlinked from `~/syzygy`) plus the 3-4-5 **dtz-nr** ("no rounding") `.rtbz` files. The standard DTZ files store some distances in moves, so a probe can be one ply short; the nr files store plies and match all 1039 reference positions exactly. `make syzygy-test` checks the prober against `tools/syzygy_reference.txt` (Lichess-recorded, rebuilt with `tools/syzygy_reference`, needs curl) and against its own children on random positions (`SYZYGY_RANDOM=n` per table).
+
 ### Python GUI bridge
 `lib/python_communication.hpp` / `src/python_communication.cpp` opens `display_board.py` as a subprocess via `popen` (piping UCI move strings to its stdin) so the C++ engine can drive a tkinter/pygame board with sound effects. Separately, `read_from_last_move()` (`ascaniusfish_2.hpp`) and `display_board.py`'s `write_to_last_move_file()` coordinate human-vs-engine play through the shared file `last_move.txt`, polling every 200ms; the color suffix (`ww`/`bb`) written after the move string is a same-color echo used to signal "no new move yet". Treat `last_move.txt` as ephemeral IPC state, not data to commit meaningfully.
 
