@@ -138,10 +138,10 @@ std::tuple<int,std::vector<Move>> all_moves(const BB* const original, BB* const 
                         wfh[GI].Board[1] |= 1Ull << j; //rook last piece, so it is not overwritten
                         Zobrist::update_zobrist_hash(*original, wfh[GI], OWN_PICE_INDEX, from, to, is_capture, 1+6*!WM); // Update hash for rook promotion
                         GI=GI+3;
+                        moves.push_back(Move(i,j,1,0,0));//1=rook - same order as the four boards above (rook, knight, bishop, queen)
                         moves.push_back(Move(i,j,2,0,0));//2=knight
                         moves.push_back(Move(i,j,3,0,0));//3=bishop
                         moves.push_back(Move(i,j,4,0,0));//4=queen
-                        moves.push_back(Move(i,j,1,0,0));//1=rook
                     }
                     else if(is_en_passant_capture) 
                     {
@@ -198,10 +198,10 @@ std::tuple<int,std::vector<Move>> all_moves(const BB* const original, BB* const 
                         wfh[GI].Board[1+6] |= 1Ull << j; //rook last piece, so it is not overwritten
                         Zobrist::update_zobrist_hash(*original, wfh[GI], OWN_PICE_INDEX, from, to, is_capture, 1+6*!WM); // Update hash for rook promotion
                         GI=GI+3;
+                        moves.push_back(Move(i,j,1,0,0));//1=rook - same order as the four boards above (rook, knight, bishop, queen)
                         moves.push_back(Move(i,j,2,0,0));//2=knight
                         moves.push_back(Move(i,j,3,0,0));//3=bishop
                         moves.push_back(Move(i,j,4,0,0));//4=queen
-                        moves.push_back(Move(i,j,1,0,0));//1=rook
                     }
                     else if(is_en_passant_capture)
                     {
@@ -261,10 +261,10 @@ std::tuple<int,std::vector<Move>> all_moves(const BB* const original, BB* const 
 
                     wfh[GI].Board[1] |= 1Ull << (i+8); //rook last piece, so it is not overwritten
                     Zobrist::update_zobrist_hash(*original, wfh[GI], OWN_PICE_INDEX, from, to, is_capture, 1+6*!WM); // Update hash for rook promotion
+                    moves.push_back(Move(i,i+8,1,0,0));//1=rook - same order as the four boards above (rook, knight, bishop, queen)
                     moves.push_back(Move(i,i+8,2,0,0));//2=knight
                     moves.push_back(Move(i,i+8,3,0,0));//3=bishop
                     moves.push_back(Move(i,i+8,4,0,0));//4=queen
-                    moves.push_back(Move(i,i+8,1,0,0));//1=rook
                     GI=GI+3;         
                 }
                 else
@@ -328,10 +328,10 @@ std::tuple<int,std::vector<Move>> all_moves(const BB* const original, BB* const 
                     wfh[GI].Board[1+6] |= 1Ull << (i-8); //rook last piece, so it is not overwritten
                     Zobrist::update_zobrist_hash(*original, wfh[GI], OWN_PICE_INDEX, from, to, is_capture, 1+6*!WM); // Update hash for rook promotion
                     GI=GI+3;
+                    moves.push_back(Move(i,i-8,1,0,0));//1=rook - same order as the four boards above (rook, knight, bishop, queen)
                     moves.push_back(Move(i,i-8,2,0,0));//2=knight
                     moves.push_back(Move(i,i-8,3,0,0));//3=bishop
                     moves.push_back(Move(i,i-8,4,0,0));//4=queen
-                    moves.push_back(Move(i,i-8,1,0,0));//1=rook
                 }
                 else {
                     moves.push_back(Move(i,i-8));
