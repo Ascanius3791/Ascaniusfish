@@ -4,6 +4,6 @@
 
 #include "Bitboards.hpp"
 #include "../src/checks.cpp"         // in_check(); also pulls in ../src/magics.cpp (attacked_squares, get_bishop_attacks, get_rook_attacks)
-#include "../src/move_generation.cpp" // one_move()
+#include "../src/move_generation.cpp" // count_legal_moves()
 
 #endif

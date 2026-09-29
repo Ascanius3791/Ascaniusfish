@@ -76,7 +76,7 @@ int main()
         assert(p.get_attacked_squares(true) == attacked_squares(p.Board, true)); // cached path
 
         assert(p.get_in_check() == in_check(p.Board, p.white_move));
-        assert(p.get_has_legal_move() == one_move(&p));
+        assert(p.get_has_legal_move() == one_move(&p)); // the old make-and-check path
     }
 
     std::cout << "All BB_lazyfields getters agree with the raw computations. OK\n";
