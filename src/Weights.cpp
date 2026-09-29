@@ -287,9 +287,8 @@ WEIGHTS::WEIGHTS()
     {
         if(piece==0 || piece==6)
         {
-            piece_table_value_opening[0][i*8+j] = i*30;              
+            // white pawn table (row 0) is derived from this one below, mirrored - not set here
             piece_table_value_opening[6][i*8+j] = (7-i)*30;
-            piece_table_value_endgame[0][i*8+j] = i*i*5;
             piece_table_value_endgame[6][i*8+j] = (7-i)*(7-i)*5;
         }
         else
@@ -334,6 +333,15 @@ WEIGHTS::WEIGHTS()
             piece_table_value_endgame[piece][i*8+j] =  2*piece_table_value_endgame[piece][i*8+j];//redundant, but to clarify, in the endgame the king belongs in the center
         }
 
+    }
+
+    // white pawn table is the black pawn table above, mirrored vertically (rank i <-> rank 7-i,
+    // same file) - the two colours' pawns are meant to value squares identically
+    for(int i=0;i<8;i++)
+    for(int j=0;j<8;j++)
+    {
+        piece_table_value_opening[0][i*8+j] = piece_table_value_opening[6][(7-i)*8+j];
+        piece_table_value_endgame[0][i*8+j] = piece_table_value_endgame[6][(7-i)*8+j];
     }
 
     //adjust rook values
@@ -424,7 +432,14 @@ WEIGHTS::WEIGHTS()
     pawn_supporting_value = 15;
     value_of_king_safety_for_sorting = 50;//this is a factor!//it should not be changed, untill
 
-
+    //halve the pawn values
+    for(int i=0;i<64;i++)
+    {
+        //piece_table_value_opening[0][i] /= 2;
+        //piece_table_value_opening[6][i] /= 2;
+        piece_table_value_endgame[0][i] /= 2;
+        piece_table_value_endgame[6][i] /= 2;
+    }
 
 
 };

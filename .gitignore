@@ -51,6 +51,7 @@ diagnostics/eval_fuzz
 diagnostics/eval_regression_check
 diagnostics/pv_chunk_test
 diagnostics/clock_test
+diagnostics/piece_square_table_viewer
 tools/tt_stats_sweep
 *.gcda
 *.gcno

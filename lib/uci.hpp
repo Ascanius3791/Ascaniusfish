@@ -58,6 +58,7 @@ class UCI_Engine
     BB* pv_buf;         // scratch for walking the PV / applying moves
     CuckooCycleTable* cycle_table;
     TimeManager* tm;       // set by "go" on a clock (without movetime), else nullptr
+    Lambda_History lambda_history;  // persists across moves; reset on ucinewgame
     std::vector<BB> game;  // root FEN position followed by every position after "moves"
 
     std::thread search_thread;

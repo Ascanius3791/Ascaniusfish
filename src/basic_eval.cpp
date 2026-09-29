@@ -242,7 +242,7 @@ int central_pawn_presence(const BB* const original, bool white, const WEIGHTS& W
             score+=W.piece_table_value_opening[0+6*!white][j];
         }
     }
-    return score/4;
+    return score/4/2;
 }
 
 int pawn_struckture_eval_of_colour(const BB* const original, bool white, const WEIGHTS& W)//positive is good for both colours
@@ -324,8 +324,6 @@ int basic_eval(const BB*const original , const WEIGHTS& W)// return the evaluati
     score -= king_safety_of_colour(original,false,W);
     //return score;
     //score=score*0.1; //games get fun, when they DO NOT CARE ABOUT MATERIAL
-    
-
 
     score += positional_eval(original,W);
     

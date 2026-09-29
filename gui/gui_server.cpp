@@ -36,6 +36,7 @@
 #include "session.hpp"
 
 #include <cctype>
+#include <chrono>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
@@ -46,6 +47,7 @@
 #include <sstream>
 #include <string>
 #include <sys/wait.h>
+#include <thread>
 
 constexpr int DEFAULT_PORT = 8173;
 constexpr int MAX_DEPTH = 40;
@@ -228,6 +230,55 @@ static std::string start_tunnel_and_wait(int port, long long timeout_ms, std::st
         }
         usleep(150000);
     }
+}
+
+// The HTTP status `url` answers with right now, or 0 if curl couldn't even
+// connect (DNS failure, connection refused, or its own --max-time). While a
+// quick tunnel hasn't finished routing, Cloudflare's edge answers on its own
+// with an error page (its own 502/530, not "no response"), so this checks for
+// an actual 2xx rather than just "curl got something back".
+static bool url_answers_ok(const std::string& url, int timeout_s)
+{
+    std::string cmd = "curl -s -o /dev/null -w '%{http_code}' --max-time "
+                     + std::to_string(timeout_s) + " '" + url + "'";
+    FILE* p = popen(cmd.c_str(), "r");
+    if(!p) return false;
+    char buf[16] = {0};
+    if(!std::fgets(buf, sizeof buf, p)) buf[0] = '\0';
+    pclose(p);
+    int code = std::atoi(buf);
+    return code>=200 && code<400;
+}
+
+// cloudflared prints the trycloudflare.com URL as soon as it registers with
+// Cloudflare's edge, but Cloudflare's own message alongside it warns the
+// hostname "may take some time to be reachable" — that propagation delay is
+// on Cloudflare's side and can run well past what start_tunnel_and_wait()
+// waits for, which is what made the printed "Shareable link" look broken for
+// minutes at a time with nothing to show it was still just pending. This
+// polls the real link in the background — never
+// blocking startup, since the local link already works while it does — and
+// prints a confirmation once it actually answers, or a note if it still
+// hasn't after a long wait.
+static void confirm_tunnel_reachable(std::string share_url)
+{
+    long long deadline = now_ms() + 5*60*1000;
+    while(now_ms()<deadline)
+    {
+        if(tunnel_pid<0) return;   // stopped (Ctrl-C, or cloudflared died) before it came up
+        if(url_answers_ok(share_url, 5))
+        {
+            std::printf("Tunnel confirmed reachable — the shareable link is live.\n");
+            std::fflush(stdout);
+            return;
+        }
+        std::this_thread::sleep_for(std::chrono::seconds(3));
+    }
+    std::fprintf(stderr,
+        "gui: tunnel: still not reachable after 5 minutes — quick tunnels can be this slow to "
+        "route, or may not come up at all; wait longer, restart, or see docs/REMOTE_PLAY.md for "
+        "a named tunnel instead.\n");
+    std::fflush(stderr);
 }
 
 // Ctrl-C must take the tunnel down too, or it keeps forwarding to a server
@@ -1135,7 +1186,14 @@ int main(int argc, char** argv)
         std::string error;
         std::string url = start_tunnel_and_wait(server.port(), 20000, error);
         if(!url.empty())
-        std::printf("Shareable link: %s/?token=%s\n", url.c_str(), gui_token.c_str());
+        {
+            std::string share_url = url + "/?token=" + gui_token;
+            std::printf("Shareable link: %s\n"
+                        "(quick tunnels can take a while to actually route through Cloudflare —\n"
+                        " checking now, will print a confirmation once it's actually live)\n",
+                        share_url.c_str());
+            std::thread(confirm_tunnel_reachable, share_url).detach();
+        }
         else
         std::fprintf(stderr, "gui: tunnel: %s\n", error.c_str());
     }

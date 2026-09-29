@@ -300,7 +300,7 @@ void UCI_Engine::handle_go(const std::vector<std::string>& tokens)
     if(clocked && budget_ms==0)
     {
         bool white = game.back().white_move;
-        tm = new TimeManager(game.back(), white ? limits.wtime : limits.btime, white ? limits.winc : limits.binc, limits.movestogo);
+        tm = new TimeManager(game.back(), white ? limits.wtime : limits.btime, white ? limits.winc : limits.binc, limits.movestogo, lambda_history);
         budget_ms = tm->hard_ms();
     }
     search_deadline_ns.store(budget_ms>0 && !limits.infinite ? start_ns + budget_ms*1000000LL : 0);
@@ -374,13 +374,15 @@ void UCI_Engine::search(UCI_Limits limits, long long start_ns)
         {
             tm->iteration_done(d, pv, elapsed_ms);
             char buf[96];
-            std::snprintf(buf, sizeof buf, "info string tm lambda %.3f soft %lld hard %lld", tm->lambda(), tm->soft_ms(), tm->hard_ms());
+            std::snprintf(buf, sizeof buf, "info string tm lambda %.3f raw %.3f soft %lld hard %lld", tm->lambda(), tm->raw_lambda(), tm->soft_ms(), tm->hard_ms());
             send(buf);
             if(!tm->start_next_iteration((steady_now_ns()-start_ns)/1000000))
             break;
         }
     }
 
+    if(tm)
+    tm->commit_lambda();
     while(limits.infinite && !stop_search_flag.load())
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
     send("bestmove " + best);
@@ -411,6 +413,7 @@ int UCI_Engine::loop()
             stop_search();
             if(table)
             table->reset();
+            lambda_history.reset();
             BB start;
             uci_parse_fen(UCI_STARTPOS, start);
             game.assign(1, start);

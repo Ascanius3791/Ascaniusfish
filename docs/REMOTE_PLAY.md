@@ -38,11 +38,30 @@ Token for this run: 3f9a1c7b2e4d5f60...
 Local link: http://localhost:8173/?token=3f9a1c7b2e4d5f60...
 Starting a Cloudflare quick tunnel (cloudflared)...
 Shareable link: https://some-random-words.trycloudflare.com/?token=3f9a1c7b2e4d5f60...
+(quick tunnels can take a while to actually route through Cloudflare —
+ checking now, will print a confirmation once it's actually live)
 The page keeps the token in a cookie after the first open. A new run makes a new token.
+Tunnel confirmed reachable — the shareable link is live.
 ```
 
 Send your friend the **Shareable link** line, exactly as printed. That's it —
 one command, one link, nothing installed anywhere but your own machine.
+
+**Quick tunnels are genuinely slow to come up sometimes.** cloudflared's own
+random `trycloudflare.com` hostname has to propagate through Cloudflare's edge
+before it answers anything, which is best-effort with no SLA — it's usually a
+few seconds but can occasionally take minutes, and there's nothing this repo
+can do to speed that up. The server checks the link itself in the background
+(without blocking the **Local link**, which works immediately) and prints
+"Tunnel confirmed reachable" once it's actually live; if you send the link
+before that line shows up, your friend will just see the page hang on
+"connecting" for a while. If nothing shows up after several minutes, either
+retry (Ctrl-C and rerun) or fall back to the LAN or Lichess-bot options below.
+A *named* Cloudflare Tunnel (a fixed hostname on a domain you own, added to a
+Cloudflare account) doesn't have this random-subdomain propagation step and is
+what Cloudflare itself documents as the reliable option — not set up here
+since it needs a domain in a Cloudflare account first; ask if you want to add
+that.
 
 The token gates every route, including every static file — a request without
 it (or without the cookie it sets on the first correct one) gets a plain 401
