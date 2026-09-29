@@ -18,6 +18,9 @@
 //   openings=<file>    EPD suite (default tools/openings.epd)
 //   pgn=<file>         game output (default match.pgn)
 //   tt=<n>             TT exponent for engines built from refs (default 11, ~36MB)
+//   optionsA=<n=v,...> UCI options for engine A (optionsB= for B), e.g.
+//                      optionsA="UCI_LimitStrength=true,UCI_Elo=1500" for a
+//                      Stockfish playing at a given CCRL rating
 #include "git_build.hpp"
 #include "game_rules.hpp"
 #include "uci_engine.hpp"
@@ -344,7 +347,24 @@ struct Side : Checkout
 {
     std::string binary, build_log;
     bool built = false;
+    std::vector<std::pair<std::string, std::string>> options;
 };
+
+// "Name=Value,Name=Value" -> setoption pairs. Names may hold spaces ("Skill Level=0").
+static std::vector<std::pair<std::string, std::string>> parse_options(const std::string& text)
+{
+    std::vector<std::pair<std::string, std::string>> out;
+    std::istringstream in(text);
+    std::string item;
+    while(std::getline(in, item, ','))
+    {
+        size_t eq = item.find('=');
+        if(eq==std::string::npos || eq==0 || eq+1==item.size())
+        die("expected Name=Value in options, got " + item);
+        out.push_back({item.substr(0, eq), item.substr(eq+1)});
+    }
+    return out;
+}
 
 // An existing executable is used as is; anything else is a git ref, checked
 // out here and compiled by build().
@@ -378,7 +398,7 @@ int main(int argc, char** argv)
     if(argc<3)
     {
         std::fprintf(stderr, "usage: %s <A> <B> [depth=3] [depthA=n] [depthB=n] [tc=s+inc] [concurrency=n] [pairs=n]\n"
-                             "       [openings=tools/openings.epd] [pgn=match.pgn] [tt=11]\n"
+                             "       [openings=tools/openings.epd] [pgn=match.pgn] [tt=11] [optionsA=Name=Value,...] [optionsB=...]\n"
                              "  A, B: UCI engine binary, or git ref to build (\".\" = working tree)\n", argv[0]);
         return 2;
     }
@@ -394,7 +414,7 @@ int main(int argc, char** argv)
     }
     auto get = [&](const std::string& k, const std::string& def) { return opt.count(k) ? opt[k] : def; };
     for(auto& [k, v] : opt)
-    if(std::string(" depth depthA depthB tc concurrency pairs openings pgn tt ").find(" " + k + " ")==std::string::npos)
+    if(std::string(" depth depthA depthB tc concurrency pairs openings pgn tt optionsA optionsB ").find(" " + k + " ")==std::string::npos)
     die("unknown option " + k);
 
     Limits clock;
@@ -429,6 +449,11 @@ int main(int argc, char** argv)
     int tt = std::atoi(get("tt", "11").c_str());
     prepare(a, root, "A");  // worktrees one after the other (git locks), then both builds at once
     prepare(b, root, "B");
+    a.options = parse_options(get("optionsA", ""));
+    b.options = parse_options(get("optionsB", ""));
+    for(Side* s : {&a, &b})
+    for(const auto& [name, value] : s->options)
+    s->label += " " + name + "=" + value;
     std::printf("building engines ...\n");
     std::fflush(stdout);
     std::thread build_b([&] { build(b, tt); });
@@ -446,6 +471,8 @@ int main(int argc, char** argv)
     std::vector<Engine> ea(1), eb(1);
     ea[0].path = a.binary;
     eb[0].path = b.binary;
+    ea[0].options = a.options;
+    eb[0].options = b.options;
     if(!ea[0].start()) die("engine A does not start: " + a.binary);
     if(!eb[0].start()) die("engine B does not start: " + b.binary);
     long pair_kb = std::max(1L, ea[0].rss_kb()+eb[0].rss_kb());
@@ -482,6 +509,8 @@ int main(int argc, char** argv)
         {
             A.path = a.binary;
             B.path = b.binary;
+            A.options = a.options;
+            B.options = b.options;
             if(!A.start() || !B.start()) die("engines do not start");
         }
         for(int p; (p = next_pair++) < pairs; )

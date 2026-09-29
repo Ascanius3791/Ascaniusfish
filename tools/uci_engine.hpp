@@ -14,6 +14,7 @@
 #include <string>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <utility>
 #include <vector>
 
 constexpr long long READY_TIMEOUT_MS = 60000;
@@ -70,6 +71,7 @@ class Engine
 {
     public:
     std::string path;
+    std::vector<std::pair<std::string, std::string>> options;  // sent as setoption on every start
     pid_t pid = -1;
 
     bool start()
@@ -93,7 +95,11 @@ class Engine
         out = from_child[0];
         buffer.clear();
         send("uci");
-        return wait_for("uciok", 10000) && ready();
+        if(!wait_for("uciok", 10000))
+        return false;
+        for(const auto& [name, value] : options)
+        send("setoption name " + name + " value " + value);
+        return ready();
     }
 
     bool ready()

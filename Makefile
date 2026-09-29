@@ -108,8 +108,8 @@ speed-compare: tools/speed_compare
 
 # Elo match of two engines (git refs or UCI binaries): make match A=main B=.
 match: tools/match
-	@test -n "$(A)" -a -n "$(B)" || (echo "usage: make match A=<ref|binary> B=<ref|binary> [DEPTH=3] [TC=10+0.1] [CONCURRENCY=n] [PAIRS=n]"; exit 2)
-	./tools/match $(A) $(B) depth=$(DEPTH) tc=$(TC) concurrency=$(CONCURRENCY) pairs=$(PAIRS)
+	@test -n "$(A)" -a -n "$(B)" || (echo "usage: make match A=<ref|binary> B=<ref|binary> [DEPTH=3] [TC=10+0.1] [CONCURRENCY=n] [PAIRS=n] [OPTIONS_A=Name=Value,...] [OPTIONS_B=...]"; exit 2)
+	./tools/match $(A) $(B) depth=$(DEPTH) tc=$(TC) concurrency=$(CONCURRENCY) pairs=$(PAIRS) optionsA="$(OPTIONS_A)" optionsB="$(OPTIONS_B)"
 
 # One game of two UCI binaries at MOVETIME ms per move, shown in display_board.py
 gui-match: tools/gui_match

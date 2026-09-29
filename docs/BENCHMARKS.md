@@ -82,6 +82,12 @@ Answers "is B stronger than A, and by how much?"
   `tools/match` also takes `depthA=`/`depthB=` for different depths per side.
 - `CONCURRENCY=n` games run in parallel (default: cores−1, capped by free
   memory). `PAIRS=n` uses only the first n openings.
+- `OPTIONS_A=`/`OPTIONS_B=` (`optionsA=`/`optionsB=`) send UCI options to an
+  engine as `Name=Value,Name=Value`, again on every restart. With Stockfish,
+  `OPTIONS_A=UCI_LimitStrength=true,UCI_Elo=1800` gives an opponent of a known
+  rating: Stockfish's `UCI_Elo` is calibrated at 60+0.6 and anchored to CCRL
+  40/4, so play `TC=60+0.6` and add B's Elo to it for an estimate of B's rating.
+  Pick a level where B scores 25–75%, or the CI is wide.
 - The runner applies the rules itself, with the engine's move generator:
   mate, stalemate, threefold repetition, 50-move rule, insufficient material.
   An illegal move, a hung engine or a flag fall loses the game.
