@@ -164,23 +164,28 @@ constexpr int max_non_king_pieces = 30;
 PV_Line minimax_tactical(const BB* const original, BB* const wfh, const WEIGHTS& W = WEIGHTS_OG, int alpha = INT_MIN, int beta = INT_MAX, lookup_table* const table = NULL, int forced_moves_left = max_non_king_pieces)
 {
     poll_search_abort();//see minimax()
-    auto result = all_moves(original, wfh);
-    int number_of_new_moves = std::get<0>(result);
-    vector<Move> moves = std::get<1>(result);
+    // Only captures and promotions can be tactical. The other moves matter only
+    // through their number: none is mate or stalemate, one is a forced move.
+    Move_List moves;
+    const int number_of_captures = generate_legal_moves<GEN_CAPTURES>(original, moves);
+    const int number_of_new_moves = number_of_captures>=2 ? 2 : count_legal_moves(original, 2);//2 means "2 or more"
 
     // Only the tactical moves get ordered, and only once the stand pat below
     // hasn't cut off: most nodes here never search a single move.
     const bool is_forced_move = number_of_new_moves==1 && forced_moves_left>0;
-    vector<int> tactical_order;
-    for(int idx=0; idx<number_of_new_moves; idx++)
+    if(is_forced_move && number_of_captures==0)
+    generate_legal_moves<GEN_QUIETS>(original, moves);//the one legal move is quiet
+    int tactical_order[MOVE_LIST_CAP];
+    int number_of_tactical_moves = 0;
+    for(int idx=0; idx<moves.size; idx++)
         if(
             is_forced_move ||
             moves[idx].promotion_piece_type==QUEEN_PROMOTION ||
             (moves[idx].promotion_piece_type==-1 && is_good_capture(original, moves[idx].from, moves[idx].to, moves[idx].is_en_passant))
             )
-        tactical_order.push_back(idx);
+        tactical_order[number_of_tactical_moves++] = idx;
 
-    if(tactical_order.empty())
+    if(number_of_tactical_moves==0)
     {
         if(number_of_new_moves==0)
         {
@@ -235,10 +240,12 @@ PV_Line minimax_tactical(const BB* const original, BB* const wfh, const WEIGHTS&
             beta=min(beta,stand_pat);
         }
     }
-    order_tactical_moves(original, moves, tactical_order);
-    for(int idx : tactical_order)
+    order_tactical_moves(original, moves.moves, tactical_order, number_of_tactical_moves);
+    for(int k=0; k<number_of_tactical_moves; k++)
     {
-        PV_Line candidate = minimax_tactical(wfh+idx, wfh+number_of_new_moves, W, alpha, beta, table, forced_moves_left - is_forced_move);
+        const int idx = tactical_order[k];
+        make_move(original, moves[idx], wfh);//the child is built only now that it is searched
+        PV_Line candidate = minimax_tactical(wfh, wfh+1, W, alpha, beta, table, forced_moves_left - is_forced_move);
         int child_eval = candidate.eval;
         if(child_eval<INT_MIN+max_mating_seq)
         child_eval++;
@@ -479,9 +486,8 @@ PV_Line minimax(const BB*const original ,BB* const wfh ,int depth = 0, const WEI
         }
     }
 
-    auto result = all_moves(original,wfh);
-    int number_of_new_moves = std::get<0>(result);
-    vector<Move> moves = std::get<1>(result);
+    Move_List moves;
+    const int number_of_new_moves = generate_legal_moves<GEN_ALL>(original, moves);
     // The TT move is searched before the other moves are ordered: if it cuts
     // off, the ordering is skipped. The rest come in stages, see lib/move_ordering.hpp.
     int tt_move_index = -1;
@@ -504,7 +510,7 @@ PV_Line minimax(const BB*const original ,BB* const wfh ,int depth = 0, const WEI
     // (re-)search below compares like the full-window one always did.
     auto search_child = [&](BB* child, int child_depth, int a, int b)
     {
-        PV_Line line = minimax(child,wfh+number_of_new_moves,child_depth,W,a,b,table,path_history,ply+1,cycle_table,effective_root_ply);
+        PV_Line line = minimax(child,wfh+1,child_depth,W,a,b,table,path_history,ply+1,cycle_table,effective_root_ply);
         if(line.eval<INT_MIN+max_mating_seq)//this assures the quickest mate
         line.eval++;
         if(line.eval>INT_MAX-max_mating_seq)//this assures the quickest mate
@@ -518,11 +524,12 @@ PV_Line minimax(const BB*const original ,BB* const wfh ,int depth = 0, const WEI
     for(int i=0;i<number_of_new_moves;i++)
     {    
         if(i==(tt_move_index>=0))//the TT move didn't cut off, or there is none
-        order.init(original,wfh,moves,number_of_new_moves,tt_move_index,ply-effective_root_ply,W);
+        order.init(original,moves.moves,number_of_new_moves,tt_move_index,ply-effective_root_ply);
         int move_index = (i==0 && tt_move_index>=0) ? tt_move_index : order.next();
         int depth_to_use=depth-1;
         Move move =moves[move_index];
-        BB* child = wfh+move_index;
+        BB* child = wfh;
+        make_move(original, move, child);//the child is built only now that it is searched
 
         // Would THIS specific move recreate an earlier position (exact repeat),
         // or is it the specific move detect_upcoming_cycle identified as leading
@@ -543,7 +550,7 @@ PV_Line minimax(const BB*const original ,BB* const wfh ,int depth = 0, const WEI
 
         PV_Line candidate_pv_line;
         if(forced_draw)
-        candidate_pv_line = make_repetition_draw_pv_line(child, wfh+number_of_new_moves, depth_to_use, ply+1, effective_root_ply, W);
+        candidate_pv_line = make_repetition_draw_pv_line(child, wfh+1, depth_to_use, ply+1, effective_root_ply, W);
         else if(i==0 || !ENABLE_PVS)
         candidate_pv_line = search_child(child,depth_to_use,alpha,beta);
         else
