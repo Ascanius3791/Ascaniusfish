@@ -46,7 +46,7 @@ make clean        # remove build artifacts
 
 Run a single test binary directly, e.g. `./hash_table_test` or `./hash_game_test` (built via `make tests`). There is no test framework/runner — `hash_table_test.cpp`, `hash_game_test.cpp`, and `pv_first_move_diagnostic.cpp` stay at the repo root (these are the `make tests` targets) and are each a standalone `main()` used as an ad-hoc check. One-off probes/diagnostics live in `diagnostics/`, and performance benchmarks live in `benchmarks/`; build any of them (root, `diagnostics/`, or `benchmarks/`) the same way, from the repo root so relative includes resolve, e.g.:
 ```bash
-g++ -O3 -mpopcnt -Wall -Wno-unknown-pragmas -Wno-parentheses -Wno-unused-variable -DNDEBUG -o diagnostics/<name> diagnostics/<name>.cpp
+g++ -O3 -mpopcnt -fwhole-program -Wall -Wno-unknown-pragmas -Wno-parentheses -Wno-unused-variable -DNDEBUG -o diagnostics/<name> diagnostics/<name>.cpp
 ```
 
 `tools/` holds the benchmarking tools behind `make perft`/`bench`/`speed-compare` (see `docs/BENCHMARKS.md`), and `issue_worktree.sh` (one worktree per issue, see `docs/WORKFLOW.md`).

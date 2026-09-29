@@ -17,7 +17,7 @@
 #include <string>
 #include <vector>
 
-static const char* const CXXFLAGS = "-O3 -mpopcnt -Wall -Wno-unknown-pragmas -Wno-parentheses -Wno-unused-variable -DNDEBUG -pthread";
+static const char* const CXXFLAGS = "-O3 -mpopcnt -fwhole-program -Wall -Wno-unknown-pragmas -Wno-parentheses -Wno-unused-variable -DNDEBUG -pthread";
 
 static void die(const std::string& msg)
 {

@@ -2,7 +2,9 @@
 CXX ?= g++
 # -mpopcnt: count bits with the CPU instruction (every x86-64 CPU since 2008) instead of
 # a libgcc call; ~26% fewer search instructions. tools/match.cpp and speed_compare.cpp match it.
-CXXFLAGS ?= -O3 -mpopcnt -Wall -Wno-unknown-pragmas -Wno-parentheses -Wno-unused-variable -DNDEBUG
+# -fwhole-program: every binary is one translation unit, so functions it never calls are
+# dropped before they are optimised; ~15-25% less compile time, same bench, same nps.
+CXXFLAGS ?= -O3 -mpopcnt -fwhole-program -Wall -Wno-unknown-pragmas -Wno-parentheses -Wno-unused-variable -DNDEBUG
 
 TARGET ?= ascaniusfish
 MAIN := ascaniusfish.cpp
