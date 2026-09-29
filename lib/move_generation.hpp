@@ -92,20 +92,56 @@ struct PV_Line
 
 
 
-// Legal move generator. Computes checkers/pinned-piece/king-danger bitboards once
-// per node instead of testing every pseudo-legal candidate by making it and calling
-// in_check() (see TODO.md item 1) - verified move-for-move against all_moves_old()
-// across ~17k nodes of standard perft test positions, see
-// diagnostics/legal_movegen_perft_compare.cpp. En passant is still verified the
-// make-then-in_check() way, since it's the one move type where removing two pawns
-// from the same rank can expose a check a simple pin mask doesn't cover cheaply, and
-// it's rare enough (<=2 per position) not to matter.
+// Legal move generator that builds every child. Generates each pseudo-legal move,
+// makes it into wfh[] and keeps it only if in_check() is false afterwards. Order:
+// knights, king, pawn captures (en passant included), pawn pushes, rooks and
+// queens along ranks/files, bishops and queens along diagonals, then castling
+// queen side before king side; within a piece type by from square, then to square.
+// Promotions come as rook, knight, bishop, queen. Perft, the GUI and the tools use
+// it as is; generate_legal_moves()+make_move() below is the same thing without
+// the children.
 std::tuple<int,std::vector<Move>> all_moves(const BB* const original, BB* const wfh , int len_wfh=INT_MAX);// returns number of moves and writes them to wfh(write from here)
 
-// The previous implementation - kept as a reference/fallback and as the trusted
-// baseline in diagnostics/legal_movegen_perft_compare.cpp. Tests every pseudo-legal
-// move by making it and calling in_check(); see TODO.md item 1.
-std::tuple<int,std::vector<Move>> all_moves_old(const BB* const original, BB* const wfh , int len_wfh=INT_MAX);
+// Room for every legal move of any position (the known maximum is 218).
+constexpr int MOVE_LIST_CAP = 256;
+
+// A fixed-size move list for the stack. The union leaves moves[] uninitialised,
+// so declaring one costs nothing (a plain Move array would run Move() 256 times).
+struct Move_List
+{
+    union { Move moves[MOVE_LIST_CAP]; };
+    int size = 0;
+    Move_List() {}
+    Move& operator[](int i) { return moves[i]; }
+    const Move& operator[](int i) const { return moves[i]; }
+};
+
+enum Gen_Mode
+{
+    GEN_ALL,      // every legal move
+    GEN_CAPTURES, // captures, en passant and every promotion, quiet ones too
+    GEN_QUIETS    // everything else, castling included
+};
+
+// Appends the legal moves of pos to list (from list.size on) and returns how many
+// it added. The moves are exactly all_moves()'s, in all_moves()'s order;
+// GEN_CAPTURES and GEN_QUIETS each give a subsequence of that order and together
+// the whole of it. Legality comes from masks computed once per node (checkers,
+// pinned pieces and their rays, attacked squares for the king) instead of making
+// each move and calling in_check(); en passant alone is still made and checked,
+// since taking two pawns off one rank can uncover a check no pin mask sees.
+template<Gen_Mode MODE>
+int generate_legal_moves(const BB* const pos, Move_List& list);
+int generate_legal_moves(const BB* const pos, Move_List& list, Gen_Mode mode);
+
+// The number of legal moves of pos, or limit if there are at least that many:
+// counting stops there. limit=1 asks "is there a legal move", limit=2 "is it forced".
+int count_legal_moves(const BB* const pos, int limit=INT_MAX);
+
+// Writes into child the position after move, exactly the child all_moves() builds
+// for it: boards, castling rights, en passant, Zobrist hash, and the counters
+// Base_BB() sets. move must be legal in parent, as generate_legal_moves() emits it.
+void make_move(const BB* const parent, const Move& move, BB* const child);
 
 std::string get_move(const BB* const original, const BB* const goal);
 
