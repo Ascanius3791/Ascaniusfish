@@ -87,10 +87,12 @@ int main()
     // position, black's only capture (Qxd8, retaking the rook) is a LOSING
     // recapture for black (SEE=-400, since Rd1 still guards d8) and must be
     // declined - the tactical search should stop after white's single capture,
-    // not follow through the full (bad-for-black) recapture.
+    // not follow through the full (bad-for-black) recapture. The black king
+    // stands on h7, off the 8th rank: Rxd8 must not give check, or black's
+    // evasions would be searched too (#33).
     {
         BB parent;
-        FEN_to_BB("q2n3k/8/8/8/3R4/8/8/3RK3 w - - 0 1", &parent);
+        FEN_to_BB("q2n4/7k/8/8/3R4/8/8/3RK3 w - - 0 1", &parent);
         castling_rights(&parent);
         PV_Line result = minimax_tactical(&parent, wfh, WEIGHTS_OG, INT_MIN, INT_MAX, nullptr);
         expect(result.current_lenght==1, "(4) expected white's capture then a quiet leaf (PV length 1), got " + std::to_string(result.current_lenght));
