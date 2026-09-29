@@ -50,7 +50,29 @@ Co-Authored-By: ...
 - If the change affects strength or speed, add the measurement to the body, e.g. `nps 1.21M → 1.34M`.
 - Commits touching search, eval or move ordering put `bench: <nodes>` (from `make bench`) in the body; commits touching move generation must pass `make perft`. See `docs/BENCHMARKS.md`.
 - Don't mix Ascanius-approved edits to Ascanius-owned files with other changes.
-- Commit to `main`. Use a branch only for experiments that may be reverted (e.g. `exp/lmr`); merge it if the issue is met, else delete it.
+- Commit to the issue's branch `issue/N`, in its worktree (see below). It lands on `main` only when Ascanius says the issue is done; an experiment that does not meet the issue is deleted instead.
+
+## Issue worktrees
+
+Every issue gets its own git worktree, so sessions on different issues never share files, builds or a checked-out branch. Issue N lives in `.claude/worktrees/issue-N` on branch `issue/N`. `tools/issue_worktree.sh N` finds it, or creates it from the local `main`. `tools/issue_worktree.sh list` shows them all, with ahead/behind `main` and uncommitted changes.
+
+**Start or resume.** Any task that names an issue number begins with this, before reading or editing anything else:
+1. `tools/issue_worktree.sh N`: prints the worktree's path, creating it if needed.
+2. `EnterWorktree` with that `path`. Every edit, build, benchmark and commit happens there from now on.
+3. If it reports `behind` > 0, `git rebase main` once the tree is clean. Small conflicts now are cheaper than one big one at the end.
+
+**While working**
+- The main folder stays on `main` and belongs to Ascanius. Never edit files there and never `git checkout`/`switch` there.
+- Heavy jobs already take turns across all sessions (`.claude/hooks/heavy_lock.sh`). A second `make gui` needs its own `GUI_PORT`.
+- Searching from the main folder also goes into `.claude/worktrees/`. Search from inside the worktree, or exclude it.
+
+**Landing**, only when Ascanius says the issue is done:
+1. In the worktree: `git rebase main`, resolving conflicts there. Show Ascanius any resolution that changes an Ascanius-owned file before continuing.
+2. Re-verify on the new base: `make`, plus `make perft`/`make bench` as the commit rules require. If the tip commit's `bench:` no longer matches, amend it.
+3. In the main folder: `git merge --ff-only issue/N`. If it refuses (another issue landed first, or Ascanius has uncommitted edits in the same files), say so. Never force it.
+4. `git worktree remove .claude/worktrees/issue-N`, `git branch -d issue/N`, then close the issue (`Done in <hash>: …`).
+
+Work without an issue number (a quick fix Ascanius asks for directly) stays in the main folder on `main`, as before.
 
 ## Context budget
 

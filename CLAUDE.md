@@ -23,6 +23,8 @@ Every file in this repo declares ownership via a comment at the very top of the 
 
 Development is GitHub-issue driven. Read `docs/WORKFLOW.md` before writing an issue or a commit.
 
+**Every issue has its own git worktree.** When a task names an issue number, first run `tools/issue_worktree.sh N` and switch into the path it prints with `EnterWorktree` (`path`), before reading or editing anything else. Landing on `main` happens only when Ascanius says the issue is done (see "Issue worktrees" in `docs/WORKFLOW.md`).
+
 ## Build & run
 
 Build system is a plain `Makefile` (`CXX=g++`, `-O3 -DNDEBUG` by default). This is a **header-driven single-TU build**: `ascaniusfish.cpp` is the only compiled source given to g++; every `lib/*.hpp` `#include`s its matching `src/*.cpp` directly (see e.g. `lib/Bitboards.hpp` including `../src/bit_operations.cpp`), so the whole engine is compiled as one translation unit. There is no separate object-file linking step — don't try to compile `src/*.cpp` files independently.
@@ -47,7 +49,7 @@ Run a single test binary directly, e.g. `./hash_table_test` or `./hash_game_test
 g++ -O3 -Wall -Wno-unknown-pragmas -Wno-parentheses -Wno-unused-variable -DNDEBUG -o diagnostics/<name> diagnostics/<name>.cpp
 ```
 
-`tools/` holds the benchmarking tools behind `make perft`/`bench`/`speed-compare` (see `docs/BENCHMARKS.md`).
+`tools/` holds the benchmarking tools behind `make perft`/`bench`/`speed-compare` (see `docs/BENCHMARKS.md`), and `issue_worktree.sh` (one worktree per issue, see `docs/WORKFLOW.md`).
 `gui/` holds the browser GUI server behind `make gui` (see **Browser GUI** below).
 
 Recorded outputs of long measurement runs (e.g. `make tt-stats` games) live in `docs/measurements/`, each with a header naming the commit and command. Check there before rerunning one.
