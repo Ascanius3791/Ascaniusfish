@@ -7,64 +7,29 @@ Ownership note: `move_generation.cpp`/`.hpp` and everything else these items tou
 Ascanius's explicit go-ahead in conversation (2026-09-22); items 2 and 4 have not been
 touched or approved and remain proposals only.
 
-## 1. Legality checked by "make the move, then rescan" — DONE (2026-09-22)
+## 1. Legality checked by "make the move, then rescan" — in progress (#34)
 
-`all_moves()` (`src/move_generation.cpp`) used to generate pseudo-legal targets for
-every piece, then for *each one* do `Base_BB` (a full board-struct copy) followed by a
-call to `in_check()` to see if it's actually legal. That meant the cost of a full
-king-safety scan was paid once per candidate move instead of once per node — roughly
-a branching-factor-sized multiplier (~35x on average) on move generation.
+`all_moves()` (`src/move_generation.cpp`) generates pseudo-legal targets for every
+piece, then for *each one* does `Base_BB` (a full board-struct copy) followed by
+`in_check()`. That pays a king-safety scan per candidate move instead of per node, and
+builds a child board for every move whether the search looks at it or not.
 
-Fix applied: compute checkers + pinned-piece masks once per node, then generate only
-already-legal moves directly (king moves get an O(1) "danger squares" bitboard instead
-of a per-destination in_check() call; pinned pieces get a precomputed allowed-ray mask;
-check evasions get a precomputed capture/block mask). En passant stays the expensive
-"make it, then verify" way even in the fast version — it's the one move type where
-removing two pawns from the same rank can expose a check a simple pin mask can't
-cover cheaply, and it's rare enough (≤2 per position) that it doesn't matter.
+**Correction (2026-09-29):** this item used to say a checkers/pin-mask `all_moves()`
+had replaced this, with the old one kept as `all_moves_old()`. Neither was ever
+committed: `all_moves()` is still the make-then-`in_check()` generator, there is no
+`all_moves_old()`, and `diagnostics/legal_movegen_perft_compare.cpp` and
+`diagnostics/random_position_stress_test.cpp` (which call it) do not build.
 
-With Ascanius's explicit go-ahead, this is now integrated: the previous implementation
-was renamed to `all_moves_old()` (kept as a reference/fallback), and the new
-checkers/pin-mask implementation now lives under the name `all_moves()` in
-`src/move_generation.cpp` — every caller in the codebase (minimax, sorting_moves,
-opening book loading, PGN generation, etc.) picks it up automatically since they all
-call `all_moves()` by name. Declarations for both are in `lib/move_generation.hpp`.
-
-Verification (2026-09-22, re-run against the actual integrated `all_moves()`/
-`all_moves_old()`): recursive move-list agreement checked across ~17,000 nodes total
-from six standard perft positions (startpos + Kiwipete + CPW positions 3-6, chosen to
-exercise pins/checks/en passant/castling/promotions) — 0 mismatches. Perft node counts
-match known-correct values for startpos (depths 1-4: 20/400/8902/197281) and Kiwipete
-(depths 1-3: 48/2039/97862), and match `all_moves_old()` exactly (old-vs-new
-cross-check) at depth 3 for all six positions. See
-[diagnostics/legal_movegen_perft_compare.cpp](diagnostics/legal_movegen_perft_compare.cpp)
-(rerun it after any future move-generation change).
-
-One real bug was caught and fixed during verification: the first draft nested the
-double pawn push's legality check inside the single push's checkmask/pin gate, so a
-single push failing checkmask (e.g. because the king was in check and the one-square
-square didn't block it) silently suppressed an independently-legal double push too.
-Caught by the recursive move-list diff, not by node counts alone — the six-position,
-full-tree comparison approach is worth keeping for any future move-generation change,
-node counts alone can mask exactly this kind of one-move discrepancy if it's rare.
-
-Combined speed (with item 3 below, also landed in the same pass): `perft(startpos, 5)`
-(4,865,609 nodes) went from **14.5M nodes/s → 42.2M nodes/s** (~3x), of which ~2.4x is
-this item and the remaining portion is item 3's DEBUG_MODE gate (measured by also
-timing `all_moves_old()` after item 3's fix alone: 34.4M nodes/s, vs. 14.5M nodes/s
-before either fix).
-
-**Second bug found via random-position stress testing (2026-09-22, see item 5):**
-the checkers bitboard never considered the enemy king itself, only pawns/knights/
-sliders. `in_check()` (src/checks.cpp) does treat "enemy king adjacent to my king" as
-a check - real legal play can never reach that (a king can never move next to the
-enemy king in the first place), but arbitrary positions can have it, and 6.7% of
-20,000 random positions hit exactly this. Fixed by adding `checkers |= K_template[king_sq]
-& enemy_king;` to the checkers computation. Re-verified after the fix: 0 mismatches
-across the curated perft suite (unchanged) and across 20,000 random root positions +
-162,607 recursively-compared nodes from a 500-position sample (was 1,338/20,000 and
-3/500 before the fix) - see
-[diagnostics/random_position_stress_test.cpp](diagnostics/random_position_stress_test.cpp).
+Issue #34 step 1 added the mask generator *next to* `all_moves()` instead of replacing
+it: `generate_legal_moves<GEN_ALL|GEN_CAPTURES|GEN_QUIETS>()` into a stack `Move_List`,
+`count_legal_moves(pos, limit)` and `make_move(parent, move, child)`. The lessons the
+earlier draft learned are built in: the double push is gated separately from the
+single push's masks, and the enemy king counts as a checker (random positions can put
+the kings side by side). En passant is still made and checked with `in_check()`.
+`diagnostics/legal_movegen_test.cpp` checks it against `all_moves()`, move for move and
+child for child (every `BB` field, hash included): 0 differences over 16.5M nodes (the
+perft suite to depth 5, 20,000 random games, 50,000 random roots). Not wired into the
+search yet.
 
 ## 2. Sliding-piece attacks — smaller win than first thought, correct as noted
 
