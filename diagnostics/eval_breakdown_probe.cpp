@@ -62,8 +62,6 @@ int main() {
     int posi = positional_eval(&pos, W);
     int pawn_w = pawn_struckture_eval_of_colour(&pos, true, W);
     int pawn_b = pawn_struckture_eval_of_colour(&pos, false, W);
-    int central_w = central_pawn_presence(&pos, true, W);
-    int central_b = central_pawn_presence(&pos, false, W);
     int mob = 5 * (count(attacks_by_col(pos.Board, 1)) - count(attacks_by_col(pos.Board, 0)));
     int activity = piece_activity_eval(&pos, W);
 
@@ -77,8 +75,8 @@ int main() {
     std::cout << "king_safety (black):           " << ks_b << "\n";
     std::cout << "  -> king_safety contribution: " << (ks_w - ks_b) << "\n";
     std::cout << "positional_eval (pawn struct): " << posi << "\n";
-    std::cout << "  pawn_struct white:            " << pawn_w << " (central_pawn_presence=" << central_w << ")\n";
-    std::cout << "  pawn_struct black:            " << pawn_b << " (central_pawn_presence=" << central_b << ")\n";
+    std::cout << "  pawn_struct white:            " << pawn_w << "\n";
+    std::cout << "  pawn_struct black:            " << pawn_b << "\n";
     std::cout << "mobility (5*attack diff):      " << mob << "\n";
     std::cout << "piece_activity_eval:           " << activity << "\n";
     std::cout << "---------------------------------\n";
