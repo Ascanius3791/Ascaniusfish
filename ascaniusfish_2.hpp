@@ -141,12 +141,15 @@ PV_Line make_repetition_draw_pv_line(const BB* const original, BB* const wfh, in
     return draw_pv_line;
 }
 
-// Hard upper bound on how deep minimax_tactical()'s recursion can ever go (see
-// minimax_tactical() below): it recurses only into moves for which
-// is_good_capture() holds, and every such move removes exactly one non-king piece
+// Hard upper bound on how many captures one line of minimax_tactical() can hold
+// (see minimax_tactical() below): every capture removes exactly one non-king piece
 // from the board (promotion alone doesn't change the count). At most 15 non-king
-// pieces per side -> at most 30 ever -> the recursion can't exceed 30 plies. This
-// is a proven combinatorial bound, not a heuristic, so it needs no safety margin.
+// pieces per side -> at most 30 ever. This is a proven combinatorial bound, not a
+// heuristic, so it needs no safety margin. Its other moves are bounded too: forced
+// moves and check evasions by forced_moves_left (this again), queen promotions by
+// the 16 pawns, and an evasion that is not paid for is followed by a capture or a
+// promotion. So a line stays under 2*(30+16)+30 = 122 plies, which the wfh buffers
+// (80*(depth+max_non_king_pieces) in Play, UCI_WFH_SIZE in UCI) hold with room to spare.
 constexpr int max_non_king_pieces = 30;
 
 // Dedicated tactical/quiescence-style leaf search, invoked from minimax() when
@@ -159,27 +162,34 @@ constexpr int max_non_king_pieces = 30;
 // evaluated directly. See max_non_king_pieces above for why this recursion is
 // hard-bounded without needing its own depth/ply counter.
 // A position with exactly one legal move is always searched on (forced move),
-// even if that move isn't a capture. Such a move removes no piece, so
-// forced_moves_left caps these extensions per line to keep the recursion bounded.
+// even if that move isn't a capture. So is a position in check, with every
+// evasion (#33): the side to move can't stand pat there, and its static eval
+// says nothing about the fork, mate or escape that follows the check. Neither
+// removes a piece, so each such node spends one of forced_moves_left to keep
+// the recursion bounded. With none left, a quiet evasion that checks back is
+// skipped, since that is the one way a line of checks could go on forever.
 PV_Line minimax_tactical(const BB* const original, BB* const wfh, const WEIGHTS& W = WEIGHTS_OG, int alpha = INT_MIN, int beta = INT_MAX, lookup_table* const table = NULL, int forced_moves_left = max_non_king_pieces)
 {
     poll_search_abort();//see minimax()
-    // Only captures and promotions can be tactical. The other moves matter only
-    // through their number: none is mate or stalemate, one is a forced move.
+    // Out of check only captures and promotions can be tactical. The other moves
+    // matter only through their number: none is mate or stalemate, one is a forced move.
     Move_List moves;
     const int number_of_captures = generate_legal_moves<GEN_CAPTURES>(original, moves);
     const int number_of_new_moves = number_of_captures>=2 ? 2 : count_legal_moves(original, 2);//2 means "2 or more"
 
     // Only the tactical moves get ordered, and only once the stand pat below
     // hasn't cut off: most nodes here never search a single move.
+    const bool in_check = original->get_in_check();
     const bool is_forced_move = number_of_new_moves==1 && forced_moves_left>0;
-    if(is_forced_move && number_of_captures==0)
-    generate_legal_moves<GEN_QUIETS>(original, moves);//the one legal move is quiet
+    const bool spends_forced_move = is_forced_move || (in_check && forced_moves_left>0);
+    if((is_forced_move && number_of_captures==0) || in_check)
+    generate_legal_moves<GEN_QUIETS>(original, moves);//the one legal move is quiet, or the quiet evasions
     int tactical_order[MOVE_LIST_CAP];
     int number_of_tactical_moves = 0;
     for(int idx=0; idx<moves.size; idx++)
         if(
             is_forced_move ||
+            in_check ||
             moves[idx].promotion_piece_type==QUEEN_PROMOTION ||
             (moves[idx].promotion_piece_type==-1 && is_good_capture(original, moves[idx].from, moves[idx].to, moves[idx].is_en_passant))
             )
@@ -241,11 +251,15 @@ PV_Line minimax_tactical(const BB* const original, BB* const wfh, const WEIGHTS&
         }
     }
     order_tactical_moves(original, moves.moves, tactical_order, number_of_tactical_moves);
+    bool searched_a_move = false;
     for(int k=0; k<number_of_tactical_moves; k++)
     {
         const int idx = tactical_order[k];
         make_move(original, moves[idx], wfh);//the child is built only now that it is searched
-        PV_Line candidate = minimax_tactical(wfh, wfh+1, W, alpha, beta, table, forced_moves_left - is_forced_move);
+        if(in_check && forced_moves_left==0 && wfh->get_in_check() && is_quiet_move(original, moves[idx]))
+        continue;//see above: out of budget, a quiet evasion must not check back
+        searched_a_move = true;
+        PV_Line candidate = minimax_tactical(wfh, wfh+1, W, alpha, beta, table, forced_moves_left - spends_forced_move);
         int child_eval = candidate.eval;
         if(child_eval<INT_MIN+max_mating_seq)
         child_eval++;
@@ -269,6 +283,15 @@ PV_Line minimax_tactical(const BB* const original, BB* const wfh, const WEIGHTS&
         pv_line = PV_Line(moves[idx], 0, &candidate);
         if(beta<=alpha)
         break;
+    }
+    if(!searched_a_move)
+    {
+        // Every evasion was skipped: each one checks back, so the line is a
+        // run of checks neither side gets out of - scored as the perpetual it is.
+        PV_Line perpetual = PV_Line(0);
+        perpetual.current_lenght = 0;
+        perpetual.bound_type = 0;
+        return perpetual;
     }
     return pv_line;
 }
