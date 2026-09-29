@@ -7,7 +7,7 @@
 
 
 
-int count(uint64_t n);//counts the number of bits set in n
+inline int count(uint64_t n);//counts the number of bits set in n
 
 
 inline void clear_sq(uint64_t Board[12],int square);//clears the square of all pieces

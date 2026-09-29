@@ -4,14 +4,9 @@
 
 #include "../lib/bit_operations.hpp"
 
-int count(uint64_t n) 
+inline int count(uint64_t n) 
     {
-        int count = 0;
-        while (n) {
-            count += n & 1;
-            n >>= 1;
-        }
-        return count;
+        return __builtin_popcountll(n);
     }
 
 inline void clear_sq(uint64_t Board[12],int square)
