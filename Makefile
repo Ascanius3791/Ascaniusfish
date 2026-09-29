@@ -30,10 +30,12 @@ TT_EXPONENT ?=
 GUI_PORT ?=
 GUI_BIND ?=
 GUI_TUNNEL ?=
-TOOL_TARGETS := tools/perft tools/bench tools/speed_compare tools/match tools/make_openings tools/gui_match tools/tt_stats
+SYZYGY_PATH ?= $(HOME)/syzygy
+SYZYGY_RANDOM ?=
+TOOL_TARGETS := tools/perft tools/bench tools/speed_compare tools/match tools/make_openings tools/gui_match tools/tt_stats tools/syzygy_reference
 PROFILE_CXXFLAGS ?= -O2 -mpopcnt -g -pg -Wall -Wno-unknown-pragmas -Wno-parentheses -Wno-unused-variable
 
-.PHONY: all run play asm tests debug profile-startpos perft bench speed-compare match gui-match gui tt-stats clean rebuild
+.PHONY: all run play asm tests debug profile-startpos perft bench speed-compare match gui-match gui tt-stats syzygy-test clean rebuild
 
 all: $(TARGET) $(UCI_TARGET)
 
@@ -89,6 +91,9 @@ tools/gui_match: tools/gui_match.cpp tools/game_rules.hpp tools/uci_engine.hpp $
 tools/make_openings: tools/make_openings.cpp tools/game_rules.hpp $(HEADERS) $(SOURCES)
 	$(CXX) $(CXXFLAGS) -pthread -o $@ tools/make_openings.cpp
 
+tools/syzygy_reference: tools/syzygy_reference.cpp tools/syzygy_positions.hpp $(HEADERS) $(SOURCES)
+	$(CXX) $(CXXFLAGS) -pthread -o $@ tools/syzygy_reference.cpp
+
 # Browser GUI server (issues #14-#17). Plain g++, no Node: gui/web/vendor holds
 # a prebuilt chessground bundle, and the HTTP/SSE server is gui/http_server.hpp.
 GUI_TARGET := gui/ascaniusfish_gui
@@ -96,6 +101,14 @@ GUI_HEADERS := gui/http_server.hpp gui/session.hpp gui/move_tree.hpp gui/json.hp
 
 $(GUI_TARGET): gui/gui_server.cpp $(GUI_HEADERS) tools/game_rules.hpp tools/uci_engine.hpp $(HEADERS) $(SOURCES)
 	$(CXX) $(CXXFLAGS) -pthread -o $@ gui/gui_server.cpp
+
+# Syzygy prober (lib/syzygy.hpp) vs the recorded Lichess reference, plus a
+# consistency check over SYZYGY_RANDOM (300) random positions per table
+diagnostics/syzygy_test: diagnostics/syzygy_test.cpp tools/syzygy_positions.hpp $(HEADERS) $(SOURCES)
+	$(CXX) $(CXXFLAGS) -pthread -o $@ diagnostics/syzygy_test.cpp
+
+syzygy-test: diagnostics/syzygy_test
+	./diagnostics/syzygy_test $(SYZYGY_PATH) $(SYZYGY_RANDOM)
 
 # Move generation vs known perft counts (PERFT_DEPTH=4 for a quick check)
 perft: tools/perft
@@ -145,4 +158,4 @@ debug: $(TARGET)
 rebuild: clean all
 
 clean:
-	rm -f $(TARGET) $(UCI_TARGET) a.out ascaniusfish.s $(TEST_TARGETS) $(TOOL_TARGETS) $(GUI_TARGET) benchmarks/profile_startpos benchmarks/gmon.out benchmarks/profile_startpos.gprof
+	rm -f $(TARGET) $(UCI_TARGET) a.out ascaniusfish.s $(TEST_TARGETS) $(TOOL_TARGETS) diagnostics/syzygy_test $(GUI_TARGET) benchmarks/profile_startpos benchmarks/gmon.out benchmarks/profile_startpos.gprof
