@@ -190,7 +190,9 @@ The plan term (#43, `lib/plan_eval.hpp` / `src/plan_eval.cpp`, switch `USE_PLAN_
 - The eval terms (#44): the gear's `evalTerms` switch makes the state carry `evalTerms`
   (`Session::write_eval_terms()`): `basic_eval()` row by row, each total from the call `basic_eval()`
   makes (king safety split into attack and shelter), each side's own share where the engine has a
-  per-side call, `sum` vs `basic` and the piece tables' phase. The page flags any mismatch in red. It
+  per-side call, `sum` vs `basic` and the piece tables' phase. The page flags any mismatch in red.
+  Piece tables and piece activity also carry `parts` (per piece type / per weight) from
+  `gui/eval_split.hpp`, GUI-only copies of those two functions, checked against the originals (`partsOk`). It
   gets its own column right of the side column at ≥1340px (`placeTerms()`), else a panel in it.
 - `gui/json.hpp` — a JSON writer that inserts the commas, plus a flat-object parser for request bodies.
 - `gui/web/` — `index.html`/`app.js`/`style.css`/`sound.js` and the `logo.png`/`favicon.png` (scaled
