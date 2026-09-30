@@ -17,6 +17,7 @@ tools/make_openings
 tools/make_endgames
 tools/gui_match
 tools/tt_stats
+tools/nne_data
 gui_match.pgn
 match.pgn
 benchmarks/profile_startpos
@@ -38,6 +39,7 @@ diagnostics/legal_movegen_perft_compare
 diagnostics/move_tree_pgn_test
 diagnostics/analysis_store_test
 diagnostics/eval_view_test
+diagnostics/nne_features_test
 diagnostics/minimax_tactical_probe
 diagnostics/one_move_fast_stress_test
 diagnostics/random_position_stress_test
@@ -76,3 +78,6 @@ tools/syzygy_reference
 diagnostics/syzygy_test
 tools/tb_suite
 tools/tb_trade_suite
+
+# The eval-correction net's dataset (tools/nne_data, #50)
+data/
