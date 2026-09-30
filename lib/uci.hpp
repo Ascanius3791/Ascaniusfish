@@ -7,13 +7,14 @@
 #include "move_ordering.hpp"
 #include "time_manager.hpp"
 #include "syzygy.hpp"
+#include "tb_search.hpp"
 #include <string>
 #include <vector>
 #include <mutex>
 #include <thread>
 
 // UCI front end. Implements uci, isready, ucinewgame, position, go, stop,
-// quit (setoption/debug/register/ponderhit are accepted and ignored), plus
+// quit (setoption handles SyzygyPath and SyzygyProbeLimit, debug/register/ponderhit are accepted and ignored), plus
 // the non-standard "go perft N" for checking move generation from any FEN.
 // The search runs on its own thread so "stop"/"isready" are answered while
 // it thinks; see lib/search_control.hpp for how a search is aborted.

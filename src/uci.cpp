@@ -114,6 +114,8 @@ std::string uci_score(int eval, bool white_to_move)
     {
         mate_plies = eval - INT_MIN;
     }
+    else if(is_tb_score(eval))
+    return "cp " + std::to_string(white_to_move == (eval>0) ? TB_WIN_CP : -TB_WIN_CP);  // a table win, not a mate
     else
     return "cp " + std::to_string(white_to_move ? eval : -eval);
 
@@ -514,6 +516,7 @@ void UCI_Engine::search(UCI_Limits limits, long long start_ns)
     if(n==1 && tm)
     max_depth = 1;  // forced move: keep the clock, depth 1 only for the score
     long long nodes_before = search_nodes;
+    const long long tb_hits_before = tb_hits;
     for(int d=1; d<=max_depth; d++)
     {
         if(search_stop_requested())
@@ -538,6 +541,7 @@ void UCI_Engine::search(UCI_Limits limits, long long start_ns)
                          + " nodes " + std::to_string(nodes)
                          + " nps " + std::to_string(nodes*1000/std::max(1LL, elapsed_ms))
                          + " time " + std::to_string(elapsed_ms)
+                         + " tbhits " + std::to_string(tb_hits-tb_hits_before)
                          + " pv";
         for(const std::string& m : line)
         info += " " + m;
@@ -580,6 +584,7 @@ int UCI_Engine::loop()
             send("id name Ascaniusfish");
             send("id author Ascanius");
             send("option name SyzygyPath type string default <empty>");
+            send("option name SyzygyProbeLimit type spin default 5 min 0 max 5");
             send("uciok");
         }
         else if(cmd=="isready")
@@ -610,13 +615,32 @@ int UCI_Engine::loop()
         break;
         else if(cmd=="setoption")
         {
-            // setoption name SyzygyPath value <dir>
-            if(tokens.size()>=5 && tokens[1]=="name" && tokens[2]=="SyzygyPath" && tokens[3]=="value")
+            // setoption name <name> [value <v>]; names and values may hold spaces
+            size_t vpos = 0;
+            while(vpos<tokens.size() && tokens[vpos]!="value")
+            vpos++;
+            std::string name, value;
+            for(size_t k=2;k<vpos && k<tokens.size();k++)
+            name += (name.empty() ? "" : " ") + tokens[k];
+            for(size_t k=vpos+1;k<tokens.size();k++)
+            value += (value.empty() ? "" : " ") + tokens[k];
+            if(name=="SyzygyPath")
             {
                 stop_search();
-                syzygy_dir = tokens[4];
-                int loaded = syzygy::init(syzygy_dir);
-                send("info string syzygy " + std::to_string(loaded) + " tables from " + syzygy_dir);
+                syzygy_dir = value=="<empty>" ? "" : value;
+                syzygy::release();
+                if(syzygy_dir.empty())
+                send("info string syzygy off");
+                else
+                {
+                    int loaded = syzygy::init(syzygy_dir);
+                    send("info string syzygy " + std::to_string(loaded) + " tables from " + syzygy_dir);
+                }
+            }
+            else if(name=="SyzygyProbeLimit")
+            {
+                stop_search();
+                tb_probe_limit = std::max(0, std::min(5, std::atoi(value.c_str())));
             }
         }
         else if(cmd=="debug" || cmd=="register" || cmd=="ponderhit")

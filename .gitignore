@@ -74,3 +74,4 @@ syzygy-nr/
 tools/syzygy_reference
 diagnostics/syzygy_test
 tools/tb_suite
+tools/tb_trade_suite

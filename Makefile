@@ -32,10 +32,10 @@ GUI_BIND ?=
 GUI_TUNNEL ?=
 SYZYGY_PATH ?= $(HOME)/syzygy-nr
 SYZYGY_RANDOM ?=
-TOOL_TARGETS := tools/perft tools/bench tools/speed_compare tools/match tools/make_openings tools/gui_match tools/tt_stats tools/syzygy_reference tools/tb_suite
+TOOL_TARGETS := tools/perft tools/bench tools/speed_compare tools/match tools/make_openings tools/gui_match tools/tt_stats tools/syzygy_reference tools/tb_suite tools/tb_trade_suite
 PROFILE_CXXFLAGS ?= -O2 -mpopcnt -g -pg -Wall -Wno-unknown-pragmas -Wno-parentheses -Wno-unused-variable
 
-.PHONY: all run play asm tests debug profile-startpos perft bench speed-compare match gui-match gui tt-stats syzygy-test tb-suite clean rebuild
+.PHONY: all run play asm tests debug profile-startpos perft bench speed-compare match gui-match gui tt-stats syzygy-test tb-suite tb-trade-suite clean rebuild
 
 all: $(TARGET) $(UCI_TARGET)
 
@@ -102,6 +102,15 @@ tools/tb_suite: tools/tb_suite.cpp tools/syzygy_positions.hpp tools/game_rules.h
 TB_MOVETIME ?=
 tb-suite: $(UCI_TARGET) tools/tb_suite
 	./tools/tb_suite run $(SYZYGY_PATH) movetime=$(TB_MOVETIME)
+
+tools/tb_trade_suite: tools/tb_trade_suite.cpp tools/syzygy_positions.hpp tools/uci_engine.hpp $(HEADERS) $(SOURCES)
+	$(CXX) $(CXXFLAGS) -pthread -o $@ tools/tb_trade_suite.cpp
+
+# 6-7 piece positions where the right trade decides the result (issue #39): the
+# solve count with the tables (TB_TRADE_ARGS=tables=off for the baseline).
+TB_TRADE_ARGS ?=
+tb-trade-suite: $(UCI_TARGET) tools/tb_trade_suite
+	./tools/tb_trade_suite run $(SYZYGY_PATH) $(TB_TRADE_ARGS)
 
 # Browser GUI server (issues #14-#17). Plain g++, no Node: gui/web/vendor holds
 # a prebuilt chessground bundle, and the HTTP/SSE server is gui/http_server.hpp.
