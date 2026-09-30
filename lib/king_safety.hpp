@@ -46,4 +46,8 @@ int king_safety_eval(const BB* const original);
 
 #include "../src/king_safety.cpp"
 
+// src/basic_eval.cpp includes only this header of ours, so the plan eval (#43)
+// it calls rides along here.
+#include "plan_eval.hpp"
+
 #endif // KING_SAFETY_HPP
