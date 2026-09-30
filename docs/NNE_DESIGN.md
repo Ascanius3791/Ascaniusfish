@@ -114,9 +114,13 @@ test is used only for the reported numbers.
   break the several-engines-at-once budget). Inference is hand-written in
   `lib/nne.hpp` / `src/nne.cpp` (Claude-owned) and reads the exported file.
 - **Float32**. The first layer is recomputed at every eval: at most 32 + 5 active
-  inputs × 128 ≈ 5k additions, about 100 ns. Nothing is added to `BB` or
-  `make_move` (both Ascanius-owned; `BB` is copied every ply). An incrementally
-  updated first layer comes later, only if the measured nps cost calls for it.
+  inputs × 128 ≈ 5k additions. Estimated at about 100 ns; measured (#52) at
+  about 1.7k cycles, mostly waiting on the W1 rows from L2, which costs the
+  search about 16% nps (`docs/measurements/nne_nps_2026-10-01.md`). Nothing is
+  added to `BB` or `make_move` (both Ascanius-owned; `BB` is copied every ply).
+  An incrementally updated first layer comes later, only if #53 shows the cost
+  matters. `make nne-test` checks the engine against the trainer's test-set
+  predictions; `NNE=nets/nne_d6.bin` on the bench target searches with the net on.
 - **Where**: the quiet leaf of `minimax_tactical` (`ascaniusfish_2.hpp`, the
   `eval(original, W, 0)` after the TT probe) returns `static + correction`. Stand
   pat keeps the raw static eval, since non-quiet positions are not in the data.
