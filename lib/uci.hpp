@@ -6,6 +6,7 @@
 #include "search_control.hpp"
 #include "move_ordering.hpp"
 #include "time_manager.hpp"
+#include "syzygy.hpp"
 #include <string>
 #include <vector>
 #include <mutex>
@@ -71,6 +72,9 @@ class UCI_Engine
     void handle_go(const std::vector<std::string>& tokens);
     void search(UCI_Limits limits, long long start_ns);
     void perft_divide(int depth);
+    bool tb_root_filter(const BB& root, const std::vector<BB>& children, std::vector<int>& keep, int& tb_class);
+    void search_tb_root(const BB& root, const std::vector<Move>& moves, const std::vector<BB>& children, const std::vector<int>& keep, int tb_class, int ply, const UCI_Limits& limits, long long start_ns);
+    std::string syzygy_dir;
     std::vector<std::string> pv_to_uci(const BB& root, const PV_Line& pv);
 };
 

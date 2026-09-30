@@ -32,10 +32,10 @@ GUI_BIND ?=
 GUI_TUNNEL ?=
 SYZYGY_PATH ?= $(HOME)/syzygy-nr
 SYZYGY_RANDOM ?=
-TOOL_TARGETS := tools/perft tools/bench tools/speed_compare tools/match tools/make_openings tools/gui_match tools/tt_stats tools/syzygy_reference
+TOOL_TARGETS := tools/perft tools/bench tools/speed_compare tools/match tools/make_openings tools/gui_match tools/tt_stats tools/syzygy_reference tools/tb_suite
 PROFILE_CXXFLAGS ?= -O2 -mpopcnt -g -pg -Wall -Wno-unknown-pragmas -Wno-parentheses -Wno-unused-variable
 
-.PHONY: all run play asm tests debug profile-startpos perft bench speed-compare match gui-match gui tt-stats syzygy-test clean rebuild
+.PHONY: all run play asm tests debug profile-startpos perft bench speed-compare match gui-match gui tt-stats syzygy-test tb-suite clean rebuild
 
 all: $(TARGET) $(UCI_TARGET)
 
@@ -93,6 +93,15 @@ tools/make_openings: tools/make_openings.cpp tools/game_rules.hpp $(HEADERS) $(S
 
 tools/syzygy_reference: tools/syzygy_reference.cpp tools/syzygy_positions.hpp $(HEADERS) $(SOURCES)
 	$(CXX) $(CXXFLAGS) -pthread -o $@ tools/syzygy_reference.cpp
+
+tools/tb_suite: tools/tb_suite.cpp tools/syzygy_positions.hpp tools/game_rules.hpp tools/uci_engine.hpp $(HEADERS) $(SOURCES)
+	$(CXX) $(CXXFLAGS) -pthread -o $@ tools/tb_suite.cpp
+
+# Endgame games with the tablebases (issue #38): the engine has to win what is
+# won inside the 50-move rule and not lose what is drawn. TB_MOVETIME in ms.
+TB_MOVETIME ?=
+tb-suite: $(UCI_TARGET) tools/tb_suite
+	./tools/tb_suite run $(SYZYGY_PATH) movetime=$(TB_MOVETIME)
 
 # Browser GUI server (issues #14-#17). Plain g++, no Node: gui/web/vendor holds
 # a prebuilt chessground bundle, and the HTTP/SSE server is gui/http_server.hpp.

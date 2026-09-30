@@ -73,3 +73,4 @@ syzygy-nr/
 *.rtbz
 tools/syzygy_reference
 diagnostics/syzygy_test
+tools/tb_suite

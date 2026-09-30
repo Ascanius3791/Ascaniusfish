@@ -308,6 +308,170 @@ void UCI_Engine::handle_go(const std::vector<std::string>& tokens)
     search_thread = std::thread(&UCI_Engine::search, this, limits, start_ns);
 }
 
+// A capture or a pawn move. The BB clock is not usable for this (it counts
+// every ply, see tools/game_rules.hpp), so it is judged from the two boards.
+static bool is_zeroing_step(const BB& before, const BB& after)
+{
+    const int pawns = before.white_move ? 0 : 6;
+    uint64_t b = 0, a = 0;
+    for(int i=0;i<12;i++)
+    {
+        b |= before.Board[i];
+        a |= after.Board[i];
+    }
+    return before.Board[pawns]!=after.Board[pawns] || __builtin_popcountll(a)<__builtin_popcountll(b);
+}
+
+// Tablebase root filter (issue #38). Ranks the root's legal moves by what the
+// tables say about the position each leads to and keeps the best class only:
+// a win that still finishes inside the 50-move rule (fewest plies to the next
+// zeroing move first), else every move that holds the draw, else the slowest
+// loss. `keep` gets indices into `children`. False = no usable answer (too
+// many pieces, castling rights, a table missing): search normally.
+// DTZ is not DTM, so winning moves that tie are left to the search.
+bool UCI_Engine::tb_root_filter(const BB& root, const std::vector<BB>& children, std::vector<int>& keep, int& tb_class)
+{
+    const int n = (int)children.size();
+    int hc = game[0].halfmoves_since_last_capture_or_pawn_move;  // the real clock: the FEN's, then the game's steps
+    for(size_t i=1;i<game.size();i++)
+    hc = is_zeroing_step(game[i-1], game[i]) ? 0 : hc+1;
+    std::vector<int> cls(n), key(n);  // class 3 win, 2 draw, 1 loss; lower key is better
+    for(int i=0;i<n;i++)
+    {
+        int dz;
+        if(!syzygy::probe_dtz(&children[i], dz))
+        return false;
+        // dz is the opponent's: negative means they lose, i.e. we win
+        const bool zeroing = is_zeroing_step(root, children[i]);
+        if(dz<0 && dz>=-100 && (zeroing || hc+1-dz<=100))
+        {
+            cls[i]=3;
+            key[i]=zeroing ? 0 : -dz;
+        }
+        else if(dz>0 && dz<=100)
+        {
+            cls[i]=1;
+            key[i]=-dz;  // the longest resistance
+        }
+        else
+        {
+            cls[i]=2;
+            key[i]=0;
+        }
+    }
+    int best_class=0, best_key=INT_MAX;
+    for(int i=0;i<n;i++)
+    if(cls[i]>best_class || (cls[i]==best_class && key[i]<best_key))
+    {
+        best_class=cls[i];
+        best_key=key[i];
+    }
+    keep.clear();
+    for(int i=0;i<n;i++)
+    if(cls[i]==best_class && key[i]==best_key)
+    keep.push_back(i);
+    tb_class = best_class;
+    return true;
+}
+
+// Iterative deepening over the kept root moves only. Each is searched as a
+// child of the root, the way minimax()'s own move loop does it (that loop is
+// in Ascanius's file and stays untouched).
+void UCI_Engine::search_tb_root(const BB& root, const std::vector<Move>& moves, const std::vector<BB>& children, const std::vector<int>& keep, int tb_class, int ply, const UCI_Limits& limits, long long start_ns)
+{
+    std::string best = get_UCI(&root, &children[keep[0]]);
+    const int tb_cp = tb_class==3 ? 10000 : tb_class==2 ? 0 : -10000;  // side to move's view
+    std::vector<int> order = keep;
+    if(keep.size()==1)
+    {
+        send("info depth 1 score cp " + std::to_string(tb_cp) + " nodes 1 tbhits 1 pv " + best);
+        while(limits.infinite && !stop_search_flag.load())
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        send("bestmove " + best);
+        return;
+    }
+    path_history[ply] = root;
+    int max_depth = limits.depth>0 ? std::min(limits.depth, UCI_MAX_DEPTH) : UCI_MAX_DEPTH;
+    long long nodes_before = search_nodes;
+    for(int d=1; d<=max_depth; d++)
+    {
+        if(search_stop_requested())
+        break;
+        int best_eval = root.white_move ? INT_MIN : INT_MAX;
+        int best_idx = -1;
+        PV_Line best_pv;
+        std::vector<int> evals(order.size());
+        try
+        {
+            for(size_t k=0;k<order.size();k++)
+            {
+                BB child = children[order[k]];
+                PV_Line cpv;
+                bool repeat = false;
+                const int window_start = std::max(0, (ply+1) - child.halfmoves_since_last_capture_or_pawn_move);
+                for(int j=ply-1; j>=window_start; j-=2)
+                if(are_equal(&path_history[j], &child)) { repeat = true; break; }
+                if(repeat)
+                cpv = make_repetition_draw_pv_line(&child, wfh, d-1, ply+1, ply, WEIGHTS_OG);
+                else
+                cpv = minimax(&child, wfh, d-1, WEIGHTS_OG, INT_MIN, INT_MAX, table, path_history, ply+1, cycle_table, ply);
+                if(cpv.eval<INT_MIN+max_mating_seq)
+                cpv.eval++;
+                if(cpv.eval>INT_MAX-max_mating_seq)
+                cpv.eval--;
+                evals[k] = cpv.eval;
+                if(best_idx<0 || (root.white_move ? cpv.eval>best_eval : cpv.eval<best_eval))
+                {
+                    best_eval = cpv.eval;
+                    best_idx = (int)k;
+                    best_pv = PV_Line(moves[order[k]], d, &cpv);
+                }
+            }
+        }
+        catch(const search_aborted&)
+        {
+            break;
+        }
+        // best first at the next depth
+        std::vector<int> next;
+        next.push_back(order[best_idx]);
+        for(size_t k=0;k<order.size();k++)
+        if((int)k!=best_idx)
+        next.push_back(order[k]);
+        order = next;
+
+        long long elapsed_ms = (steady_now_ns()-start_ns)/1000000;
+        long long nodes = search_nodes-nodes_before;
+        std::vector<std::string> line = pv_to_uci(root, best_pv);
+        if(!line.empty())
+        best = line[0];
+        std::string info = "info depth " + std::to_string(d)
+                         + " score " + uci_score(best_pv.eval, root.white_move)
+                         + " nodes " + std::to_string(nodes)
+                         + " nps " + std::to_string(nodes*1000/std::max(1LL, elapsed_ms))
+                         + " time " + std::to_string(elapsed_ms)
+                         + " tbhits 1 pv";
+        for(const std::string& m : line)
+        info += " " + m;
+        send(info);
+        bool proven_mate = best_pv.eval <= INT_MIN + max_mating_seq || best_pv.eval >= INT_MAX - max_mating_seq;
+        if(proven_mate && !limits.infinite)
+        break;
+        if(tm)
+        {
+            tm->iteration_done(d, best_pv, elapsed_ms);
+            if(!tm->start_next_iteration((steady_now_ns()-start_ns)/1000000))
+            break;
+        }
+    }
+    if(tm)
+    tm->commit_lambda();
+    // `best` is what the last completed iteration chose (or the first kept move)
+    while(limits.infinite && !stop_search_flag.load())
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    send("bestmove " + best);
+}
+
 void UCI_Engine::search(UCI_Limits limits, long long start_ns)
 {
     if(table) table->new_search();
@@ -322,6 +486,20 @@ void UCI_Engine::search(UCI_Limits limits, long long start_ns)
         return;
     }
     clear_killer_moves();
+    if(syzygy::max_pieces()>0)
+    {
+        std::vector<BB> children(wfh, wfh+n);
+        std::vector<int> keep;
+        int tb_class;
+        if(tb_root_filter(root, children, keep, tb_class) && !keep.empty())
+        {
+            int seed = std::min({(int)game.size(), root.halfmoves_since_last_capture_or_pawn_move+1, MAX_SEARCH_PLY});
+            for(int i=0;i<seed;i++)
+            path_history[i] = game[game.size()-seed+i];
+            search_tb_root(root, std::get<1>(result), children, keep, tb_class, seed-1, limits, start_ns);
+            return;
+        }
+    }
     // Fallback if even depth 1 gets aborted: the move ordering's favourite.
     std::vector<int> order = sorting_moves(wfh, std::get<1>(result), n, root.white_move, nullptr, 0, WEIGHTS_OG);
     std::string best = get_UCI(&root, wfh+order[0]);
@@ -401,6 +579,7 @@ int UCI_Engine::loop()
         {
             send("id name Ascaniusfish");
             send("id author Ascanius");
+            send("option name SyzygyPath type string default <empty>");
             send("uciok");
         }
         else if(cmd=="isready")
@@ -429,7 +608,18 @@ int UCI_Engine::loop()
         stop_search();
         else if(cmd=="quit")
         break;
-        else if(cmd=="setoption" || cmd=="debug" || cmd=="register" || cmd=="ponderhit")
+        else if(cmd=="setoption")
+        {
+            // setoption name SyzygyPath value <dir>
+            if(tokens.size()>=5 && tokens[1]=="name" && tokens[2]=="SyzygyPath" && tokens[3]=="value")
+            {
+                stop_search();
+                syzygy_dir = tokens[4];
+                int loaded = syzygy::init(syzygy_dir);
+                send("info string syzygy " + std::to_string(loaded) + " tables from " + syzygy_dir);
+            }
+        }
+        else if(cmd=="debug" || cmd=="register" || cmd=="ponderhit")
         ;  // no options / pondering yet
         else
         send("info string unknown command: " + cmd);
