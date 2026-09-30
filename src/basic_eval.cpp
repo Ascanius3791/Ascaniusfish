@@ -113,9 +113,9 @@ int piece_activity_eval(const BB* const original, const WEIGHTS& W)
             
             //possible attacks, if pushed need to be awarded
             if(col)
-            score+=count(all_pieces & BP_template[i]>>8)*20;//*W.piece_activity_value[0];
+            score+=count(all_pieces & BP_template[i]<<8)*20;//*W.piece_activity_value[0];
             else
-            score-=count(all_pieces & WP_template[i]<<8)*20;//*W.piece_activity_value[0];
+            score-=count(all_pieces & WP_template[i]>>8)*20;//*W.piece_activity_value[0];
         }
         
         uint64_t own_bishops = original->Board[3+6*!col]|original->Board[4+6*!col];

@@ -124,7 +124,7 @@ inline Eval_Split split_piece_activity(const BB* const original)
             hit(P_HIT, count(all_pieces & (col ? BP_template[i] : WP_template[i])));
             if(col ? (all_pieces & 1ULL << i+8) : (all_pieces & 1ULL << i >> 8))
             hit(P_BLOCKED, 1);
-            hit(P_PUSH_HIT, count(all_pieces & (col ? BP_template[i]>>8 : WP_template[i]<<8)));
+            hit(P_PUSH_HIT, count(all_pieces & (col ? BP_template[i]<<8 : WP_template[i]>>8)));
         }
         uint64_t own_bishops = original->Board[3+6*!col]|original->Board[4+6*!col];
         while(own_bishops)
