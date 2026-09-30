@@ -181,10 +181,7 @@ static void symmetry_cases()
         BB m = from_fen(mirror_fen(copy.get_FEN()));
         if(king_safety_eval(&m) != -king_safety_eval(&pos))
         ks_bad++;
-        // +-1 is piecetable()'s: it sums floats and truncates to int, so the two
-        // colours' sums round apart (on main before #42 too, ~1% of positions).
-        int diff = basic(m) + basic(pos);
-        if(diff > 1 || diff < -1)
+        if(basic(m) + basic(pos) != 0)
         eval_bad++;
         if(king_safety_detail(&pos, true).attack_penalty || king_safety_detail(&pos, false).attack_penalty)
         attacked++;
@@ -192,7 +189,7 @@ static void symmetry_cases()
     std::string n = std::to_string(positions.size());
     expect(ks_bad == 0, "king_safety_eval mirror-symmetric: " + std::to_string(ks_bad) + "/" + n + " broken ("
            + std::to_string(attacked) + " with an attack penalty)");
-    expect(eval_bad == 0, "basic_eval mirror-symmetric up to piecetable's +-1: " + std::to_string(eval_bad) + "/" + n + " broken");
+    expect(eval_bad == 0, "basic_eval mirror-symmetric: " + std::to_string(eval_bad) + "/" + n + " broken");
 }
 
 static void italian_case()

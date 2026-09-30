@@ -5,15 +5,22 @@
 #include "../lib/king_safety.hpp"
 
 
-float enemy_material_left_percent(const BB* const original, bool for_white)//
+// material of one side in 39ths: 8 pawns, 2 rooks, 4 bishops/knights, 1 queen = 8+10+12+9
+static const int MATERIAL_MAX = 8*1+5*2+3*4+9*1;
+static int enemy_material_left_39ths(const BB* const original, bool for_white)
 {
-    float score=0, max_score =8*1+5*2+3*4+9*1;//8 pawns, 2 rooks, 4 bishops/knights, 1 queen
+    int score=0;
     score += 1*count(original->Board[0+6*for_white]);
     score += 5*count(original->Board[1+6*for_white]);
     score += 3*count(original->Board[2+6*for_white]);
     score += 3*count(original->Board[3+6*for_white]);
     score += 9*count(original->Board[4+6*for_white]);
-    return score/max_score;
+    return score;
+}
+
+float enemy_material_left_percent(const BB* const original, bool for_white)//
+{
+    return enemy_material_left_39ths(original,for_white)/(float)MATERIAL_MAX;
 }
 
 // TODO: crude first cut for the null-move zugzwang guard - only checks piece
@@ -30,12 +37,15 @@ bool side_to_move_lacks_non_pawn_material(const BB* const original)
 
 int piecetable(const BB* const original , const WEIGHTS& W)
 {
-    float score=0;
-    float EW[2],OW[2];//endgame weight, opening weight
-    OW[1]=enemy_material_left_percent(original,1);//0=black, 1 = white
-    OW[0]=enemy_material_left_percent(original,0);
-    EW[0]=1-OW[0];
-    EW[1]=1-OW[1];
+    // Exact: the phase weights are k/39, so the sum is kept in 39ths as an
+    // integer and divided once. That makes the result colour-symmetric (int
+    // division truncates toward zero) and independent of summation order.
+    int score=0;
+    int EW[2],OW[2];//endgame weight, opening weight, in 39ths
+    OW[1]=enemy_material_left_39ths(original,1);//0=black, 1 = white
+    OW[0]=enemy_material_left_39ths(original,0);
+    EW[0]=MATERIAL_MAX-OW[0];
+    EW[1]=MATERIAL_MAX-OW[1];
 
     // Original summed square-by-square (exactly one piece per square), so the
     // float accumulation order was strictly increasing square index. Summing
@@ -73,7 +83,7 @@ int piecetable(const BB* const original , const WEIGHTS& W)
     }
 
 
-    return score;
+    return score/MATERIAL_MAX;
 }
 
 int piece_activity_eval(const BB* const original, const WEIGHTS& W)
