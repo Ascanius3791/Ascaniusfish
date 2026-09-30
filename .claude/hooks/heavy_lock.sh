@@ -23,19 +23,12 @@ pattern+='|self[_-]?play'
 pattern+='|tournament'
 
 if [[ "$cmd" =~ $pattern ]]; then
-  lockfile=/tmp/ascaniusfish-heavy.lock
-  scriptfile=$(mktemp /tmp/ascaniusfish-heavy-cmd.XXXXXX.sh)
-  printf '%s\n' "$cmd" > "$scriptfile"
-  wrapped="flock -w 3600 $lockfile bash $scriptfile"
-
-  jq -n --arg cmd "$wrapped" '{
+  jq -n '{
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
-      permissionDecision: "allow",
-      permissionDecisionReason: "Heavy engine command serialized via a system-wide flock so it cannot run concurrently with another session'"'"'s heavy work.",
-      updatedInput: {command: $cmd}
-    },
-    systemMessage: "Heavy command detected - waiting on /tmp/ascaniusfish-heavy.lock (up to 1h) so it does not run alongside another session'"'"'s heavy work."
+      permissionDecision: "deny",
+      permissionDecisionReason: "Heavy engine command: rerun it under the system-wide lock so it waits for other sessions'"'"' heavy work instead of running alongside it. A single command: `flock -w 3600 /tmp/ascaniusfish-heavy.lock make bench 2>&1 | tail -3`. Several commands joined with && or ;: `flock -w 3600 /tmp/ascaniusfish-heavy.lock bash -c '"'"'...'"'"'`."
+    }
   }'
 else
   exit 0

@@ -63,7 +63,7 @@ Every issue gets its own git worktree, so sessions on different issues never sha
 
 **While working**
 - The main folder stays on `main` and belongs to Ascanius. Never edit files there and never `git checkout`/`switch` there.
-- Heavy jobs already take turns across all sessions (`.claude/hooks/heavy_lock.sh`). A second `make gui` needs its own `GUI_PORT`.
+- Heavy jobs take turns across all sessions: `.claude/hooks/heavy_lock.sh` refuses `make bench`/`speed-compare`/`perft`/… unless run as `flock -w 3600 /tmp/ascaniusfish-heavy.lock <command>`. A second `make gui` needs its own `GUI_PORT`.
 - Searching from the main folder also goes into `.claude/worktrees/`. Search from inside the worktree, or exclude it.
 
 **Landing**, only when Ascanius says the issue is done:
