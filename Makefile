@@ -17,6 +17,7 @@ PROFILE_ITERATIONS ?= 1
 PROFILE_DEPTH ?= 100000
 PERFT_DEPTH ?=
 BENCH_DEPTH ?=
+NNE ?=
 ROUNDS ?= 10
 DEPTH ?=
 TC ?=
@@ -35,7 +36,7 @@ SYZYGY_RANDOM ?=
 TOOL_TARGETS := tools/perft tools/bench tools/speed_compare tools/match tools/make_openings tools/make_endgames tools/gui_match tools/tt_stats tools/syzygy_reference tools/tb_suite tools/tb_trade_suite tools/nne_data
 PROFILE_CXXFLAGS ?= -O2 -mpopcnt -g -pg -Wall -Wno-unknown-pragmas -Wno-parentheses -Wno-unused-variable
 
-.PHONY: all run play asm tests debug profile-startpos perft bench speed-compare match gui-match gui tt-stats syzygy-test tb-suite tb-trade-suite clean rebuild
+.PHONY: all run play asm tests debug profile-startpos perft bench speed-compare match gui-match gui tt-stats syzygy-test nne-test tb-suite tb-trade-suite clean rebuild
 
 all: $(TARGET) $(UCI_TARGET)
 
@@ -147,13 +148,21 @@ diagnostics/syzygy_test: diagnostics/syzygy_test.cpp tools/syzygy_positions.hpp 
 syzygy-test: diagnostics/syzygy_test
 	./diagnostics/syzygy_test $(SYZYGY_PATH) $(SYZYGY_RANDOM)
 
+# The engine's eval-correction net (lib/nne.hpp) vs the trainer's test-set
+# predictions: every correction within 0.01 cp (#52)
+diagnostics/nne_inference_test: diagnostics/nne_inference_test.cpp $(HEADERS) $(SOURCES)
+	$(CXX) $(CXXFLAGS) -pthread -o $@ diagnostics/nne_inference_test.cpp
+
+nne-test: diagnostics/nne_inference_test
+	./diagnostics/nne_inference_test
+
 # Move generation vs known perft counts (PERFT_DEPTH=4 for a quick check)
 perft: tools/perft
 	./tools/perft $(PERFT_DEPTH)
 
 # Fixed-depth search; total nodes = search signature (BENCH_DEPTH overrides)
 bench: tools/bench
-	./tools/bench $(BENCH_DEPTH)
+	./tools/bench $(BENCH_DEPTH) $(if $(NNE),nne=$(NNE))
 
 # Speed A/B of two git refs ("." = working tree): make speed-compare A=main B=.
 speed-compare: tools/speed_compare
@@ -197,4 +206,4 @@ debug: $(TARGET)
 rebuild: clean all
 
 clean:
-	rm -f $(TARGET) $(UCI_TARGET) a.out ascaniusfish.s $(TEST_TARGETS) $(TOOL_TARGETS) diagnostics/syzygy_test tools/nne_train $(GUI_TARGET) benchmarks/profile_startpos benchmarks/gmon.out benchmarks/profile_startpos.gprof
+	rm -f $(TARGET) $(UCI_TARGET) a.out ascaniusfish.s $(TEST_TARGETS) $(TOOL_TARGETS) diagnostics/syzygy_test diagnostics/nne_inference_test tools/nne_train $(GUI_TARGET) benchmarks/profile_startpos benchmarks/gmon.out benchmarks/profile_startpos.gprof

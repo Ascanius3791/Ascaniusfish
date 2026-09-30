@@ -8,13 +8,14 @@
 #include "time_manager.hpp"
 #include "syzygy.hpp"
 #include "tb_search.hpp"
+#include "nne.hpp"
 #include <string>
 #include <vector>
 #include <mutex>
 #include <thread>
 
 // UCI front end. Implements uci, isready, ucinewgame, position, go, stop,
-// quit (setoption handles SyzygyPath and SyzygyProbeLimit, debug/register/ponderhit are accepted and ignored), plus
+// quit (setoption handles SyzygyPath, SyzygyProbeLimit, NNEFile and UseNNE, debug/register/ponderhit are accepted and ignored), plus
 // the non-standard "go perft N" for checking move generation from any FEN.
 // The search runs on its own thread so "stop"/"isready" are answered while
 // it thinks; see lib/search_control.hpp for how a search is aborted.
@@ -76,6 +77,9 @@ class UCI_Engine
     bool tb_root_filter(const BB& root, const std::vector<BB>& children, std::vector<int>& keep, int& tb_class);
     void search_tb_root(const BB& root, const std::vector<Move>& moves, const std::vector<BB>& children, const std::vector<int>& keep, int tb_class, int ply, const UCI_Limits& limits, long long start_ns);
     std::string syzygy_dir;
+    std::string nne_file = "nets/nne_d6.bin";  // NNEFile
+    bool use_nne = false;                      // UseNNE; nne::enabled says whether it is in effect
+    void apply_nne();
     std::vector<std::string> pv_to_uci(const BB& root, const PV_Line& pv);
 };
 

@@ -4,8 +4,10 @@
 // The total node count is a signature of search behaviour: it changes only
 // when the search itself changes, never with machine speed.
 //
-//   ./tools/bench [depth] [-q]
+//   ./tools/bench [depth] [-q] [nne=<file>]
 // -q prints only the final "bench:" line (used by tools/speed_compare).
+// nne=<file> evaluates quiet leaves with that eval-correction net (UCI UseNNE,
+// #52); the node count is then a different signature.
 // The last line is always: bench: nodes <N> time_ms <T> nps <X>
 #include "../lib/uci.hpp"
 
@@ -54,10 +56,22 @@ int main(int argc, char** argv)
 {
     int depth = BENCH_DEFAULT_DEPTH;
     bool quiet = false;
+    const char* nne_file = nullptr;
     for(int i=1;i<argc;i++)
     {
         if(std::strcmp(argv[i], "-q")==0) quiet = true;
+        else if(std::strncmp(argv[i], "nne=", 4)==0) nne_file = argv[i]+4;
         else depth = std::atoi(argv[i]);
+    }
+    if(nne_file)
+    {
+        std::string error;
+        if(!nne::load(nne_file, error))
+        {
+            std::fprintf(stderr, "%s\n", error.c_str());
+            return 1;
+        }
+        nne::enabled = true;
     }
 
     Zobrist zobrist_keys;

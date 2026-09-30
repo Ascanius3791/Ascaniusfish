@@ -4,6 +4,8 @@
 #include "../lib/uci.hpp"
 #include <sstream>
 #include <algorithm>
+#include <fstream>
+#include <unistd.h>
 
 static const char* const UCI_STARTPOS = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 
@@ -157,6 +159,44 @@ void UCI_Engine::ensure_table()
 {
     if(!table)
     table = new lookup_table;
+}
+
+// A relative NNEFile is looked for in the working directory, then next to the
+// binary, so the default finds nets/ wherever a GUI or a match starts the engine.
+static std::string nne_resolve(const std::string& file)
+{
+    if(file.empty() || file[0]=='/' || std::ifstream(file).good())
+    return file;
+    char exe[4096];
+    const ssize_t n = readlink("/proc/self/exe", exe, sizeof(exe)-1);
+    if(n<=0)
+    return file;
+    const std::string dir(exe, std::string(exe, n).rfind('/')+1);
+    return std::ifstream(dir+file).good() ? dir+file : file;
+}
+
+// UseNNE / NNEFile (#52): loads the net when it is switched on or its file
+// changes. Clears the TT whenever the eval changes, since its quiet leaves
+// were scored with the other one.
+void UCI_Engine::apply_nne()
+{
+    const bool was_enabled = nne::enabled;
+    const std::string was_loaded = nne::loaded_path;
+    nne::enabled = false;
+    if(use_nne)
+    {
+        const std::string path = nne_resolve(nne_file);
+        std::string error;
+        if(nne::loaded_path==path || nne::load(path, error))
+        {
+            nne::enabled = true;
+            send("info string nne on, " + path);
+        }
+        else
+        send("info string nne off: " + error);
+    }
+    if(table && (nne::enabled!=was_enabled || (nne::enabled && nne::loaded_path!=was_loaded)))
+    table->reset();
 }
 
 void UCI_Engine::stop_search()
@@ -585,6 +625,8 @@ int UCI_Engine::loop()
             send("id author Ascanius");
             send("option name SyzygyPath type string default <empty>");
             send("option name SyzygyProbeLimit type spin default 5 min 0 max 5");
+            send("option name NNEFile type string default nets/nne_d6.bin");
+            send("option name UseNNE type check default false");
             send("uciok");
         }
         else if(cmd=="isready")
@@ -641,6 +683,18 @@ int UCI_Engine::loop()
             {
                 stop_search();
                 tb_probe_limit = std::max(0, std::min(5, std::atoi(value.c_str())));
+            }
+            else if(name=="NNEFile")
+            {
+                stop_search();
+                nne_file = value;
+                apply_nne();
+            }
+            else if(name=="UseNNE")
+            {
+                stop_search();
+                use_nne = value=="true";
+                apply_nne();
             }
         }
         else if(cmd=="debug" || cmd=="register" || cmd=="ponderhit")

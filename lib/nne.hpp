@@ -1,8 +1,9 @@
 // OWNERSHIP=Claude
-// The eval-correction net's inputs (M9, docs/NNE_DESIGN.md). This is the one
-// place they are computed: the data tool (tools/nne_data.cpp) writes them into
-// the dataset, and the engine's inference will call the same function, so the
-// trainer never computes features itself and cannot drift from the engine.
+// The eval-correction net (M9, docs/NNE_DESIGN.md): its inputs, and the
+// engine's inference (#52). The inputs are computed only here: the data tool
+// (tools/nne_data.cpp) writes them into the dataset and the inference calls
+// the same function, so the trainer never computes features itself and cannot
+// drift from the engine.
 //
 // The board is seen from the side to move. With black to move the ranks are
 // flipped (square ^ 56) and the colours swapped, so both sides to move are one
@@ -24,7 +25,9 @@
 #define NNE_HPP
 
 #include "Bitboards.hpp"
+#include "tb_search.hpp"
 #include <cstdint>
+#include <string>
 
 namespace nne
 {
@@ -79,6 +82,45 @@ inline int active_features(const BB& pos, int* out)
     }
     return n;
 }
+
+// The net, 780 -> 128 -> 16 -> 1 with a clipped ReLU (clamp to [0, 1]) after
+// both hidden layers, float32 like the trainer. Weights are [in][out], so an
+// active input is one contiguous row of W1. The last layer is already in cp:
+//   c = b3 + clamp(b2 + clamp(b1 + sum of W1[active], 0, 1) W2, 0, 1) W3
+constexpr int HIDDEN_1 = 128;
+constexpr int HIDDEN_2 = 16;
+
+struct Net
+{
+    alignas(64) float w1[N_INPUTS*HIDDEN_1];
+    alignas(64) float b1[HIDDEN_1];
+    alignas(64) float w2[HIDDEN_1*HIDDEN_2];
+    alignas(64) float b2[HIDDEN_2];
+    float w3[HIDDEN_2];
+    float b3;
+};
+
+inline Net net;               // what load() read; zero until then
+inline bool enabled = false;  // UseNNE: the quiet leaf of minimax_tactical() adds the net's correction
+inline std::string loaded_path;  // the file in `net`, empty if none
+
+// Reads a weights file ("NNE1", version 1, 3 layers, sizes 780 128 16 1, then
+// per layer float32 W [in][out] and b [out], little-endian) into `net`. On any
+// error `net` and loaded_path are left as they were and `error` says why.
+bool load(const std::string& path, std::string& error);
+
+// The net's correction for `pos` in centipawns, in the mover's view. Needs a
+// loaded net.
+float correction(const BB& pos);
+
+// The quiet-leaf score: `static_eval` (white's view, from eval()) plus the net's
+// correction, rounded and clamped to +-SCORE_LIMIT, so however large the static
+// eval is, the sum never reaches the TB band (|eval| >= TB_WIN_SCORE) or the
+// mate band beyond it.
+constexpr int SCORE_LIMIT = TB_WIN_SCORE - 1;
+int corrected_eval(const BB* pos, int static_eval);
 }
+
+#include "../src/nne.cpp"
 
 #endif // NNE_HPP
