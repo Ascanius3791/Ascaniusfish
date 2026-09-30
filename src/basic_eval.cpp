@@ -111,11 +111,12 @@ int piece_activity_eval(const BB* const original, const WEIGHTS& W)
             if(!col && all_pieces & 1ULL << i >> 8)
             score+=20;
             
-            //possible attacks, if pushed need to be awarded
+            //possible attacks, if pushed need to be awarded (from the starting rank also after the double push)
+            uint64_t push_attacks = col ? (BP_template[i]<<8 | (i/8==1 ? BP_template[i]<<16 : 0)) : (WP_template[i]>>8 | (i/8==6 ? WP_template[i]>>16 : 0));
             if(col)
-            score+=count(enemy_pieces & BP_template[i]<<8)*20+count(own_pieces & BP_template[i]<<8)*10;//*W.piece_activity_value[0];
+            score+=count(enemy_pieces & push_attacks)*20+count(own_pieces & push_attacks)*10;//*W.piece_activity_value[0];
             else
-            score-=count(enemy_pieces & WP_template[i]>>8)*20+count(own_pieces & WP_template[i]>>8)*10;//*W.piece_activity_value[0];
+            score-=count(enemy_pieces & push_attacks)*20+count(own_pieces & push_attacks)*10;//*W.piece_activity_value[0];
         }
         
         uint64_t own_bishops = original->Board[3+6*!col]|original->Board[4+6*!col];

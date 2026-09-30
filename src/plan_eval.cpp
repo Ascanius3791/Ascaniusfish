@@ -73,7 +73,8 @@ static inline int plan_role_term(int kind, bool white, int i, uint64_t occ, uint
         {
             const uint64_t att = white ? BP_template[i] : WP_template[i];
             const uint64_t front = white ? 1ULL << i+8 : 1ULL << i >> 8;
-            const uint64_t side = white ? BP_template[i]<<8 : WP_template[i]>>8;
+            const uint64_t side = white ? (BP_template[i]<<8 | (i/8==1 ? BP_template[i]<<16 : 0))
+                                        : (WP_template[i]>>8 | (i/8==6 ? WP_template[i]>>16 : 0));
             *mask = att | front | side;
             int t = count(enemy & att)*30 + count(own & att)*15 + count(enemy & side)*20 + count(own & side)*10;
             if(occ & front)
