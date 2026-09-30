@@ -2,6 +2,7 @@
 #ifndef BASIC_EVAL_CPP
 #define BASIC_EVAL_CPP
 #include "../lib/basic_eval.hpp"
+#include "../lib/king_safety.hpp"
 
 
 float enemy_material_left_percent(const BB* const original, bool for_white)//
@@ -289,8 +290,7 @@ int basic_eval(const BB*const original , const WEIGHTS& W)// return the evaluati
     score += material_eval(original,W);
     score += piecetable(original,W);
     
-    score += king_safety_of_colour(original,true,W);
-    score -= king_safety_of_colour(original,false,W);
+    score += king_safety_eval(original);
     //return score;
     //score=score*0.1; //games get fun, when they DO NOT CARE ABOUT MATERIAL
 
@@ -315,7 +315,7 @@ int tactical_potential(const BB* const original, int king_safety_white, int king
     uint64_t white_pieces = original->get_pieces_of_colour(true);
     uint64_t black_pieces = original->get_pieces_of_colour(false);
     int score=0;
-    // king_safety_white/king_safety_black are king_safety_of_colour(Board,1/0,W), computed once
+    // king_safety_white/king_safety_black are king_safety_of_both()'s (<= 0, 0 = safe), computed once
     // by the caller (sorting_eval already needs both) instead of redone here.
     if(king_safety_white<0)
     score-=king_safety_white;
@@ -410,8 +410,8 @@ int sorting_eval(const BB* const original, const WEIGHTS& W )// accelerates prun
     score +=material_eval(original,W);
     // king_safety_of_colour(white) and (black) computed once here and reused below for
     // tactical_potential, instead of each being computed twice more inside it.
-    int king_safety_white=king_safety_of_colour(original,true,W);
-    int king_safety_black=king_safety_of_colour(original,false,W);
+    int king_safety_white, king_safety_black;// <= 0 each, 0 = safe (#42)
+    king_safety_of_both(original,king_safety_white,king_safety_black);
     int king_s = original->white_move ? king_safety_black : king_safety_white;//king_safety_of_colour(!original->white_move)
     if(king_s<=0)//if the king may be in danger, we must attack!//is this even quicker? in a queen vs king endgame with gave 30% more pruning
     score -= W.value_of_king_safety_for_sorting*king_s*(1-2*!original->white_move);
