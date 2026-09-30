@@ -1024,6 +1024,8 @@ void make_move(const BB* const parent, const Move& move, BB* const child)
         }
         if(pawn_push && (to-from==16 || from-to==16))
         child->en_passant = 1ULL << ((from+to)/2);
+        if(type==0 || en_passant || (child->Board[0+ENE]|child->Board[1+ENE]|child->Board[2+ENE]|child->Board[3+ENE]|child->Board[4+ENE]|child->Board[5+ENE]) != (parent->Board[0+ENE]|parent->Board[1+ENE]|parent->Board[2+ENE]|parent->Board[3+ENE]|parent->Board[4+ENE]|parent->Board[5+ENE]))
+        child->halfmoves_since_last_capture_or_pawn_move = 0;//a pawn move or a capture restarts the 50-move clock
     }
 
     hash ^= Zobrist::castlingKeys[castling_key_index(parent)] ^ Zobrist::castlingKeys[castling_key_index(child)];

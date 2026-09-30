@@ -2,6 +2,7 @@
 #include"ascaniusfish.hpp"
 #include "lib/cuckoo_cycle_table.hpp"
 #include "lib/search_control.hpp"
+#include "lib/tb_search.hpp"
 #include "lib/move_ordering.hpp"
 #include <algorithm>
 #include <cstdlib>//for communication with python
@@ -401,7 +402,21 @@ PV_Line minimax(const BB*const original ,BB* const wfh ,int depth = 0, const WEI
                 is_tt_hint_found=1;
             }
         }
-        
+
+    // Tablebase result (issue #39): exact, so the node is over. Not at the root
+    // of this search, which has to name a move (the root filter in src/uci.cpp
+    // does that), and not the child of a null move, whose side to move may be
+    // giving check.
+    int tb_score;
+    if(ply!=effective_root_ply && null_move_allowed && tb_probe_score(original, tb_score))
+    {
+        PV_Line tb_pv_line = PV_Line(tb_score);
+        tb_pv_line.depth = depth;
+        tb_pv_line.current_lenght = 0;
+        tb_pv_line.bound_type = 0;
+        return tb_pv_line;
+    }
+
     if(depth==0)
     {
         return minimax_tactical(original, wfh, W, alpha, beta, table);
