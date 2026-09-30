@@ -314,6 +314,22 @@ static void test_broken_pgn()
     check_eq(line_of(tree), "e4", "and the tree that was there is untouched");
 }
 
+// Lichess's 2014 games write "Rfe1" when the a1 rook is blocked by the queen
+// on d1: more disambiguation than SAN needs, read as the one move it fits.
+static void test_over_disambiguated_san()
+{
+    std::printf("over-disambiguated SAN\n");
+    const std::string tags = "[FEN \"r2qkb1r/1bpn1pp1/pp1p2np/4p3/3PP3/2PB1N1P/PP1N1PPB/R2Q1RK1 w kq - 0 11\"]\n";
+    Move_Tree tree = fresh();
+    std::string error;
+    check(tree.load_pgn(tags + "11. Rfe1 *", error), "\"Rfe1\" loads", error);
+    check_eq(tree.current().uci, "f1e1", "it is the f1 rook's move");
+    check_eq(tree.current().san, "Re1", "written the way SAN needs it");
+    check(tree.load_pgn(tags + "11. Rf1e1 *", error), "\"Rf1e1\" loads too", error);
+    check(!tree.load_pgn(tags + "11. Rae1 *", error), "naming the wrong rook is refused", error);
+    check(!tree.load_pgn(tags + "11. R2e1 *", error), "so is naming the wrong rank", error);
+}
+
 int main()
 {
     // Without these, sliding attacks are garbage and in_check() quietly misses
@@ -333,6 +349,7 @@ int main()
     test_pgn_from_a_fen();
     test_lichess_pgn();
     test_broken_pgn();
+    test_over_disambiguated_san();
 
     std::printf("\n%s\n", failures ? "FAIL" : "PASS");
     return failures ? 1 : 0;

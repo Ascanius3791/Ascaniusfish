@@ -24,6 +24,7 @@
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -672,8 +673,49 @@ class Move_Tree
         for(int k=0;k<n_legal;k++)
         if(plain_san(san(nodes[cursor].pos, legal, n_legal, k))==want)
         return play(get_UCI(&nodes[cursor].pos, legal+k));
+        // Lichess's 2014 games disambiguate against pieces that cannot move
+        // there ("Rfe1" with the a1 rook blocked): accept a disambiguation
+        // that is merely more than needed, if it fits exactly one legal move.
+        int found = -1;
+        for(int k=0;k<n_legal;k++)
+        {
+            std::string uci = get_UCI(&nodes[cursor].pos, legal+k);
+            if(!redundant_disambiguation(want, plain_san(san(nodes[cursor].pos, legal, n_legal, k)), uci))
+            continue;
+            if(found>=0)
+            {
+                found = -2;
+                break;
+            }
+            found = k;
+        }
+        if(found>=0)
+        return play(get_UCI(&nodes[cursor].pos, legal+found));
         error = "\"" + token + "\" is not a legal move in " + fen();
         return false;
+    }
+
+    // Whether `want` is our SAN `ours` of the move `uci` with more of its
+    // from-square written out: the same piece and the same rest, and every
+    // extra file or rank letter is the from-square's.
+    static bool redundant_disambiguation(const std::string& want, const std::string& ours, const std::string& uci)
+    {
+        if(want.size()<3 || ours.empty() || want[0]!=ours[0] || !strchr("RNBQK", want[0]))
+        return false;
+        // The rest: an optional 'x', the destination and nothing else (no promotion for a piece).
+        size_t rest = want.size()-2;
+        if(rest>1 && want[rest-1]=='x')
+        rest--;
+        size_t ours_rest = ours.size()-(want.size()-rest);
+        if(ours_rest<1 || ours.compare(ours_rest, std::string::npos, want, rest, std::string::npos)!=0)
+        return false;
+        for(size_t i=1;i<rest;i++)
+        if(want[i]!=uci[0] && want[i]!=uci[1])
+        return false;
+        for(size_t i=1;i<ours_rest;i++)  // ours never names what want contradicts
+        if(want.substr(1, rest-1).find(ours[i])==std::string::npos)
+        return false;
+        return true;
     }
 
     // SAN stripped to what identifies the move: no check or mate mark, no
