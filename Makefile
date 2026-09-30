@@ -155,9 +155,11 @@ gui-match: tools/gui_match
 	./tools/gui_match $(A) $(B) movetime=$(MOVETIME)
 
 # The board in the browser: prints a http://localhost:<port> URL and serves it.
+# Tablebases are on by default when $(SYZYGY_PATH) exists; SYZYGY=<dir> picks another, SYZYGY=none turns them off.
+SYZYGY ?= $(wildcard $(SYZYGY_PATH))
 # Play mode drives $(UCI_TARGET) over pipes, so that has to exist too.
 gui: $(GUI_TARGET) $(UCI_TARGET)
-	./$(GUI_TARGET) $(if $(GUI_PORT),port=$(GUI_PORT)) $(if $(GUI_BIND),bind=$(GUI_BIND)) $(if $(GUI_TUNNEL),tunnel=$(GUI_TUNNEL)) $(if $(SYZYGY),syzygy=$(SYZYGY))
+	./$(GUI_TARGET) $(if $(GUI_PORT),port=$(GUI_PORT)) $(if $(GUI_BIND),bind=$(GUI_BIND)) $(if $(GUI_TUNNEL),tunnel=$(GUI_TUNNEL)) $(if $(filter-out none,$(SYZYGY)),syzygy=$(SYZYGY))
 
 # make gui plus a cloudflared quick tunnel, so the printed link is already
 # shareable — no separate terminal, no combining a token by hand (issue #27).
