@@ -96,11 +96,13 @@ inline Eval_Split split_piece_activity(const BB* const original)
 {
     Eval_Split s;
     s.scale = 2;
-    enum { P_HIT, P_BLOCKED, P_PUSH_HIT, D_OWN, D_ENEMY, D_MOB, S_OWN, S_ENEMY, S_MOB, N_OWN, N_ENEMY, N_MOB, K_OWN, K_ENEMY };
+    enum { P_HIT, P_DEF, P_BLOCKED, P_PUSH_HIT, P_PUSH_DEF, D_OWN, D_ENEMY, D_MOB, S_OWN, S_ENEMY, S_MOB, N_OWN, N_ENEMY, N_MOB, K_OWN, K_ENEMY };
     struct { const char* name; int weight; const char* info; } spec[] = {
-        {"P hits a piece ×30/2",     30, "pieces (either colour) on the pawn's capture squares"},
+        {"P attacks ×30/2",          30, "enemy pieces on the pawn's capture squares"},
+        {"P defends ×15/2",          15, "own pieces on the pawn's capture squares"},
         {"P blocked −20/2",         -20, "a piece right in front of the pawn"},
-        {"P hits after push ×20/2",  20, "pieces (either colour) on the squares the pawn would capture on after one push"},
+        {"P attacks after push ×20/2", 20, "enemy pieces on the squares the pawn would capture on after one push"},
+        {"P defends after push ×10/2", 10, "own pieces on the squares the pawn would capture on after one push"},
         {"B/Q defends ×10/2",        10, "own pieces a bishop or queen sees diagonally"},
         {"B/Q attacks ×40/2",        40, "enemy pieces a bishop or queen sees diagonally"},
         {"B/Q diagonals ×5/2",        5, "squares a bishop or queen sees diagonally"},
@@ -133,9 +135,11 @@ inline Eval_Split split_piece_activity(const BB* const original)
         while(own_pawns)
         {
             int i = find_and_delete_trailling_1(own_pawns);
-            hit(P_HIT, i, all_pieces & (col ? BP_template[i] : WP_template[i]));
+            hit(P_HIT, i, enemy_pieces & (col ? BP_template[i] : WP_template[i]));
+            hit(P_DEF, i, own_pieces & (col ? BP_template[i] : WP_template[i]));
             hit(P_BLOCKED, i, all_pieces & (col ? 1ULL << i+8 : 1ULL << i >> 8));
-            hit(P_PUSH_HIT, i, all_pieces & (col ? BP_template[i]<<8 : WP_template[i]>>8));
+            hit(P_PUSH_HIT, i, enemy_pieces & (col ? BP_template[i]<<8 : WP_template[i]>>8));
+            hit(P_PUSH_DEF, i, own_pieces & (col ? BP_template[i]<<8 : WP_template[i]>>8));
         }
         uint64_t own_bishops = original->Board[3+6*!col]|original->Board[4+6*!col];
         while(own_bishops)

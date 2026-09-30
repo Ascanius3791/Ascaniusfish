@@ -102,9 +102,9 @@ int piece_activity_eval(const BB* const original, const WEIGHTS& W)
         {
             int i=find_and_delete_trailling_1(own_pawns);
             if(col)
-            score+=count(all_pieces & BP_template[i])*30;//*W.piece_activity_value[0];
+            score+=count(enemy_pieces & BP_template[i])*30+count(own_pieces & BP_template[i])*15;//*W.piece_activity_value[0];
             if(!col)
-            score-=count(all_pieces & WP_template[i])*30;//*W.piece_activity_value[0];
+            score-=count(enemy_pieces & WP_template[i])*30+count(own_pieces & WP_template[i])*15;//*W.piece_activity_value[0];
 
             if(col && all_pieces & 1ULL << i+8)
             score-=20;
@@ -113,9 +113,9 @@ int piece_activity_eval(const BB* const original, const WEIGHTS& W)
             
             //possible attacks, if pushed need to be awarded
             if(col)
-            score+=count(all_pieces & BP_template[i]<<8)*20;//*W.piece_activity_value[0];
+            score+=count(enemy_pieces & BP_template[i]<<8)*20+count(own_pieces & BP_template[i]<<8)*10;//*W.piece_activity_value[0];
             else
-            score-=count(all_pieces & WP_template[i]>>8)*20;//*W.piece_activity_value[0];
+            score-=count(enemy_pieces & WP_template[i]>>8)*20+count(own_pieces & WP_template[i]>>8)*10;//*W.piece_activity_value[0];
         }
         
         uint64_t own_bishops = original->Board[3+6*!col]|original->Board[4+6*!col];
