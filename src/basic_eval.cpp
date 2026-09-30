@@ -311,6 +311,7 @@ int basic_eval(const BB*const original , const WEIGHTS& W)// return the evaluati
     
     score += piece_activity_eval(original,W);
 
+    score += plan_eval(original,W);
     return score;
 }
 
