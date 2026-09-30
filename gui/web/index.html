@@ -56,7 +56,11 @@
       <input type="checkbox" id="set-plans">
       <span>Plans: each piece's dream square and the path there</span>
     </label>
-    <p class="note">All three apply in every mode. They last as long as the
+    <label class="switch">
+      <input type="checkbox" id="set-eval-terms">
+      <span>Eval terms: basic_eval broken down</span>
+    </label>
+    <p class="note">All four apply in every mode. They last as long as the
     server runs and are not saved to a file.</p>
     <label class="switch">
       <input type="checkbox" id="set-tb">
@@ -314,6 +318,28 @@
     </section>
 
   </aside>
+
+  <!-- The eval terms (#44), in a column of their own where the window has the
+       room for one (app.js's placeTerms() puts the panel in the side column
+       otherwise). basic_eval() of the position on the board, term by term:
+       each side's own share and the total in white's view, in centipawns. The
+       rows are fixed, so the panel's height does not change with the position. -->
+  <div id="terms-column" class="terms-column" hidden>
+    <section class="panel" id="terms-panel" hidden>
+      <h2>Eval terms</h2>
+      <div class="terms-head">
+        <span class="note">basic_eval, cp</span>
+        <span id="terms-total" class="score"></span>
+      </div>
+      <div class="terms-row terms-legend"><span>term</span><span>white</span><span>black</span><span>total</span></div>
+      <div id="terms-list" class="terms-list"></div>
+      <div id="terms-sum" class="terms-row terms-sum"></div>
+      <p id="terms-check" class="terms-check"></p>
+      <p id="terms-phase" class="note terms-phase"></p>
+      <p class="note">White and black: what that side gets, good for it when
+      positive. Total: white's view. Hover a row for what goes into it.</p>
+    </section>
+  </div>
 </main>
 
 <script type="module" src="app.js"></script>

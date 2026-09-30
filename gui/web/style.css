@@ -691,3 +691,96 @@ select:focus, input:focus { outline: none; border-color: var(--accent); }
   border-radius: 0;
 }
 .plans-legend:hover { background: none; border-color: transparent; border-bottom-color: var(--line); }
+
+/* The eval terms (#44). A column of its own right of the side column when the
+   window has the room (app.js's placeTerms()), taking what is left up to 420px
+   but never from the board column: that one reaches its 620px maximum first,
+   so switching the terms on does not move the board. Its own scroll box, like
+   the side column. The rows are fixed, so the panel's height is too. */
+.terms-column {
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: 420px;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.terms-column[hidden] { display: none; }
+
+.terms-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+#terms-total { white-space: nowrap; }
+
+.terms-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 3.2em 3.2em 3.2em;
+  column-gap: 5px;
+  align-items: baseline;
+  font: 13px/1.5 ui-monospace, "SF Mono", Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+  padding: 3px 6px 2px;
+  border-radius: 4px;
+}
+
+/* Its own column has the room for wider numbers; the side column does not. */
+.terms-column .terms-row { grid-template-columns: minmax(0, 1fr) 4em 4em 4.2em; column-gap: 6px; }
+
+.terms-row span:first-child {
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.terms-row span:nth-child(n+2) { text-align: right; }
+.terms-row span:nth-child(4) { font-weight: 600; }
+.terms-list .terms-row:hover { background: var(--bg); }
+.terms-row.bad, .terms-row.bad span { color: var(--bad); }
+
+/* One scale for every row, from the middle: right (blue) is white's, left (red)
+   black's, in the plan view's two colours. */
+.terms-bar {
+  grid-column: 1 / -1;
+  position: relative;
+  height: 4px;
+  margin-top: 2px;
+  background: var(--line);
+  border-radius: 2px;
+}
+
+.terms-bar::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: -2px;
+  bottom: -2px;
+  width: 1px;
+  background: var(--muted);
+}
+
+.terms-bar i { position: absolute; top: 0; bottom: 0; border-radius: 2px; }
+.terms-bar i.white { background: #3f8fd8; }
+.terms-bar i.black { background: #d8503f; }
+
+.terms-legend {
+  color: var(--muted);
+  font-size: 11px;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+}
+
+.terms-sum { border-top: 1px solid var(--line); border-radius: 0; margin-top: 4px; }
+.terms-sum span:first-child { font-weight: 600; }
+
+/* Two lines' height whichever message it is, so nothing under it moves. */
+.terms-check { margin: 6px 0; min-height: 3em; font-size: 13px; color: var(--accent); }
+.terms-check.bad { color: var(--bad); font-weight: 600; }
+.terms-phase { min-height: 3em; margin-bottom: 6px; }

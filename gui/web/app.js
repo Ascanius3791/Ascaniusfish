@@ -581,6 +581,8 @@ el('set-engine-line').addEventListener('change', event =>
   command('/api/settings', { engineLine: event.target.checked }));
 el('set-plans').addEventListener('change', event =>
   command('/api/settings', { plans: event.target.checked }));
+el('set-eval-terms').addEventListener('change', event =>
+  command('/api/settings', { evalTerms: event.target.checked }));
 el('plans-filter').addEventListener('click', event => {
   const button = event.target.closest('button[data-side]');
   if (!button) return;
@@ -786,6 +788,7 @@ function render(s) {
   renderWatchPanel(s);
   renderEngine(s);
   renderPlans(s);
+  renderTerms(s);
   renderSettings(s);
 
   // Leave a FEN or a PGN the user is in the middle of typing alone.
@@ -1242,6 +1245,99 @@ function pickPlanAt(key) {
   renderPlans(state);
 }
 
+// ---------------------------------------------------------------- eval terms
+
+// basic_eval() of the position on the board, as the server took it apart
+// (Session::write_eval_terms()): per row each side's own share where the engine
+// has one, and the total in white's view. The totals must add up to basic_eval;
+// when they don't, or a row's white - black is not its total, the panel says so
+// in red rather than quietly showing numbers that do not belong together.
+//
+// The panel has a column of its own right of the side column when the window
+// is wide enough for one beside a full-size board (main's padding and gaps, the
+// board column's 620px, the side column's 300px and the terms column's 320px
+// minimum), and sits in the side column under the plans otherwise.
+const roomy = window.matchMedia('(min-width: 1340px)');
+roomy.addEventListener('change', placeTerms);
+
+function placeTerms() {
+  const panel = el('terms-panel'), column = el('terms-column');
+  if (roomy.matches) {
+    if (panel.parentNode !== column) column.append(panel);
+  } else if (panel.parentNode === column) {
+    el('plans-panel').after(panel);
+  }
+  column.hidden = !roomy.matches || panel.hidden;
+}
+
+function pawns(cp) {
+  return (cp > 0 ? '+' : cp < 0 ? '−' : '') + (Math.abs(cp) / 100).toFixed(2);
+}
+
+function renderTerms(s) {
+  const t = s.evalTerms;
+  el('terms-panel').hidden = !t;
+  placeTerms();
+  if (!t) return;
+
+  el('terms-total').textContent = `${pawns(t.basic)} (${signed(t.basic)} cp)`;
+  // The bars share one scale, the biggest total on the board (at least a pawn),
+  // drawn from the middle: right is good for white, left for black.
+  const top = Math.max(100, ...t.rows.map(r => Math.abs(r.total)));
+  const list = el('terms-list');
+  list.replaceChildren();
+  for (const r of t.rows) {
+    const row = document.createElement('div');
+    row.className = 'terms-row';
+    row.classList.toggle('bad', r.split === false);
+    row.title = r.info + (r.split === false ? ' — white − black is not the total!' : '');
+    if (r.name === 'Material' && r.white !== r.black)
+      row.title += ` (×${(r.total / (r.white - r.black)).toFixed(3)})`;
+    const cells = [
+      r.name,
+      r.white === null ? '·' : signed(r.white),
+      r.black === null ? '·' : signed(r.black),
+      signed(r.total),
+    ];
+    for (const text of cells) {
+      const cell = document.createElement('span');
+      cell.textContent = text;
+      row.append(cell);
+    }
+    const bar = document.createElement('div');
+    bar.className = 'terms-bar';
+    const fill = document.createElement('i');
+    const width = 50 * Math.min(1, Math.abs(r.total) / top);
+    fill.className = r.total >= 0 ? 'white' : 'black';
+    fill.style.width = `${width}%`;
+    fill.style.left = r.total >= 0 ? '50%' : `${50 - width}%`;
+    bar.append(fill);
+    row.append(bar);
+    list.append(row);
+  }
+
+  const sum = el('terms-sum');
+  sum.replaceChildren();
+  for (const text of ['Sum', '', '', signed(t.sum)]) {
+    const cell = document.createElement('span');
+    cell.textContent = text;
+    sum.append(cell);
+  }
+  const ok = t.sum === t.basic && t.rows.every(r => r.split !== false);
+  const check = el('terms-check');
+  check.classList.toggle('bad', !ok);
+  check.textContent = t.sum !== t.basic
+    ? `✗ The terms add up to ${signed(t.sum)} cp, but basic_eval is ${signed(t.basic)} cp (off by ${signed(t.basic - t.sum)}).`
+    : ok ? `✓ Adds up to basic_eval: ${signed(t.basic)} cp.`
+         : `✗ Adds up to basic_eval, but a row's white − black is not its total (red).`;
+
+  // piecetable()'s blend: each side's tables by the enemy's material left.
+  const share = n => `${Math.round(100 * n / t.phase.max)}% opening`;
+  el('terms-phase').textContent =
+    `Phase (piece tables): white's ${share(t.phase.white)} (black's material ${t.phase.white}/${t.phase.max}), ` +
+    `black's ${share(t.phase.black)} (${t.phase.black}/${t.phase.max}); the rest endgame.`;
+}
+
 // ------------------------------------------------------------------- settings
 
 // The gear's switches. The server holds them, so this only draws them; a second
@@ -1250,6 +1346,7 @@ function renderSettings(s) {
   el('set-evalbar').checked = s.settings.evalBar;
   el('set-engine-line').checked = s.settings.engineLine;
   el('set-plans').checked = s.settings.plans;
+  el('set-eval-terms').checked = s.settings.evalTerms;
   // Without tables there is nothing to switch, and the note says why.
   const st = s.settings;
   el('set-tb').checked = st.tb && st.tbAvailable;

@@ -134,6 +134,9 @@ class Session
     // The plan view (#44): each piece's dream square from lib/plan_eval.hpp,
     // drawn on the board with the path there. Off by default.
     bool show_plans = false;
+    // The eval terms (#44): basic_eval() of the position on the board, term by
+    // term and side by side, in a column of its own. Off by default.
+    bool show_eval_terms = false;
 
     // The tablebase switch and piece limit (#40), next to them in the gear. The
     // tables are the server's (tablebase_setup()); these say whether this
@@ -897,6 +900,12 @@ class Session
         else
         o.null();
 
+        o.key("evalTerms");
+        if(show_eval_terms)
+        write_eval_terms(o, pos);
+        else
+        o.null();
+
         write_tree(o);
         o.key("pgn").str(pgn());
 
@@ -987,6 +996,7 @@ class Session
         o.key("evalBar").boolean(show_eval_bar);
         o.key("engineLine").boolean(show_engine_line);
         o.key("plans").boolean(show_plans);
+        o.key("evalTerms").boolean(show_eval_terms);
         o.key("tb").boolean(tb_on);
         o.key("tbLimit").num(tb_limit);
         o.key("tbAvailable").boolean(tablebase_setup().available());
@@ -1310,6 +1320,87 @@ class Session
             o.end_obj();
         }
         o.end_arr();
+        o.end_obj();
+    }
+
+    // The eval terms (#44): basic_eval() (src/basic_eval.cpp) taken apart, in
+    // its order, each total made by the call basic_eval() makes for it (king
+    // safety split into its two halves by king_safety_detail()), so the totals
+    // add up to basic_eval() exactly. "sum" and "basic" are both sent so the page
+    // can show that they do, or loudly that they don't. Per side where the
+    // engine has a call for one side: "white"/"black" are that side's own share
+    // (positive = good for it), "total" is white's view, and "split" says
+    // whether white - black is the total (null where it is not meant to be:
+    // material's sides are plain piece values and its total is their difference
+    // scaled by what is left; piece tables and activity have no sides).
+    void write_eval_terms(json::Out& o, const BB& pos) const
+    {
+        const WEIGHTS& W = WEIGHTS_OG;
+        int sum = 0;
+        auto row = [&](const char* name, bool sides, bool difference, int white, int black, int total, const std::string& info)
+        {
+            sum += total;
+            o.obj();
+            o.key("name").str(name);
+            o.key("white");
+            if(sides) o.num(white); else o.null();
+            o.key("black");
+            if(sides) o.num(black); else o.null();
+            o.key("total").num(total);
+            o.key("split");
+            if(sides && difference) o.boolean(white - black == total); else o.null();
+            o.key("info").str(info);
+            o.end_obj();
+        };
+
+        int material[2] = {0, 0};   // [1] = white; the kings are left out, they cancel
+        for(int p=0;p<5;p++)
+        {
+            material[1] += W.piece_value[p]*count(pos.Board[p]);
+            material[0] += W.piece_value[p]*count(pos.Board[p+6]);
+        }
+        const King_Safety_Detail king[2] = { king_safety_detail(&pos, false), king_safety_detail(&pos, true) };
+        const int attacked[2] = { count(pos.get_attacked_squares(0)), count(pos.get_attacked_squares(1)) };
+        Plan_Target targets[32];
+        int n = 0;
+        plan_eval_detail(&pos, W, targets, &n);
+        int plan[2] = {0, 0};
+        for(int k=0;k<n;k++)
+        plan[targets[k].piece < 6] += targets[k].term;
+        const std::string danger = "attackers on the ring / danger units: white's king "
+            + std::to_string(king[1].attackers) + " / " + std::to_string(king[1].danger_units)
+            + ", black's king " + std::to_string(king[0].attackers) + " / " + std::to_string(king[0].danger_units);
+
+        o.obj();
+        o.key("rows").arr();
+        row("Material", true, false, material[1], material[0], material_eval(&pos, W),
+            "piece values without the kings; the total is white - black scaled by the material left");
+        row("Piece tables", false, false, 0, 0, piecetable(&pos, W),
+            "opening and endgame tables blended by the phase below");
+        row("King attack", true, true, -king[1].attack_penalty, -king[0].attack_penalty,
+            king[0].attack_penalty - king[1].attack_penalty, danger);
+        row("King shelter", true, true, -king[1].shelter_penalty, -king[0].shelter_penalty,
+            king[0].shelter_penalty - king[1].shelter_penalty, "pawn cover in front of each king");
+        row("Pawn structure", true, true, pawn_struckture_eval_of_colour(&pos, true, W),
+            pawn_struckture_eval_of_colour(&pos, false, W), positional_eval(&pos, W),
+            "doubled and isolated pawns, pawns supporting their pieces");
+        row("Attacked squares", true, true, 5*attacked[1], 5*attacked[0],
+            5*(attacked[1] - attacked[0]),
+            "5 per square: white " + std::to_string(attacked[1]) + ", black " + std::to_string(attacked[0]));
+        row("Piece activity", false, false, 0, 0, piece_activity_eval(&pos, W),
+            "what each piece attacks and defends");
+        row("Plan", true, USE_PLAN_EVAL, plan[1], plan[0], plan_eval(&pos, W),
+            USE_PLAN_EVAL ? "each piece's best square, db/(2+N)" : "USE_PLAN_EVAL is off: the sides are shown, not counted");
+        o.end_arr();
+        o.key("sum").num(sum);
+        o.key("basic").num(basic_eval(&pos, W));
+        // piecetable()'s phase: each side's tables are blended by the *enemy's*
+        // material left, in 39ths (39 = all of it: opening table only).
+        o.key("phase").obj();
+        o.key("white").num((int)std::lround(enemy_material_left_percent(&pos, true)*MATERIAL_MAX));
+        o.key("black").num((int)std::lround(enemy_material_left_percent(&pos, false)*MATERIAL_MAX));
+        o.key("max").num(MATERIAL_MAX);
+        o.end_obj();
         o.end_obj();
     }
 

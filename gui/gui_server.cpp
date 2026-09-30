@@ -1073,6 +1073,7 @@ static Response handle_post_authed(const Request& req)
             { "evalBar",    &Session::show_eval_bar    },
             { "engineLine", &Session::show_engine_line },
             { "plans",      &Session::show_plans       },
+            { "evalTerms",  &Session::show_eval_terms  },
         };
         for(const auto& option : switches)
         {
