@@ -111,3 +111,6 @@ Ascanius-owned, so it goes to Ascanius as a patch.
 3. S3 and A3 once the per-call cost is down: their value is the fraction of
    calls saved, and that fraction is worth more when calls are cheap.
 4. A tc match after each step that changes speed by more than 1.5x.
+
+Filed as follow-up issues: #45 (S1+S2), #46 (Q1), #47 (Q2–Q5, A1), #48
+(A3, S3, and the tc verdict).
