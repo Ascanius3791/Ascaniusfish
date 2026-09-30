@@ -3,6 +3,7 @@
 #include "lib/cuckoo_cycle_table.hpp"
 #include "lib/search_control.hpp"
 #include "lib/tb_search.hpp"
+#include "lib/nne.hpp"
 #include "lib/move_ordering.hpp"
 #include <algorithm>
 #include <cstdlib>//for communication with python
@@ -213,6 +214,8 @@ PV_Line minimax_tactical(const BB* const original, BB* const wfh, const WEIGHTS&
             return readout.pv_line;
         }
         int evaluation = eval(original, W, 0); // exception_state=0: number_of_new_moves>0 above already proves the game isn't over
+        if(nne::enabled)
+        evaluation = nne::corrected_eval(original, evaluation); // UseNNE (#52): + the net's correction, clamped below the TB band
         PV_Line leaf = PV_Line(evaluation);
         leaf.current_lenght = 0;
         leaf.bound_type = 0;

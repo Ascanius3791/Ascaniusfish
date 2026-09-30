@@ -124,8 +124,8 @@ test is used only for the reported numbers.
 - **Where**: the quiet leaf of `minimax_tactical` (`ascaniusfish_2.hpp`, the
   `eval(original, W, 0)` after the TT probe) returns `static + correction`. Stand
   pat keeps the raw static eval, since non-quiet positions are not in the data.
-  This is a patch to an Ascanius-owned file, proposed to Ascanius in its issue.
-  The sum is clamped so it can never reach the mate or tablebase bands.
+  This is a patch to an Ascanius-owned file, applied with Ascanius's approval
+  (#52). The sum is clamped so it can never reach the mate or tablebase bands.
 - **UCI options** `NNEFile` (path) and `UseNNE` (default false), so one binary
   plays both sides of a match. With `UseNNE` off, `make bench` is unchanged.
 - **CPU, not GPU.** Alpha-beta asks for one eval at a time, and each depends on
