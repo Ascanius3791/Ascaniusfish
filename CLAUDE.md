@@ -171,7 +171,8 @@ When editing engine internals, `lib/*.hpp` is the declaration/interface layer an
   off first. Each process holds ~140 MB of tables, so leaving an idle pair around would eat the
   room this repo keeps for running several engines at once.
 - `gui/json.hpp` — a JSON writer that inserts the commas, plus a flat-object parser for request bodies.
-- `gui/web/` — `index.html`/`app.js`/`style.css` are ours; `gui/web/vendor/` holds chessground
+- `gui/web/` — `index.html`/`app.js`/`style.css`/`sound.js` and the `logo.png`/`favicon.png` (scaled
+  down from the root's `Ascaniusfish.png`) are ours; `gui/web/vendor/` holds chessground
   (GPL-3, see its `README.md`), upstream's own prebuilt ESM bundle plus CSS with the board and
   all piece images as `data:` URIs. Nothing is fetched from the network and no Node is involved.
   **The page is exactly the window and never scrolls**: the board must not move when a move is
@@ -180,26 +181,40 @@ When editing engine internals, `lib/*.hpp` is the declaration/interface layer an
   engine line, the analysis stats, the best line) is held to a fixed height. `fitBoard()` sizes
   the board from the width the row gives it *and* the height the column has left — nothing can
   be scrolled to, so anything that does not fit is simply gone. Don't use `scrollIntoView()`
-  here: it scrolls every scrollable ancestor, the document among them (#22).
+  here: it scrolls every scrollable ancestor, the document among them (#22). Above and below the
+  board sit two fixed-height `.player-strip`s, one per side: lichess's material diff (counted from
+  the FEN, drawn with chessground's own piece images at a small size) and the clock chip.
+  `fitBoard()` lines them up with the board rather than the column. Queued premoves are marked by
+  chessground's `current-premove` square colour (`highlight.custom`), not by arrows.
 
 **The server owns the position and the page owns nothing** — reloading the browser is just another
 `GET /api/state`. All chess logic stays in C++; the JS is presentation only. Routes:
 `GET /api/state`, `GET /api/events` (SSE),
 `POST /api/{move,fen,reset,undo,resign,play,watch,mode,flip,analyse,line,settings}`, all taking
-`id` (default `main`). Both Play and Watch play under a Clock or a fixed depth (#21); a `kind` of
+`id` (default `main`). Both Play and Watch play under a Clock or a fixed depth (#21), starting on a
+1+1 clock (`Session::play_base_ms`/`watch_base_ms`), which is also what Custom opens with; a `kind` of
 `depth` carries `value` (Watch: per side), and a `kind` of `clock` carries `baseMs`/`incMs` in
 ms — presets and Custom base+increment are entirely a page-side concept (`gui/web/app.js`'s
 `CLOCK_PRESETS`/`HYPERBULLET_PRESETS`), resolved to a plain base+increment before the request is
 sent, so the server only ever sees one shape either way a clock was chosen. `POST /api/play`
 carries the Play settings (`side` = white/black/random, plus `kind`/`value`, or `kind=clock` with
-`baseMs`/`incMs` and, for an asymmetric Custom clock, `blackBaseMs`/`blackIncMs`); applying any of
-it starts a new game, since none of a colour, a depth or a clock can sensibly change mid-game.
-`POST /api/watch` carries both a side's setting (`side` = white/black plus the same `kind` shape)
-and a run control (`action` = start/pause/step); unlike Play's one call, a clock's two colours are
-set with two requests, one per side. A setting change **also** restarts the game here now (#21) —
-earlier it applied from the next move without stopping the game; that behaviour is gone, so both
-panels' settings picker can be hidden once a game is on the same way (`gui/web/app.js`'s
-`settingsLocked()`) and a "Change settings" button reopens it. Pause is deliberately **not** an
+`baseMs`/`incMs` and, for an asymmetric Custom clock, `blackBaseMs`/`blackIncMs`); before the
+first move that starts a new game (Random's colour is drawn afresh), but once a move is on the
+board it is refused with 409 unless the game is **paused**, and then it applies in place and the
+game goes on: a side change turns the board, a depth is just the new limit, and a clock gives the
+side(s) named that much time again (`Session::reseed_clock()`). `POST /api/watch` carries both a
+side's setting (`side` = white/black plus the same `kind` shape) and a run control (`action` =
+start/pause/step); unlike Play's one call, a clock's two colours are set with two requests, one
+per side, under the same paused-only rule. So both panels' settings picker is hidden once a game
+is on and until it is paused (`gui/web/app.js`'s `settingsLocked()`). `POST /api/pause` (`on` =
+true/false) is **Play's** pause: the engine's search is dropped (asked for again on Resume), your
+moves are refused and the clock stops (`Session::paused`); Watch keeps Start/Pause. The state's top-level
+`paused` is `Session::paused_now()`: Play's flag, or a Watch game not running with nothing in flight.
+While paused **or over** the Engine panel's toggle works in Play and Watch too
+(`Session::analysis_wanted()`, judged on the position, so a resigned or adjudicated game can still
+be looked at); Resume/Start turn it off again. `POST /api/adjudicate` (`result` = white/black/draw)
+ends a Play or Watch game like a resignation does, with the reason "adjudicated" (`Session::adjudicate()`);
+taking a move back undoes it. Pause is deliberately **not** an
 abort: the move being thought about is finished and played, which is what "after the current
 move" means — and, since a clock counts through Pause for exactly that reason, `GET /api/state`'s
 top-level `clock` object (`whiteMs`, `blackMs`, `running`) is live only while something is

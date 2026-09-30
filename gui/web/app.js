@@ -72,13 +72,12 @@ const HYPERBULLET_PRESETS = [
   { label: '30s+0', baseMs: 30000, incMs: 0 },
 ];
 
-// Local-only settings-form state: which sub-form is showing, whether Custom's
-// fields are open, and whether the picker is forced open over the collapsed
-// summary while a game is on. None of this is server state — it resyncs to
+// Local-only settings-form state: which sub-form is showing and whether
+// Custom's fields are open. None of this is server state — it resyncs to
 // what the server actually applied whenever that changes (renderPlayPanel/
 // renderWatchPanel, via lastPlayClockOn/lastWatchClockOn), which is also what
 // resets it after a successful Apply.
-let playExpanded = false, watchExpanded = false;
+let adjudicateOpen = false;
 let playKindChoice = 'depth', watchKindChoice = 'depth';
 let playCustomOpen = false, watchCustomOpen = false;
 let lastPlayClockOn = null, lastWatchClockOn = null;
@@ -94,11 +93,17 @@ function hasMoves(s) {
   return !!root && root.children.length > 0;
 }
 
-// Whether a game is on for the purposes of collapsing the settings picker:
-// once a move has been played and the game isn't over, changing a setting
-// would restart it, so the picker gives way to a summary instead.
+// Whether the settings picker gives way to a one-line summary: once a move has
+// been played it only opens while the game is paused, since a setting is
+// changed between moves and the server refuses it otherwise.
 function settingsLocked(s) {
-  return hasMoves(s) && s.outcome.state === 'ongoing';
+  return hasMoves(s) && !s.paused;
+}
+
+// Standing still, by a pause or because it is over: where the engine may
+// analyse the game without leaving it.
+function halted(s) {
+  return s.paused || s.outcome.state !== 'ongoing';
 }
 
 function matchPreset(baseMs, incMs) {
@@ -153,9 +158,11 @@ function renderPresets(container, presets, white, black, customOpen, onPick, onC
 }
 
 // Fills a Custom form's four fields (in seconds — the unit the fields use)
-// from the clock they'd apply to, leaving one being typed alone.
+// from the clock the game is set to (1+1 until another is picked). Only when
+// Custom is opened: filling them on every render would put a field back while
+// the next one is being typed.
 function fillCustomForm(prefix, white, black) {
-  const set = (id, seconds) => { if (document.activeElement !== el(id)) el(id).value = seconds; };
+  const set = (id, seconds) => { el(id).value = seconds; };
   set(`${prefix}-custom-white-base`, Math.round(white.baseMs / 1000));
   set(`${prefix}-custom-white-inc`, Math.round(white.incMs / 1000));
   set(`${prefix}-custom-black-base`, Math.round(black.baseMs / 1000));
@@ -387,7 +394,7 @@ function queueValidFor(s) {
 // not sent for the server to refuse.
 function advanceQueue(s) {
   if (queueSending || queue.length === 0 || !queueValidFor(s)) return;
-  if (s.play.thinking || s.turn !== s.play.humanColor) return;
+  if (s.play.thinking || s.paused || s.turn !== s.play.humanColor) return;
   const mv = queue[0];
   const legal = (s.dests[mv.orig] || []).includes(mv.dest) &&
                 (!mv.promo || s.promotions.includes(mv.orig + mv.dest));
@@ -419,10 +426,13 @@ function queueKey() {
 // Draws the queue on top of whatever render() just set the board to: each move is
 // actually played locally (chessground's own `move`, plus the rook or the captured
 // pawn for a castle or an en-passant queued mid-chain) so "the position after them" is
-// what is on screen, and an arrow over each one is what marks it as not really played.
+// what is on screen, and its two squares in chessground's premove colour are what mark
+// it as not really played.
 function replayQueue() {
   for (const mv of queue) applyQueuedMoveVisually(mv);
-  board.setAutoShapes(queue.map(mv => ({ orig: mv.orig, dest: mv.dest, brush: 'yellow' })));
+  const marked = new Map();
+  for (const mv of queue) for (const sq of [mv.orig, mv.dest]) marked.set(sq, 'current-premove');
+  board.set({ highlight: { custom: marked } });
 }
 
 function fileIndex(square) {
@@ -454,6 +464,17 @@ el('new').addEventListener('click', () => { clearQueueSilently(); command('/api/
 el('undo').addEventListener('click', () => { clearQueueSilently(); command('/api/undo', {}); });
 el('flip').addEventListener('click', () => command('/api/flip', {}));
 el('resign').addEventListener('click', () => command('/api/resign', {}));
+el('pause').addEventListener('click', () => {
+  if (state) { clearQueueSilently(); command('/api/pause', { on: !state.paused }); }
+});
+el('adjudicate').addEventListener('click', () => { adjudicateOpen = !adjudicateOpen; render(state); });
+el('adjudicate-choices').addEventListener('click', event => {
+  const button = event.target.closest('button');
+  if (!button) return;
+  adjudicateOpen = false;
+  clearQueueSilently();
+  command('/api/adjudicate', { result: button.dataset.result });
+});
 
 el('sides').addEventListener('click', event => {
   const button = event.target.closest('button');
@@ -470,11 +491,6 @@ el('play-kind').addEventListener('click', event => {
   const button = event.target.closest('button');
   if (!button) return;
   playKindChoice = button.dataset.kind;
-  render(state);
-});
-
-el('play-setting-change').addEventListener('click', () => {
-  playExpanded = true;
   render(state);
 });
 
@@ -519,11 +535,6 @@ el('watch-kind').addEventListener('click', event => {
   render(state);
 });
 
-el('watch-setting-change').addEventListener('click', () => {
-  watchExpanded = true;
-  render(state);
-});
-
 el('watch-custom-form').addEventListener('submit', event => {
   event.preventDefault();
   const whiteBase = Number(el('watch-custom-white-base').value) * 1000;
@@ -548,6 +559,7 @@ el('analysis-line').addEventListener('click', event => {
 });
 
 el('settings-toggle').addEventListener('click', () => openSettings(el('settings').hidden));
+el('share-toggle').addEventListener('click', () => openShare(el('share').hidden));
 
 el('set-evalbar').addEventListener('change', event =>
   command('/api/settings', { evalBar: event.target.checked }));
@@ -557,9 +569,8 @@ initMuteToggle(el('set-sound'));
 
 // Anywhere else closes it, as a menu does; the gear itself is its own toggle.
 document.addEventListener('pointerdown', event => {
-  if (el('settings').hidden) return;
-  if (event.target.closest('#settings, #settings-toggle')) return;
-  openSettings(false);
+  if (!event.target.closest('#settings, #settings-toggle')) openSettings(false);
+  if (!event.target.closest('#share, #share-toggle')) openShare(false);
 });
 
 el('modes').addEventListener('click', event => {
@@ -614,6 +625,7 @@ const NAV_KEYS = {
 document.addEventListener('keydown', event => {
   if (event.key === 'Escape' && pendingPromotion) return finishPromotion('');
   if (event.key === 'Escape' && !el('settings').hidden) return openSettings(false);
+  if (event.key === 'Escape' && !el('share').hidden) return openShare(false);
   if (event.key === 'Escape' && queue.length) return clearQueue();
   // A shortcut must never fire into a FEN or a PGN being typed: there Home,
   // End and the arrows are the text field's own.
@@ -632,16 +644,6 @@ function typingSomewhere() {
 }
 
 // --------------------------------------------------------------------- drawing
-
-const MODE_NOTES = {
-  analyse: 'Free play: move for both sides, set up any position, step through the game ' +
-           'with the arrow keys. A move played from an earlier position starts a side line. ' +
-           'Turn the engine on to see its eval and its best line for whatever is on the board.',
-  play:    'You against Ascaniusfish. Load a FEN to start from a position of your own.',
-  watch:   'Ascaniusfish against itself, one engine process per side. Start plays the game on; ' +
-           'Pause takes effect after the move being thought about, and Step plays exactly one. ' +
-           'Stepping back into the game pauses it — the engines only ever play from the end of a line.',
-};
 
 const OUTCOME_TEXT = {
   white_wins: 'White wins',
@@ -684,7 +686,7 @@ function render(s) {
   // turn — a direct move attempted out of turn is refused there as before. In Watch
   // mode the board is yours whenever neither engine is thinking. Elsewhere both
   // colours are free.
-  const movableColor = over ? undefined
+  const movableColor = over || (playing && s.paused) ? undefined
                       : playing ? s.play.humanColor
                       : s.mode === 'watch' ? (s.watch.thinking ? undefined : 'both')
                       : 'both';
@@ -715,15 +717,22 @@ function render(s) {
 
   for (const button of el('modes').children)
     button.classList.toggle('active', button.dataset.mode === s.mode);
-  el('mode-note').textContent = MODE_NOTES[s.mode] || '';
 
   el('status').textContent = statusLine(s);
   el('status').classList.toggle('over', over);
   el('undo').disabled = (!s.tree.canBack && !s.play.resigned) || s.play.thinking;
+  el('pause').hidden = !playing || over;
+  el('pause').textContent = s.paused ? 'Resume' : 'Pause';
   el('resign').hidden = !playing;
   el('resign').disabled = over;
+  el('adjudicate').hidden = s.mode === 'analyse';
+  el('adjudicate').disabled = over;
+  if (over || s.mode === 'analyse') adjudicateOpen = false;
+  el('adjudicate').classList.toggle('active', adjudicateOpen);
+  el('adjudicate-choices').hidden = !adjudicateOpen;
   el('to-analyse').hidden = !over || s.mode === 'analyse';
 
+  renderMaterial(s);
   renderClockVisibility(s);
   renderPlayPanel(s);
   renderWatchPanel(s);
@@ -739,18 +748,57 @@ function render(s) {
   if (pendingPromotion) openPromotion();
 }
 
+// ------------------------------------------------------------------ material
+
+// Lichess's material diff: for each kind of piece, whichever side has more of it
+// shows the difference as the opponent's pieces it has taken, and the side
+// ahead on points shows "+N". Counted from the FEN rather than from captures, so
+// a promotion or a position loaded from a FEN comes out right too.
+const MATERIAL_ROLES = [['q', 'queen', 9], ['r', 'rook', 5], ['b', 'bishop', 3], ['n', 'knight', 3], ['p', 'pawn', 1]];
+
+function renderMaterial(s) {
+  const count = {};
+  for (const ch of s.fen.split(' ')[0]) if (/[a-z]/i.test(ch)) count[ch] = (count[ch] || 0) + 1;
+  const up = { white: [], black: [] };
+  let points = 0;
+  for (const [code, role, value] of MATERIAL_ROLES) {
+    const diff = (count[code.toUpperCase()] || 0) - (count[code] || 0);
+    points += diff * value;
+    if (diff > 0) up.white.push(...Array(diff).fill([role, 'black']));
+    if (diff < 0) up.black.push(...Array(-diff).fill([role, 'white']));
+  }
+  const top = s.orientation === 'white' ? 'black' : 'white';
+  el('strip-top').className = `player-strip ${top}`;
+  el('strip-bottom').className = `player-strip ${top === 'white' ? 'black' : 'white'}`;
+  drawMaterial(el('material-top'), up[top], top === 'white' ? points : -points);
+  drawMaterial(el('material-bottom'), up[top === 'white' ? 'black' : 'white'], top === 'white' ? -points : points);
+}
+
+function drawMaterial(box, pieces, points) {
+  box.replaceChildren();
+  pieces.forEach(([role, color], i) => {
+    const piece = document.createElement('piece');
+    piece.className = `${role} ${color}` + (i > 0 && pieces[i - 1][0] === role ? ' same' : '');
+    box.append(piece);
+  });
+  if (points > 0) {
+    const score = document.createElement('span');
+    score.className = 'score-up';
+    score.textContent = `+${points}`;
+    box.append(score);
+  }
+}
+
 // -------------------------------------------------------------------- clock
 
-// Two chips above and below the board, flipping with orientation like a real
-// chess site's; hidden entirely outside a clocked Play or Watch game. Only
-// visibility is decided here — tickClocks() draws the numbers on its own
-// timer — but a visibility change moves how much height the board may have,
-// so it also re-fits it, the same as a resize.
+// Two chips above and below the board, in the strips beside the material,
+// flipping with orientation like a real chess site's; hidden entirely outside
+// a clocked Play or Watch game. Only visibility is decided here — tickClocks()
+// draws the numbers on its own timer. The strips keep their height either way,
+// so the board does not change size for it.
 function renderClockVisibility(s) {
   const on = (s.mode === 'play' && s.play.clockOn) || (s.mode === 'watch' && s.watch.clockOn);
-  const changed = el('clock-top').hidden === on;
   el('clock-top').hidden = el('clock-bottom').hidden = !on;
-  if (changed) fitBoard();
   if (on) tickClocks();
 }
 
@@ -770,11 +818,10 @@ function renderPlayPanel(s) {
   if (play.clockOn !== lastPlayClockOn) {
     lastPlayClockOn = play.clockOn;
     playKindChoice = play.clockOn ? 'clock' : 'depth';
-    playExpanded = false;
     playCustomOpen = false;
   }
 
-  const collapsed = settingsLocked(s) && !playExpanded;
+  const collapsed = settingsLocked(s);
   el('play-setting-summary').hidden = !collapsed;
   el('play-setting-form').hidden = collapsed;
   if (collapsed) el('play-setting-text').textContent = playSettingSummary(play);
@@ -789,9 +836,12 @@ function renderPlayPanel(s) {
 
   renderPresets(el('play-presets'), CLOCK_PRESETS, play.clockWhite, play.clockBlack, playCustomOpen,
     preset => applyPlayPreset(preset),
-    () => { playCustomOpen = !playCustomOpen; render(state); });
+    () => {
+      playCustomOpen = !playCustomOpen;
+      if (playCustomOpen) fillCustomForm('play', state.play.clockWhite, state.play.clockBlack);
+      render(state);
+    });
   el('play-custom-form').hidden = !playCustomOpen;
-  fillCustomForm('play', play.clockWhite, play.clockBlack);
 
   el('engine').textContent = engineLine(s);
   el('engine').classList.toggle('bad', !!play.error);
@@ -830,11 +880,10 @@ function renderWatchPanel(s) {
   if (w.clockOn !== lastWatchClockOn) {
     lastWatchClockOn = w.clockOn;
     watchKindChoice = w.clockOn ? 'clock' : 'depth';
-    watchExpanded = false;
     watchCustomOpen = false;
   }
 
-  const collapsed = settingsLocked(s) && !watchExpanded;
+  const collapsed = settingsLocked(s);
   el('watch-setting-summary').hidden = !collapsed;
   el('watch-setting-form').hidden = collapsed;
   if (collapsed) el('watch-setting-text').textContent = watchSettingSummary(w);
@@ -854,9 +903,12 @@ function renderWatchPanel(s) {
   renderPresets(el('watch-presets'), [...CLOCK_PRESETS, ...HYPERBULLET_PRESETS], w.clockWhite, w.clockBlack,
     watchCustomOpen,
     preset => applyWatchPreset(preset),
-    () => { watchCustomOpen = !watchCustomOpen; render(state); });
+    () => {
+      watchCustomOpen = !watchCustomOpen;
+      if (watchCustomOpen) fillCustomForm('watch', state.watch.clockWhite, state.watch.clockBlack);
+      render(state);
+    });
   el('watch-custom-form').hidden = !watchCustomOpen;
-  fillCustomForm('watch', w.clockWhite, w.clockBlack);
 
   const over = s.outcome.state !== 'ongoing';
   // Start and Step only make sense at the end of a line, which is the only
@@ -864,6 +916,9 @@ function renderWatchPanel(s) {
   el('watch-run').textContent = w.running ? 'Pause' : 'Start';
   el('watch-run').disabled = !w.running && (over || !w.atTip);
   el('watch-step').disabled = w.running || w.thinking || over || !w.atTip;
+  // One move and a pause is a fixed-depth thing: on a clock the time would run
+  // on through the pause anyway.
+  el('watch-step').hidden = w.clockOn;
 
   el('watch-state').textContent = watchLine(s);
   el('watch-state').classList.toggle('bad', !!w.error);
@@ -913,12 +968,13 @@ function renderEngine(s) {
   // whatever the gear says. In Play and Watch the panel is only the line box, so
   // with that switch off there is nothing for it to hold and the two modes look
   // exactly as they did before this existed.
-  panel.hidden = !analysing && !showLine;
+  const canToggle = analysing || (halted(s) && s.mode !== 'analyse');
+  panel.hidden = !canToggle && !showLine;
   if (panel.hidden) return;
 
   panel.classList.toggle('running', (a.running || s.play.thinking || s.watch.thinking) && !a.error);
   panel.classList.toggle('has-line', showLine && (known || a.running));
-  el('analysis-toggle').hidden = !analysing;
+  el('analysis-toggle').hidden = !canToggle;
   el('analysis-toggle').textContent = a.on ? 'Turn engine off' : 'Turn engine on';
   el('analysis-score').textContent = s.settings.evalBar && known ? scoreText(ev.score) : '';
 
@@ -1006,7 +1062,15 @@ function renderSettings(s) {
   el('set-engine-line').checked = s.settings.engineLine;
 }
 
+function openShare(open) {
+  if (open) openSettings(false);
+  el('share').hidden = !open;
+  el('share-toggle').setAttribute('aria-expanded', open ? 'true' : 'false');
+  el('share-toggle').classList.toggle('active', open);
+}
+
 function openSettings(open) {
+  if (open) openShare(false);
   el('settings').hidden = !open;
   el('settings-toggle').setAttribute('aria-expanded', open ? 'true' : 'false');
   el('settings-toggle').classList.toggle('active', open);
@@ -1178,9 +1242,24 @@ function fitBoard() {
   const frame = document.querySelector('.board-frame');
   const room = Math.min(document.querySelector('.board-fit').clientWidth, boardRoom());
   const size = `${Math.max(256, Math.floor(room / 8) * 8)}px`;
-  if (frame.style.width === size) return;    // the observer hearing our own change
-  frame.style.width = frame.style.height = size;
-  board.redrawAll();
+  if (frame.style.width !== size) {         // otherwise the observer hearing our own change
+    frame.style.width = frame.style.height = size;
+    board.redrawAll();
+  }
+  alignStrips(frame);
+}
+
+// The material and clock strips span the board, not the column: when the height
+// decides the board's size the column is wider than it, and a clock out at the
+// column's edge would float off to the right of the board. The eval bar coming
+// or going moves the board too, and the observer on .board-fit hears that.
+function alignStrips(frame) {
+  const column = document.querySelector('.board-column').getBoundingClientRect();
+  const board = frame.getBoundingClientRect();
+  for (const strip of [el('strip-top'), el('strip-bottom')]) {
+    strip.style.marginLeft = `${board.left - column.left}px`;
+    strip.style.width = `${board.width}px`;
+  }
 }
 
 // How tall the board may be. The page does not scroll, so a board taller than
@@ -1197,7 +1276,7 @@ function outerHeight(node) {
 function boardRoom() {
   if (stacked.matches) return Infinity;
   const column = document.querySelector('.board-column');
-  return column.clientHeight - outerHeight(el('status')) - outerHeight(el('clock-top')) - outerHeight(el('clock-bottom'));
+  return column.clientHeight - outerHeight(el('status')) - outerHeight(el('strip-top')) - outerHeight(el('strip-bottom'));
 }
 
 const boardFit = new ResizeObserver(fitBoard);

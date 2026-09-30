@@ -47,10 +47,16 @@ header {
 }
 
 h1 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   margin: 0;
   font-size: 18px;
   letter-spacing: 0.04em;
 }
+
+/* The engine's sigil, in front of its name. */
+.logo { width: 34px; height: 34px; margin: -6px 0; }
 
 h2 {
   margin: 0 0 8px;
@@ -129,6 +135,13 @@ nav button.active {
 
 .settings[hidden] { display: none; }
 .settings h2 { margin: 0; }
+
+/* Share holds the FEN and the PGN, which are for taking a position or a game
+   somewhere else and not something to look at during one. It is the settings
+   panel's sibling, so the two share their look; wider, for the PGN. */
+.share-panel { width: 380px; }
+.share-panel .controls { margin-top: 8px; }
+#pgn-form textarea, #fen-form input { width: 100%; }
 
 .switch {
   display: flex;
@@ -213,16 +226,63 @@ main {
 
 .status.over { color: var(--text); font-weight: 600; }
 
-/* Above and below the board, flipping with orientation (app.js's
-   renderClockVisibility()/tickClocks()); hidden outside a clocked game, which
-   is also what boardRoom() reads via outerHeight() to give the board back the
-   space. */
-.clock-chip {
-  margin: 0 0 8px;
-  padding: 4px 10px;
+/* Above and below the board, one per side and flipping with orientation: the
+   material that side is up on the left, its clock on the right. A fixed height
+   whether or not either is showing, so neither a capture nor a clock coming on
+   resizes the board; fitBoard() (app.js) lines them up with the board itself
+   rather than the column, which is wider when the height decides the size. */
+.player-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  height: 44px;
+  padding: 0 10px;
   border: 1px solid var(--line);
   border-radius: 6px;
-  background: var(--panel);
+}
+
+/* A band in its own side's colour, so the pieces it has taken (the other side's)
+   stand out against it: white pieces on the black band, black ones on the white.
+   app.js's renderMaterial() says which side each strip belongs to. */
+.player-strip.white { background: #ece7dd; color: #1b1a17; border-color: #ece7dd; }
+.player-strip.black { background: #0e0d0c; color: #ece7dd; }
+.player-strip.white .material { color: #55504a; }
+.player-strip.black .material { color: #b5aea3; }
+
+#strip-top { margin-bottom: 6px; }
+#strip-bottom { margin-top: 6px; }
+
+/* The pieces are chessground's own `.cg-wrap piece.<role>.<color>` images,
+   hence the `cg-wrap` class, sized down and taken out of the board's absolute
+   grid. Several of one kind overlap, as on lichess. */
+.material.cg-wrap {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.material.cg-wrap piece {
+  position: static;
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  will-change: auto;
+}
+
+.material.cg-wrap piece + piece.same { margin-left: -19px; }
+.material.cg-wrap piece + piece:not(.same) { margin-left: 2px; }
+.material .score-up { margin-left: 5px; }
+
+.clock-chip {
+  margin: 0 0 0 auto;
+  min-width: 5.5em;
+  padding: 2px 4px;
+  border: 0;
+  background: none;
   font-size: 20px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
@@ -230,8 +290,8 @@ main {
 }
 
 .clock-chip[hidden] { display: none; }
-.clock-chip.low { color: var(--bad); }
-.clock-chip.out { color: var(--bad); animation: pulse 1.4s ease-in-out infinite; }
+.player-strip .clock-chip.low { color: #c0532a; }
+.player-strip .clock-chip.out { color: #c0532a; animation: pulse 1.4s ease-in-out infinite; }
 
 aside {
   flex: 0 0 300px;
@@ -354,8 +414,10 @@ a.button:hover { border-color: var(--accent); }
 }
 
 /* Once a game is on, the Clock/Fixed-depth picker gives way to this one line
-   plus a button back into it (app.js's settingsLocked()) — so a stray click
-   while reviewing a game can't restart it. */
+   until the game is paused (app.js's settingsLocked()) — a setting is changed
+   between moves, not while one is being thought about. */
+.setting-summary[hidden] { display: none; }
+
 .setting-summary {
   display: flex;
   align-items: center;
@@ -543,3 +605,6 @@ select:focus, input:focus { outline: none; border-color: var(--accent); }
   .board-column, aside { flex: 1 1 auto; width: 100%; max-width: none; }
   aside { overflow-y: visible; }
 }
+
+#adjudicate.active { border-color: var(--accent); color: var(--accent); }
+#adjudicate-choices[hidden] { display: none; }

@@ -60,7 +60,8 @@ export function playForTransition(prev, next) {
   if (prev.outcome.state === 'ongoing' && next.outcome.state !== 'ongoing') play('notify');
 }
 
+// The checkbox reads "Sound", so ticked means sound on.
 export function initMuteToggle(checkbox) {
-  checkbox.checked = isMuted();
-  checkbox.addEventListener('change', event => setMuted(event.target.checked));
+  checkbox.checked = !isMuted();
+  checkbox.addEventListener('change', event => setMuted(!event.target.checked));
 }

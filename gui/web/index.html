@@ -12,6 +12,7 @@
 <meta name="color-scheme" content="dark">
 <meta name="darkreader-lock">
 <title>Ascaniusfish</title>
+<link rel="icon" type="image/png" href="favicon.png">
 <link rel="stylesheet" href="vendor/chessground.base.css">
 <link rel="stylesheet" href="vendor/chessground.brown.css">
 <link rel="stylesheet" href="vendor/chessground.cburnett.css">
@@ -20,13 +21,21 @@
 <body>
 
 <header>
-  <h1>Ascaniusfish</h1>
+  <h1><img src="logo.png" alt="" class="logo">Ascaniusfish</h1>
   <nav id="modes" aria-label="Mode">
     <button data-mode="analyse">Analyse</button>
     <button data-mode="play">Play</button>
     <button data-mode="watch">Watch</button>
   </nav>
   <span id="link" title="connection to the engine server"></span>
+  <button id="share-toggle" class="gear" title="Share: FEN and PGN" aria-label="Share"
+          aria-expanded="false" aria-controls="share">
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
+         stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>
+      <path d="M8.6 10.6l6.8-4M8.6 13.4l6.8 4"/>
+    </svg>
+  </button>
   <button id="settings-toggle" class="gear" title="Settings" aria-label="Settings"
           aria-expanded="false" aria-controls="settings">&#x2699;</button>
 
@@ -52,11 +61,40 @@
     <p class="note">Whether this browser plays sound, so it stays a
     per-browser choice (in localStorage) rather than one the server holds.</p>
   </section>
+  <section class="panel settings share-panel" id="share" hidden>
+    <h2>Position</h2>
+      <form id="fen-form" autocomplete="off">
+        <input id="fen" type="text" spellcheck="false" aria-label="FEN">
+        <div class="controls">
+          <button type="submit">Load FEN</button>
+          <button type="button" id="copy-fen">Copy</button>
+        </div>
+      </form>
+
+    <h2>Game</h2>
+      <form id="pgn-form" autocomplete="off">
+        <textarea id="pgn" rows="7" spellcheck="false" aria-label="PGN"></textarea>
+        <div class="controls">
+          <button type="submit">Load PGN</button>
+          <button type="button" id="copy-pgn">Copy</button>
+          <a id="download-pgn" class="button" download="ascaniusfish.pgn">Download</a>
+        </div>
+      </form>
+      <p class="note">Variations are written as nested parentheses, so a game
+      saved here comes back with its side lines.</p>
+  </section>
 </header>
 
 <main>
   <section class="board-column">
-    <p id="clock-top" class="clock-chip" hidden></p>
+    <!-- One strip per side, flipping with the board: the material that side is
+         up (the pieces it has taken, net of what it lost, and the point sum)
+         and, in a clocked game, its clock. Always there, so the board keeps
+         its size whether a clock is on or not. -->
+    <div class="player-strip" id="strip-top">
+      <span id="material-top" class="material cg-wrap"></span>
+      <p id="clock-top" class="clock-chip" hidden></p>
+    </div>
     <div class="board-row">
       <div id="evalbar" class="evalbar" hidden aria-hidden="true">
         <div class="evalbar-fill"></div>
@@ -68,39 +106,48 @@
         </div>
       </div>
     </div>
-    <p id="clock-bottom" class="clock-chip" hidden></p>
+    <div class="player-strip" id="strip-bottom">
+      <span id="material-bottom" class="material cg-wrap"></span>
+      <p id="clock-bottom" class="clock-chip" hidden></p>
+    </div>
     <p id="status" class="status"></p>
   </section>
 
   <aside>
-    <p id="mode-note" class="note"></p>
-
     <div class="controls">
       <button id="new">New game</button>
       <button id="undo">Take back</button>
       <button id="flip">Flip board</button>
+      <button id="pause" hidden>Pause</button>
       <button id="resign" hidden>Resign</button>
+      <button id="adjudicate" hidden title="Decide the result of this game yourself">Adjudicate</button>
       <button id="to-analyse" hidden>Analyse this game</button>
     </div>
+    <div id="adjudicate-choices" class="controls" hidden>
+      <button data-result="white" title="White wins">1&ndash;0</button>
+      <button data-result="draw" title="Draw">&frac12;&ndash;&frac12;</button>
+      <button data-result="black" title="Black wins">0&ndash;1</button>
+    </div>
+    <p id="message" class="message" hidden></p>
 
     <section class="panel" id="play-panel" hidden>
       <h2>Ascaniusfish</h2>
       <p id="engine" class="engine"></p>
-      <div class="field">
-        <span class="label">You play</span>
-        <div id="sides" class="controls">
-          <button data-side="white">White</button>
-          <button data-side="black">Black</button>
-          <button data-side="random">Random</button>
-        </div>
-      </div>
-
       <p id="play-setting-summary" class="setting-summary" hidden>
         <span id="play-setting-text"></span>
-        <button type="button" id="play-setting-change">Change settings</button>
+        <span>Pause to change it.</span>
       </p>
 
       <div id="play-setting-form">
+        <div class="field">
+          <span class="label">You play</span>
+          <div id="sides" class="controls">
+            <button data-side="white">White</button>
+            <button data-side="black">Black</button>
+            <button data-side="random">Random</button>
+          </div>
+        </div>
+
         <div class="field">
           <span class="label">Engine thinks</span>
           <div id="play-kind" class="controls">
@@ -132,8 +179,9 @@
         </div>
       </div>
 
-      <p class="note">Changing a setting starts a new game from the position
-      the current game started from.</p>
+      <p class="note">Settings can be changed while the game is paused, and the
+      game goes on from where it is. A new clock gives both sides that much time
+      again.</p>
     </section>
 
     <section class="panel" id="watch-panel" hidden>
@@ -146,7 +194,7 @@
 
       <p id="watch-setting-summary" class="setting-summary" hidden>
         <span id="watch-setting-text"></span>
-        <button type="button" id="watch-setting-change">Change settings</button>
+        <span>Pause to change it.</span>
       </p>
 
       <div id="watch-setting-form">
@@ -191,9 +239,9 @@
         </div>
       </div>
 
-      <p class="note">Changing a setting starts a new self-play game. Load a
-      FEN below to start Watch from a position of your own — the side to move
-      in it plays first.</p>
+      <p class="note">Settings can be changed while the game is paused, and it
+      goes on from where it is. Load a FEN (Share) to start Watch from a position
+      of your own — the side to move in it plays first.</p>
     </section>
 
     <!-- What the engine thinks of the position on the board, in every mode: the
@@ -227,31 +275,6 @@
       </div>
     </section>
 
-    <section class="panel">
-      <h2>Position</h2>
-      <form id="fen-form" autocomplete="off">
-        <input id="fen" type="text" spellcheck="false" aria-label="FEN">
-        <div class="controls">
-          <button type="submit">Load FEN</button>
-          <button type="button" id="copy-fen">Copy</button>
-        </div>
-      </form>
-      <p id="message" class="message" hidden></p>
-    </section>
-
-    <section class="panel">
-      <h2>Game</h2>
-      <form id="pgn-form" autocomplete="off">
-        <textarea id="pgn" rows="7" spellcheck="false" aria-label="PGN"></textarea>
-        <div class="controls">
-          <button type="submit">Load PGN</button>
-          <button type="button" id="copy-pgn">Copy</button>
-          <a id="download-pgn" class="button" download="ascaniusfish.pgn">Download</a>
-        </div>
-      </form>
-      <p class="note">Variations are written as nested parentheses, so a game
-      saved here comes back with its side lines.</p>
-    </section>
   </aside>
 </main>
 

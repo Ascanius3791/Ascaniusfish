@@ -502,8 +502,8 @@ constexpr long long ENGINE_IDLE_MS = 5000;
 // of the room this repo deliberately keeps for running several engines at once.
 static bool slot_wanted(const Session& session, int slot)
 {
-    if(session.mode==Mode::WATCH)
-    return slot==SLOT_WHITE || slot==SLOT_BLACK;
+    if(session.mode==Mode::WATCH)      // the solo engine only to analyse a paused game
+    return slot==SLOT_WHITE || slot==SLOT_BLACK || (slot==SLOT_SOLO && session.analysis_on);
     return slot==SLOT_SOLO;
 }
 
@@ -750,6 +750,8 @@ static Response handle_post_authed(const Request& req)
         // move is exactly how you tell it what to think about next.
         if(session.thinking())
         return Response::json(json::error("the engine is still thinking"), 409);
+        if(session.mode==Mode::PLAY && session.paused)
+        return Response::json(json::error("the game is paused"), 409);
         // In Play mode a move of yours is also the answer to a failed search:
         // it clears the error, so the engine is asked again.
         session.engine_error.clear();
@@ -871,6 +873,42 @@ static Response handle_post_authed(const Request& req)
         session.resign();
         abort_search(session);   // a finished game is nothing to analyse
     }
+    else if(req.path=="/api/pause")
+    {
+        // Play mode's pause: the engine stops (a search under way is dropped, and
+        // asked for again on Resume), and so does the clock, which is what makes
+        // this different from thinking about your move. Watch has Start/Pause.
+        auto on = body.find("on");
+        if(on==body.end() || (on->second!="true" && on->second!="false"))
+        return Response::json(json::error("on must be true or false"), 400);
+        if(session.mode!=Mode::PLAY)
+        return Response::json(json::error("only a game against the engine pauses here"), 409);
+        bool want = on->second=="true";
+        if(want!=session.paused)
+        {
+            abort_search(session);         // also what an analysis running under the pause is
+            session.paused = want;
+            if(!want)
+            {
+                session.analysis_on = false;   // the analysis was for the pause, not the game
+                session.clock_sync(now_ms());  // your clock runs again from this press
+            }
+        }
+    }
+    else if(req.path=="/api/adjudicate")
+    {
+        auto given = body.find("result");
+        if(given==body.end() || (given->second!="white" && given->second!="black" && given->second!="draw"))
+        return Response::json(json::error("result must be white, black or draw"), 400);
+        std::string reason;
+        if(session.mode==Mode::ANALYSE)
+        return Response::json(json::error("there is no game to adjudicate in Analyse mode"), 409);
+        if(session.result(reason)!=Outcome::ONGOING)
+        return Response::json(json::error("the game is already over"), 409);
+        abort_search(session);
+        session.adjudicate(given->second=="white" ? Outcome::WHITE_WINS
+                         : given->second=="black" ? Outcome::BLACK_WINS : Outcome::DRAW);
+    }
     else if(req.path=="/api/mode")
     {
         auto mode = body.find("mode");
@@ -921,6 +959,11 @@ static Response handle_post_authed(const Request& req)
             else
             limits.depth = setting.depth;
         }
+        // A game that is on takes a new setting only while paused, and goes on
+        // from where it is. Before the first move there is nothing to keep.
+        bool going = session.mode==Mode::PLAY && session.has_moves();
+        if(going && !session.paused)
+        return Response::json(json::error("pause the game to change its settings"), 409);
         abort_search(session);
         session.side_choice = side;
         session.limits = limits;
@@ -929,7 +972,18 @@ static Response handle_post_authed(const Request& req)
         session.play_base_ms[1] = base_ms[1];
         session.play_inc_ms[0] = inc_ms[0];
         session.play_inc_ms[1] = inc_ms[1];
+        if(!going)
         session.start_play();
+        else
+        {
+            if(given!=body.end())
+            session.choose_side();
+            if(setting.given && clock_on)
+            {
+                session.reseed_clock(0);
+                session.reseed_clock(1);
+            }
+        }
     }
     else if(req.path=="/api/watch")
     {
@@ -951,6 +1005,14 @@ static Response handle_post_authed(const Request& req)
             return Response::json(json::error(error), 400);
             if(setting.given)
             {
+                // Like Play: a game that is on takes it only while paused, and goes on.
+                if(session.mode==Mode::WATCH && session.has_moves())
+                {
+                    if(!session.paused_now())
+                    return Response::json(json::error("pause the game to change its settings"), 409);
+                    abort_search(session);
+                }
+                else
                 restart = true;
                 session.watch_clock_on = setting.clock;
                 if(setting.clock)
@@ -960,6 +1022,8 @@ static Response handle_post_authed(const Request& req)
                 }
                 else
                 session.watch_limits[i].depth = setting.depth;
+                if(!restart && setting.clock)
+                session.reseed_clock(i);
             }
         }
         if(restart)
@@ -984,6 +1048,9 @@ static Response handle_post_authed(const Request& req)
                 if(!session.at_tip())
                 return Response::json(json::error("go to the end of the line first"), 409);
                 session.engine_error.clear();
+                if(session.analysing())
+                abort_search(session);           // the analysis was for the pause
+                session.analysis_on = false;
                 session.watch_running = action->second=="start";
                 session.watch_step = action->second=="step";
                 session.clock_sync(now_ms());   // arm the resuming mover's clock from this press

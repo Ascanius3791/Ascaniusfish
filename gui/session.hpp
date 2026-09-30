@@ -173,11 +173,12 @@ class Session
     // mode (Play's applies to both colours from a preset, or per colour from
     // Custom; Watch's the same, scoped by the existing per-side setting
     // calls). [0] white, [1] black. A preset or Custom choice, like a side or
-    // a depth, restarts the game — see start_play()/start_watch().
-    bool play_clock_on = false;
-    long long play_base_ms[2] = {0, 0}, play_inc_ms[2] = {0, 0};
-    bool watch_clock_on = false;
-    long long watch_base_ms[2] = {0, 0}, watch_inc_ms[2] = {0, 0};
+    // a depth, restarts the game — see start_play()/start_watch(). Both modes
+    // start on a 1+1 clock, which is also what Custom opens with.
+    bool play_clock_on = true;
+    long long play_base_ms[2] = {60000, 60000}, play_inc_ms[2] = {1000, 1000};
+    bool watch_clock_on = true;
+    long long watch_base_ms[2] = {60000, 60000}, watch_inc_ms[2] = {1000, 1000};
 
     // The live clock of whichever game is on. Charged and re-armed by
     // clock_sync(), fed an explicit `now` by every call site rather than
@@ -190,6 +191,11 @@ class Session
     mutable long long clock_remaining_ms[2] = {0, 0};
     mutable long long clock_mover_since_ms = 0;   // 0 = not currently ticking
     bool flagged = false, flagged_white = false;  // a clock reaching zero, like a resignation
+
+    // Play mode's pause: the engine does not move, your own moves are refused and
+    // the clock stands still, until it is lifted. Watch has its own (watch_running).
+    // Settings change, and the analysis runs, only while this holds — see paused_now().
+    bool paused = false;
 
     Search_Kind searching = Search_Kind::NONE;
 
@@ -264,10 +270,27 @@ class Session
     void start_play()
     {
         mode = Mode::PLAY;
-        human_white = side_choice==Side_Choice::RANDOM ? coin_flip() : side_choice==Side_Choice::WHITE;
-        flipped = !human_white;
+        choose_side();
         set_start(start_pos, start_halfmove, start_fullmove);
     }
+
+    // Resolves "You play" into a colour and turns the board to it. Also what a
+    // change of side does to a game that is already on.
+    void choose_side()
+    {
+        human_white = side_choice==Side_Choice::RANDOM ? coin_flip() : side_choice==Side_Choice::WHITE;
+        flipped = !human_white;
+    }
+
+    // Whether a move has been played in this game yet. Before that a setting
+    // may as well start the game over, which is what keeps Random's colour
+    // being drawn afresh; after it a setting changes the game as it stands.
+    bool has_moves() const { return !tree.node(0).children.empty(); }
+
+    // Gives a colour its clock's full base time again. What a new clock setting
+    // does to a game that is on: the numbers on the clocks are the game's, so
+    // picking a clock means picking how much time is left.
+    void reseed_clock(int colour) { clock_remaining_ms[colour] = clocked_now() ? clock_base_ms(colour) : 0; }
 
     // Watch's analogue of start_play(): a new Clock/Fixed-depth or preset/
     // Custom choice restarts the self-play game from the position it began
@@ -427,6 +450,17 @@ class Session
     // one step was asked for), the cursor is at the end of the line — stepping
     // back to look at an earlier position is not a request to play there — and
     // the game is not over.
+    // Whether the game is standing still by the player's choice: Play's pause,
+    // or a Watch game that is not running and has nothing in flight (which
+    // includes one not started yet). A game that is over is not "paused" — it
+    // is finished, and the page treats the two alike where that matters.
+    bool paused_now() const
+    {
+        return mode==Mode::PLAY ? paused
+             : mode==Mode::WATCH ? !(watch_running || watch_step || watching())
+             : false;
+    }
+
     bool watch_to_move() const
     {
         std::string reason;
@@ -474,7 +508,7 @@ class Session
         return false;
         if(mode==Mode::WATCH)
         return watching() || watch_running || watch_step;
-        return true;
+        return !paused;
     }
 
     // Brings the live clock up to date with `now`: charges whatever ticked
@@ -535,11 +569,16 @@ class Session
 
     // Whether Analyse mode wants a search running: the toggle is on, the
     // engine is alive, and the position is one that still has moves.
+    // Play and Watch offer it too while the game stands still (paused, or over):
+    // then the position is worth a look, and nothing else wants the engine. What
+    // decides whether there is anything to search is the position itself — a game
+    // that ended by resignation or adjudication still has a position with moves.
     bool analysis_wanted() const
     {
-        std::string reason;
-        return mode==Mode::ANALYSE && analysis_on && !analysis_finished
-            && engine_error.empty() && result(reason)==Outcome::ONGOING;
+        std::string reason, game;
+        bool standing = mode==Mode::ANALYSE || paused_now() || result(game)!=Outcome::ONGOING;
+        return standing && analysis_on && !analysis_finished
+            && engine_error.empty() && tree.outcome(reason)==Outcome::ONGOING;
     }
 
     // Records what the engine's search found for the move just played.
@@ -583,9 +622,9 @@ class Session
             error = "the game ended on time — start a new game";
             return false;
         }
-        if(resigned)
+        if(resigned || adjudicated)
         {
-            resigned = false;   // taking back a resignation plays the game on
+            resigned = adjudicated = false;   // taking back a resignation or a ruling plays the game on
             return true;
         }
         if(tree.at_root())
@@ -609,13 +648,23 @@ class Session
         resigned_white = mode==Mode::PLAY ? human_white : tree.position().white_move;
     }
 
+    // The result, decided by the player rather than by the game. Like a
+    // resignation it ends the game whatever the board says; taking a move back
+    // undoes it.
+    void adjudicate(Outcome outcome)
+    {
+        adjudicated = true;
+        adjudged = outcome;
+        watch_pause();
+    }
+
     // The engine only answers at the end of a line: stepping back into the game
     // to look around is not a request for it to play there. Playing a move from
     // an earlier position makes a new end, and then it does answer.
     bool engine_to_move() const
     {
         std::string reason;
-        return mode==Mode::PLAY && tree.at_tip() && result(reason)==Outcome::ONGOING
+        return mode==Mode::PLAY && !paused && tree.at_tip() && result(reason)==Outcome::ONGOING
             && tree.position().white_move!=human_white;
     }
 
@@ -632,6 +681,11 @@ class Session
         {
             reason = std::string(flagged_white ? "white" : "black") + " loses on time";
             return flagged_white ? Outcome::BLACK_WINS : Outcome::WHITE_WINS;
+        }
+        if(adjudicated)
+        {
+            reason = "adjudicated";
+            return adjudged;
         }
         return tree.outcome(reason);
     }
@@ -659,6 +713,8 @@ class Session
         start_fullmove = tree.start_fullmove_number();
         start_fen = Game::fen_of(start_pos, tree.node(0).key[13], start_halfmove, start_fullmove);
         resigned = false;
+        adjudicated = false;
+        paused = false;
         flagged = false;
         flagged_white = false;
         engine_error.clear();
@@ -713,6 +769,10 @@ class Session
         o.key("gameSerial").num(game_serial());
         o.key("id").str(id);
         o.key("mode").str(mode_name(mode));
+        // The game is standing still because the player stopped it (Play's Pause,
+        // or a Watch game not running): where settings may change and the engine
+        // may analyse. Not true of a finished game — the page adds that itself.
+        o.key("paused").boolean(paused_now());
         o.key("orientation").str(flipped ? "black" : "white");
         o.key("fen").str(tree.fen());
         o.key("turn").str(pos.white_move ? "white" : "black");
@@ -806,6 +866,7 @@ class Session
         write_clock_setting(o, "clockBlack", play_base_ms[1], play_inc_ms[1]);
         o.key("thinking").boolean(thinking());
         o.key("engineTurn").boolean(engine_to_move());
+        o.key("paused").boolean(paused);
         o.key("resigned").boolean(resigned);
         o.key("error").str(engine_error);
         o.key("search");
@@ -873,6 +934,8 @@ class Session
     int start_halfmove = 0, start_fullmove = 1;
     std::string start_fen;                 // FEN of the position the game starts from
     bool resigned = false, resigned_white = false;
+    bool adjudicated = false;              // the player's ruling, in `adjudged`
+    Outcome adjudged = Outcome::DRAW;
     int serial = 0;                        // bumped whenever the game itself is replaced
 
     // The tags an exported game carries. In Play mode the names say who had
@@ -1161,6 +1224,8 @@ class Session
         start_halfmove = halfmove;
         start_fullmove = fullmove;
         resigned = false;
+        adjudicated = false;
+        paused = false;
         flagged = false;
         flagged_white = false;
         engine_error.clear();
