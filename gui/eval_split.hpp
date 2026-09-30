@@ -20,6 +20,11 @@ struct Eval_Part
     int raw[2] = {0, 0};        // [1] = white, [0] = black, own view, unscaled
     int count[2] = {0, 0};      // what was counted (squares, pieces), for the tooltip
     std::string info;
+    // Which piece counted which square, from*64+to, for the tooltip. Not kept
+    // for the mobility parts (every square a piece sees), and capped.
+    static const int MAX_HITS = 64;
+    short hits[2][MAX_HITS];
+    int n_hits[2] = {0, 0};
 };
 
 struct Eval_Split
@@ -85,27 +90,28 @@ inline Eval_Split split_piecetable(const BB* const original, const WEIGHTS& W)
 
 // piece_activity_eval(): one part per weight. "Own"/"enemy" are pieces of that
 // colour on a square the piece hits (occupancy-aware for sliders); queens count
-// both as a bishop and as a rook, as in the original.
+// both as a bishop and as a rook, as in the original. The names carry the "/2"
+// the original divides its whole sum by, so count × weight / 2 is the cp shown.
 inline Eval_Split split_piece_activity(const BB* const original)
 {
     Eval_Split s;
     s.scale = 2;
     enum { P_HIT, P_BLOCKED, P_PUSH_HIT, D_OWN, D_ENEMY, D_MOB, S_OWN, S_ENEMY, S_MOB, N_OWN, N_ENEMY, N_MOB, K_OWN, K_ENEMY };
     struct { const char* name; int weight; const char* info; } spec[] = {
-        {"P hits a piece ×30",     30, "pieces (either colour) on the pawn's capture squares"},
-        {"P blocked −20",         -20, "a piece right in front of the pawn"},
-        {"P hits after push ×20",  20, "pieces on the capture squares one push ahead"},
-        {"B/Q defends ×10",        10, "own pieces a bishop or queen sees diagonally"},
-        {"B/Q attacks ×40",        40, "enemy pieces a bishop or queen sees diagonally"},
-        {"B/Q diagonals ×5",        5, "squares a bishop or queen sees diagonally"},
-        {"R/Q defends −10",       -10, "own pieces a rook or queen sees on lines (a penalty)"},
-        {"R/Q attacks ×40",        40, "enemy pieces a rook or queen sees on lines"},
-        {"R/Q lines ×7",            7, "squares a rook or queen sees on lines"},
-        {"N defends −10",         -10, "own pieces a knight covers (a penalty)"},
-        {"N attacks ×10",          10, "enemy pieces a knight covers"},
-        {"N squares ×5",            5, "squares a knight covers, empty board"},
-        {"K defends ×15",          15, "own pieces next to the king"},
-        {"K attacks ×20",          20, "enemy pieces next to the king"},
+        {"P hits a piece ×30/2",     30, "pieces (either colour) on the pawn's capture squares"},
+        {"P blocked −20/2",         -20, "a piece right in front of the pawn"},
+        {"P hits after push ×20/2",  20, "pieces (either colour) on the squares the pawn would capture on after one push"},
+        {"B/Q defends ×10/2",        10, "own pieces a bishop or queen sees diagonally"},
+        {"B/Q attacks ×40/2",        40, "enemy pieces a bishop or queen sees diagonally"},
+        {"B/Q diagonals ×5/2",        5, "squares a bishop or queen sees diagonally"},
+        {"R/Q defends −10/2",       -10, "own pieces a rook or queen sees on lines (a penalty)"},
+        {"R/Q attacks ×40/2",        40, "enemy pieces a rook or queen sees on lines"},
+        {"R/Q lines ×7/2",            7, "squares a rook or queen sees on lines"},
+        {"N defends −10/2",         -10, "own pieces a knight covers (a penalty)"},
+        {"N attacks ×10/2",          10, "enemy pieces a knight covers"},
+        {"N squares ×5/2",            5, "squares a knight covers, empty board"},
+        {"K defends ×15/2",          15, "own pieces next to the king"},
+        {"K attacks ×20/2",          20, "enemy pieces next to the king"},
     };
     for(const auto& sp : spec) s.add(sp.name, sp.info);
 
@@ -116,48 +122,53 @@ inline Eval_Split split_piece_activity(const BB* const original)
     {
         uint64_t own_pieces = col ? all_white_pieces : all_black_pieces;
         uint64_t enemy_pieces = col ? all_black_pieces : all_white_pieces;
-        auto hit = [&](int part, int n) { s.parts[part].count[col] += n; };
+        auto hit = [&](int part, int from, uint64_t targets, bool record = true)
+        {
+            Eval_Part& p = s.parts[part];
+            p.count[col] += count(targets);
+            while(record && targets && p.n_hits[col] < Eval_Part::MAX_HITS)
+            p.hits[col][p.n_hits[col]++] = (short)(from*64 + find_and_delete_trailling_1(targets));
+        };
         uint64_t own_pawns = original->Board[0+6*!col];
         while(own_pawns)
         {
             int i = find_and_delete_trailling_1(own_pawns);
-            hit(P_HIT, count(all_pieces & (col ? BP_template[i] : WP_template[i])));
-            if(col ? (all_pieces & 1ULL << i+8) : (all_pieces & 1ULL << i >> 8))
-            hit(P_BLOCKED, 1);
-            hit(P_PUSH_HIT, count(all_pieces & (col ? BP_template[i]<<8 : WP_template[i]>>8)));
+            hit(P_HIT, i, all_pieces & (col ? BP_template[i] : WP_template[i]));
+            hit(P_BLOCKED, i, all_pieces & (col ? 1ULL << i+8 : 1ULL << i >> 8));
+            hit(P_PUSH_HIT, i, all_pieces & (col ? BP_template[i]<<8 : WP_template[i]>>8));
         }
         uint64_t own_bishops = original->Board[3+6*!col]|original->Board[4+6*!col];
         while(own_bishops)
         {
             int i = find_and_delete_trailling_1(own_bishops);
             uint64_t attacks = get_bishop_attacks(i, all_pieces);
-            hit(D_OWN, count(own_pieces & attacks));
-            hit(D_ENEMY, count(enemy_pieces & attacks));
-            hit(D_MOB, count(attacks));
+            hit(D_OWN, i, own_pieces & attacks);
+            hit(D_ENEMY, i, enemy_pieces & attacks);
+            hit(D_MOB, i, attacks, false);
         }
         uint64_t own_rooks = original->Board[1+6*!col]|original->Board[4+6*!col];
         while(own_rooks)
         {
             int i = find_and_delete_trailling_1(own_rooks);
             uint64_t attacks = get_rook_attacks(i, all_pieces);
-            hit(S_OWN, count(own_pieces & attacks));
-            hit(S_ENEMY, count(enemy_pieces & attacks));
-            hit(S_MOB, count(attacks));
+            hit(S_OWN, i, own_pieces & attacks);
+            hit(S_ENEMY, i, enemy_pieces & attacks);
+            hit(S_MOB, i, attacks, false);
         }
         uint64_t own_knights = original->Board[2+6*!col];
         while(own_knights)
         {
             int i = find_and_delete_trailling_1(own_knights);
-            hit(N_OWN, count(own_pieces & Kn_template[i]));
-            hit(N_ENEMY, count(enemy_pieces & Kn_template[i]));
-            hit(N_MOB, count(Kn_template[i]));
+            hit(N_OWN, i, own_pieces & Kn_template[i]);
+            hit(N_ENEMY, i, enemy_pieces & Kn_template[i]);
+            hit(N_MOB, i, Kn_template[i], false);
         }
         uint64_t own_king = original->Board[5+6*!col];
         while(own_king)
         {
             int i = find_and_delete_trailling_1(own_king);
-            hit(K_OWN, count(own_pieces & K_template[i]));
-            hit(K_ENEMY, count(enemy_pieces & K_template[i]));
+            hit(K_OWN, i, own_pieces & K_template[i]);
+            hit(K_ENEMY, i, enemy_pieces & K_template[i]);
         }
     }
     for(int k=0;k<s.n;k++)

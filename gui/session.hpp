@@ -1365,7 +1365,15 @@ class Session
                     o.obj().key("name").str(p.name)
                      .key("white").num(p.raw[1]).key("black").num(p.raw[0])
                      .key("whiteCount").num(p.count[1]).key("blackCount").num(p.count[0])
-                     .key("info").str(p.info).end_obj();
+                     .key("info").str(p.info);
+                    for(int side=1;side>=0;side--)
+                    {
+                        o.key(side ? "whiteHits" : "blackHits").arr();
+                        for(int h=0;h<p.n_hits[side];h++)
+                        o.str(square_name(p.hits[side][h]/64) + "→" + square_name(p.hits[side][h]%64));
+                        o.end_arr();
+                    }
+                    o.end_obj();
                 }
                 o.end_arr();
             }

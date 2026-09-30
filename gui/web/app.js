@@ -83,6 +83,10 @@ let adjudicateOpen = false;
 let planSide = 'both', planPinned = null, planHover = null;
 // The eval terms whose parts are folded away (by row name); all open at first.
 const termsFolded = new Set();
+// Whether parts worth 0 for both sides are left out (the panel's checkbox).
+// Remembered in this browser only; a view preference, not the game's state.
+let termsHideZero = false;
+try { termsHideZero = localStorage.getItem('termsHideZero') === '1'; } catch (e) {}
 let playKindChoice = 'depth', watchKindChoice = 'depth';
 let playCustomOpen = false, watchCustomOpen = false;
 let lastPlayClockOn = null, lastWatchClockOn = null;
@@ -608,6 +612,12 @@ el('plans-list').addEventListener('pointerover', event => {
 el('plans-list').addEventListener('pointerleave', () => {
   planHover = null;
   if (state) drawPlanShapes(state);
+});
+el('terms-hide-zero').checked = termsHideZero;
+el('terms-hide-zero').addEventListener('change', event => {
+  termsHideZero = event.target.checked;
+  try { localStorage.setItem('termsHideZero', termsHideZero ? '1' : '0'); } catch (e) {}
+  if (state) renderTerms(state);
 });
 el('terms-list').addEventListener('click', event => {
   const row = event.target.closest('.terms-parent[data-name]');
@@ -1341,9 +1351,11 @@ function renderTerms(s) {
       return Number.isInteger(v) ? signed(v) : (v > 0 ? '+' : '−') + Math.abs(v).toFixed(1);
     };
     for (const p of r.parts) {
-      if (p.white === 0 && p.black === 0 && p.whiteCount === 0 && p.blackCount === 0) continue;
+      if (termsHideZero && p.white === 0 && p.black === 0) continue;
+      const hits = list => list.length ? ` (${list.join(', ')})` : '';
       addRow([p.name, cp(p.white), cp(p.black), cp(p.white - p.black)], (p.white - p.black) / r.scale,
-             `${p.info}: white ${p.whiteCount}, black ${p.blackCount}`, 'terms-part');
+             `${p.info}.\nWhite ${p.whiteCount}${hits(p.whiteHits)}\nBlack ${p.blackCount}${hits(p.blackHits)}`,
+             'terms-part');
     }
   }
 

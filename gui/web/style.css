@@ -745,6 +745,7 @@ select:focus, input:focus { outline: none; border-color: var(--accent); }
 .terms-list .terms-row:hover { background: var(--bg); }
 .terms-row.bad, .terms-row.bad span { color: var(--bad); }
 .terms-parent { cursor: pointer; }
+.terms-option { display: flex; align-items: center; gap: 6px; margin: 0 0 6px; cursor: pointer; }
 /* A part of piece tables / piece activity (gui/eval_split.hpp): indented,
    smaller and muted, its bar thinner, so the real terms still read first. */
 .terms-part { padding-left: 20px; font-size: 12px; color: var(--muted); }
