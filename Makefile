@@ -100,6 +100,16 @@ NNE_TT ?= 13
 tools/nne_data: tools/nne_data.cpp gui/move_tree.hpp tools/game_rules.hpp $(HEADERS) $(SOURCES)
 	$(CXX) $(CXXFLAGS) -DTT_EXPONENT=$(NNE_TT) -pthread -o $@ tools/nne_data.cpp
 
+# The eval-correction net's trainer (#51), against the libtorch inside the
+# installed torch wheel. Not part of any other target: compiling it peaks at
+# 1.25 GB, so build it alone, never next to an engine build.
+TORCH ?= $(HOME)/.local/lib/python3.10/site-packages/torch
+tools/nne_train: tools/nne_train.cpp
+	$(CXX) -O2 -std=c++17 -D_GLIBCXX_USE_CXX11_ABI=1 -Wall -Wno-unused-variable \
+	  -I$(TORCH)/include -I$(TORCH)/include/torch/csrc/api/include -o $@ tools/nne_train.cpp \
+	  -L$(TORCH)/lib -Wl,-rpath,$(TORCH)/lib -Wl,--no-as-needed \
+	  -ltorch -ltorch_cpu -ltorch_cuda -lc10 -lc10_cuda
+
 tools/syzygy_reference: tools/syzygy_reference.cpp tools/syzygy_positions.hpp $(HEADERS) $(SOURCES)
 	$(CXX) $(CXXFLAGS) -pthread -o $@ tools/syzygy_reference.cpp
 
@@ -187,4 +197,4 @@ debug: $(TARGET)
 rebuild: clean all
 
 clean:
-	rm -f $(TARGET) $(UCI_TARGET) a.out ascaniusfish.s $(TEST_TARGETS) $(TOOL_TARGETS) diagnostics/syzygy_test $(GUI_TARGET) benchmarks/profile_startpos benchmarks/gmon.out benchmarks/profile_startpos.gprof
+	rm -f $(TARGET) $(UCI_TARGET) a.out ascaniusfish.s $(TEST_TARGETS) $(TOOL_TARGETS) diagnostics/syzygy_test tools/nne_train $(GUI_TARGET) benchmarks/profile_startpos benchmarks/gmon.out benchmarks/profile_startpos.gprof

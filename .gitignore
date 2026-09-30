@@ -18,6 +18,7 @@ tools/make_endgames
 tools/gui_match
 tools/tt_stats
 tools/nne_data
+tools/nne_train
 gui_match.pgn
 match.pgn
 benchmarks/profile_startpos
