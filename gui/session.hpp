@@ -27,6 +27,7 @@
 #include "engine_link.hpp"
 #include "json.hpp"
 #include "move_tree.hpp"
+#include "tablebase_view.hpp"
 #include <algorithm>
 #include <map>
 #include <random>
@@ -89,13 +90,14 @@ inline bool coin_flip()
 // that played the move the cursor is on, or an analysis kept from an earlier
 // visit to this position. NONE is a position nothing has ever looked at, and is
 // what makes the bar show nothing at all rather than 0.00.
-enum class Eval_From { NONE, LIVE, MOVE, STORED };
+enum class Eval_From { NONE, LIVE, MOVE, STORED, TB };
 
 inline const char* eval_from_name(Eval_From from)
 {
     return from==Eval_From::LIVE   ? "live"
          : from==Eval_From::MOVE   ? "move"
-         : from==Eval_From::STORED ? "stored" : "none";
+         : from==Eval_From::STORED ? "stored"
+         : from==Eval_From::TB     ? "tb" : "none";
 }
 
 // The engine's opinion of what is on show, as the eval bar and the engine-line
@@ -110,7 +112,8 @@ struct Eval_View
     int live_depth = 0;         // how far a search still behind a kept result has got
     long long nodes = 0, nps = 0, time_ms = 0;
     std::string score_kind;     // "cp"/"mate", empty when there is no score
-    long long score_value = 0;
+    long long score_value = 0;  // kind "tb": white's WDL, -2 (black wins) .. 2 (white wins)
+    int tb_dtz = 0;             // kind "tb": plies to the next capture or pawn move
     std::vector<std::string> uci, san;
 };
 
@@ -128,6 +131,25 @@ class Session
     // switches. Nothing is written to disk: they last as long as this process.
     bool show_eval_bar = true;
     bool show_engine_line = true;
+
+    // The tablebase switch and piece limit (#40), next to them in the gear. The
+    // tables are the server's (tablebase_setup()); these say whether this
+    // session looks at them, and they reach every engine of the session as
+    // setoption. tb_on only counts while tables are loaded.
+    bool tb_on = true;
+    int tb_limit = TB_LIMIT_MAX;
+
+    bool tb_active() const { return tb_on && tablebase_setup().available(); }
+
+    // The UCI options this session's engines should have. With the tables off
+    // the path is the engine's own "empty" default, which is how it lets go.
+    std::vector<std::pair<std::string, std::string>> engine_options() const
+    {
+        std::vector<std::pair<std::string, std::string>> options;
+        options.push_back({"SyzygyPath", tb_active() ? tablebase_setup().dir : "<empty>"});
+        options.push_back({"SyzygyProbeLimit", std::to_string(tb_limit)});
+        return options;
+    }
 
     // Play mode. `human_white` is the resolved colour (a RANDOM choice is
     // decided once, when the game starts), so the engine's colour is its
@@ -727,6 +749,23 @@ class Session
         return true;
     }
 
+    // The tables' answer for the position on the board, when they have one. It
+    // is exact, so it beats every search, live or kept (#40).
+    Eval_View tb_view() const
+    {
+        Eval_View v;
+        if(!tb_active())
+        return v;
+        Tb_Result r = tb_probe(tree.position(), tb_limit);
+        if(!r.valid)
+        return v;
+        v.from = Eval_From::TB;
+        v.score_kind = "tb";
+        v.score_value = tree.position().white_move ? r.wdl : -r.wdl;
+        v.tb_dtz = std::abs(r.dtz);
+        return v;
+    }
+
     // What the eval bar and the engine-line box draw, whatever mode the board is
     // in. A search running now is always about the position on the board, so it
     // wins. Otherwise the mode says what is being looked at: in Analyse it is
@@ -737,6 +776,9 @@ class Session
     // happened to reach.
     Eval_View eval_view() const
     {
+        Eval_View tb = tb_view();
+        if(tb.from!=Eval_From::NONE)
+        return tb;
         if(analysing() && analysis_valid && !analysis_stored)
         return analysis_view();
         if((thinking() || watching()) && live_valid)
@@ -833,6 +875,19 @@ class Session
          .end_obj();
         o.end_arr();
 
+        // Analyse mode lists every legal move with what the tables say of it.
+        o.key("tbMoves").arr();
+        std::vector<Tb_Move> tb_list;
+        if(mode==Mode::ANALYSE && tb_active() && tb_moves(pos, legal, n_legal, tb_limit, tb_list))
+        for(const Tb_Move& m : tb_list)
+        o.obj()
+            .key("uci").str(get_UCI(&pos, legal+m.index))
+            .key("san").str(san(pos, legal, n_legal, m.index))
+            .key("wdl").num(m.wdl)
+            .key("dtz").num(m.dtz)
+         .end_obj();
+        o.end_arr();
+
         write_tree(o);
         o.key("pgn").str(pgn());
 
@@ -922,6 +977,11 @@ class Session
         o.key("settings").obj();
         o.key("evalBar").boolean(show_eval_bar);
         o.key("engineLine").boolean(show_engine_line);
+        o.key("tb").boolean(tb_on);
+        o.key("tbLimit").num(tb_limit);
+        o.key("tbAvailable").boolean(tablebase_setup().available());
+        o.key("tbReason").str(tablebase_setup().reason);
+        o.key("tbMaxPieces").num(std::min(TB_LIMIT_MAX, tablebase_setup().max_pieces()));
         o.end_obj();
 
         o.end_obj();
@@ -1210,7 +1270,7 @@ class Session
         if(v.score_kind.empty())
         o.null();
         else
-        o.obj().key("kind").str(v.score_kind).key("value").num(v.score_value).end_obj();
+        o.obj().key("kind").str(v.score_kind).key("value").num(v.score_value).key("dtz").num(v.tb_dtz).end_obj();
         o.key("line").arr();
         for(size_t i=0;i<v.san.size();i++)
         o.obj().key("uci").str(v.uci[i]).key("san").str(v.san[i]).end_obj();

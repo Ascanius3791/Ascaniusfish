@@ -14,6 +14,8 @@
 //   root=gui/web      directory the static files come from
 //   fen=<fen>         starting position of the "main" session
 //   engine=...        the UCI binary Play mode drives (default ./ascaniusfish_uci)
+//   syzygy=<dir>      Syzygy tables: the page shows a tablebase position's exact
+//                     result, and the engines are given the path (issue #40)
 //   tunnel=cloudflared  also launch `cloudflared tunnel --url` at this port and
 //                     print the combined shareable link once it comes up
 //
@@ -385,6 +387,7 @@ static bool maybe_start_search(Session& session)
     request.start_fen = session.root_fen();
     request.moves = session.moves();
     request.white_to_move = session.white_to_move();
+    request.options = session.engine_options();
     request.limits = kind==Search_Kind::ANALYSIS ? Go_Limits::analysis()
                     : session.clocked_now()       ? session.clock_go_limits(now_ms())
                     : kind==Search_Kind::PLAY     ? session.limits
@@ -1079,6 +1082,26 @@ static Response handle_post_authed(const Request& req)
             return Response::json(json::error(std::string(option.name) + " must be true or false"), 400);
             session.*option.field = given->second=="true";
         }
+        // The tablebase switch and piece limit (#40). The tables are the server's,
+        // so the switch cannot be turned on without them. An engine already
+        // searching keeps the options it started with; the next search sends them.
+        auto tb = body.find("tb");
+        if(tb!=body.end())
+        {
+            if(tb->second!="true" && tb->second!="false")
+            return Response::json(json::error("tb must be true or false"), 400);
+            if(tb->second=="true" && !tablebase_setup().available())
+            return Response::json(json::error(tablebase_setup().reason), 409);
+            session.tb_on = tb->second=="true";
+        }
+        auto limit = body.find("tbLimit");
+        if(limit!=body.end())
+        {
+            int n = std::atoi(limit->second.c_str());
+            if(n<TB_LIMIT_MIN || n>TB_LIMIT_MAX)
+            return Response::json(json::error("tbLimit must be 3, 4 or 5"), 400);
+            session.tb_limit = n;
+        }
     }
     else
     return Response::text("not found: " + req.path, 404);
@@ -1165,7 +1188,7 @@ int main(int argc, char** argv)
     init_sliders_attacks(0);  // rook
 
     int port = DEFAULT_PORT;
-    std::string root_option, start_fen, engine_option, bind_option = "127.0.0.1", tunnel_option;
+    std::string root_option, start_fen, engine_option, bind_option = "127.0.0.1", tunnel_option, syzygy_option;
     for(int i=1;i<argc;i++)
     {
         std::string arg = argv[i];
@@ -1181,6 +1204,7 @@ int main(int argc, char** argv)
         else if(key=="root") root_option = value;
         else if(key=="fen")  start_fen = value;
         else if(key=="engine") engine_option = value;
+        else if(key=="syzygy") syzygy_option = value;
         else if(key=="tunnel") tunnel_option = value;
         else
         {
@@ -1195,6 +1219,12 @@ int main(int argc, char** argv)
     }
 
     gui_token = generate_token();
+
+    if(!syzygy_option.empty())
+    {
+        tablebase_setup().load(syzygy_option);
+        std::printf("Tablebases: %d WDL tables from %s\n", tablebase_setup().tables, syzygy_option.c_str());
+    }
 
     engine_path = find_engine(engine_option);
     web_root = find_web_root(root_option);

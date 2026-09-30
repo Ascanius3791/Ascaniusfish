@@ -194,7 +194,53 @@ static void test_analyse_prefers_the_position()
     check_eq(session.eval_view().depth, 5, "the depth that move was played at");
 }
 
-int main()
+// A position the tables know is answered by the tables, above every search
+// (#40), from white's view whoever is to move. Needs the tables: the directory
+// is argv[1], or ~/syzygy-nr; without them this is skipped, not failed.
+static void test_tablebase(const std::string& dir)
+{
+    tablebase_setup().load(dir);
+    if(!tablebase_setup().available())
+    {
+        std::printf("  (no tables in \"%s\": tablebase checks skipped)\n", dir.c_str());
+        return;
+    }
+    std::string error;
+    Session session("tb");
+    check(session.set_fen("8/8/8/4k3/8/8/4K3/R7 w - - 0 1", error), "KRvK loads", error);
+    session.set_analysis(iteration(9, -50, {"e5d5"}));   // a search that disagrees
+    Eval_View v = session.eval_view();
+    check(v.from==Eval_From::TB, "a 3-piece position is the tables', not the search's");
+    check_eq(v.score_value, 2, "white to move and winning: +2 in white's view");
+    check(v.tb_dtz>0, "with its DTZ");
+
+    Session black("tb-black");
+    check(black.set_fen("8/8/8/4k3/8/8/4K3/R7 b - - 0 1", error), "the same with black to move", error);
+    check_eq(black.eval_view().score_value, 2, "still white's win from white's view");
+    check(black.set_fen("8/8/8/4k3/8/8/4K3/r7 w - - 0 1", error), "and black's rook", error);
+    check_eq(black.eval_view().score_value, -2, "a black win is -2");
+
+    std::string json = session.state_json();
+    check(json.find("\"tbMoves\":[{")!=std::string::npos, "Analyse lists the legal moves with results");
+    check(json.find("\"source\":\"tb\"")!=std::string::npos, "and eval says its source is tb");
+
+    session.tb_limit = 3;
+    check(session.set_fen("8/8/8/4k3/8/8/3PK3/8 w - - 0 1", error), "KPvK loads", error);
+    check(session.eval_view().from==Eval_From::TB, "3 pieces at limit 3");
+    check(session.set_fen("8/8/8/4k3/8/8/3PK3/7R w - - 0 1", error), "KRPvK loads", error);
+    check(session.eval_view().from!=Eval_From::TB, "4 pieces are over limit 3");
+    session.tb_limit = 5;
+    check(session.eval_view().from==Eval_From::TB, "and inside limit 5");
+
+    session.tb_on = false;
+    check(session.eval_view().from!=Eval_From::TB, "the switch off hides them");
+    check(session.engine_options()[0].second=="<empty>", "and takes the path from the engines");
+    session.tb_on = true;
+    check(session.engine_options()[0].second==dir, "on, the engines are given the path");
+    check(session.engine_options()[1].second=="5", "with the piece limit");
+}
+
+int main(int argc, char** argv)
 {
     // Without these, sliding attacks are garbage and in_check() quietly misses
     // checks — every tool that touches movegen starts here.
@@ -210,6 +256,8 @@ int main()
     test_white_view();
     test_line_belongs_to_its_move();
     test_analyse_prefers_the_position();
+    const char* home = std::getenv("HOME");
+    test_tablebase(argc>1 ? argv[1] : std::string(home ? home : "") + "/syzygy-nr");
 
     std::printf("\n%s\n", failures ? "FAIL" : "PASS");
     return failures ? 1 : 0;

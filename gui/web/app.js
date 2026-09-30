@@ -565,6 +565,14 @@ el('set-evalbar').addEventListener('change', event =>
   command('/api/settings', { evalBar: event.target.checked }));
 el('set-engine-line').addEventListener('change', event =>
   command('/api/settings', { engineLine: event.target.checked }));
+el('set-tb').addEventListener('change', event =>
+  command('/api/settings', { tb: event.target.checked }));
+el('set-tb-limit').addEventListener('change', event =>
+  command('/api/settings', { tbLimit: Number(event.target.value) }));
+el('tb-moves').addEventListener('click', event => {
+  const row = event.target.closest('button.tb-move');
+  if (row) command('/api/line', { moves: row.dataset.uci });
+});
 initMuteToggle(el('set-sound'));
 
 // Anywhere else closes it, as a menu does; the gear itself is its own toggle.
@@ -867,6 +875,7 @@ function engineLine(s) {
 function scoreText(score) {
   if (!score) return '';
   if (score.kind === 'mate') return '#' + score.value;
+  if (score.kind === 'tb') return score.value > 0 ? '1-0' : score.value < 0 ? '0-1' : '½-½';
   return (score.value >= 0 ? '+' : '') + (score.value / 100).toFixed(2);
 }
 
@@ -970,10 +979,11 @@ function renderEngine(s) {
   // exactly as they did before this existed.
   const canToggle = analysing || (halted(s) && s.mode !== 'analyse');
   panel.hidden = !canToggle && !showLine;
+  renderTbMoves(s);
   if (panel.hidden) return;
 
   panel.classList.toggle('running', (a.running || s.play.thinking || s.watch.thinking) && !a.error);
-  panel.classList.toggle('has-line', showLine && (known || a.running));
+  panel.classList.toggle('has-line', showLine && ((known && ev.source !== 'tb') || a.running));
   el('analysis-toggle').hidden = !canToggle;
   el('analysis-toggle').textContent = a.on ? 'Turn engine off' : 'Turn engine on';
   el('analysis-score').textContent = s.settings.evalBar && known ? scoreText(ev.score) : '';
@@ -999,6 +1009,7 @@ function engineStats(s) {
     if (s.mode !== 'analyse') return 'No search of this position yet.';
     return a.on ? 'Starting the search\u2026' : 'The engine is off.';
   }
+  if (ev.source === 'tb') return tbSentence(ev.score);
   // Where the number came from: the search running now, one kept from an earlier
   // visit to this position (#24), or the search that played the move the cursor
   // is on. A kept result deeper than the search running behind it says how far
@@ -1013,12 +1024,50 @@ function engineStats(s) {
     .filter(Boolean).join(' \u00b7 ');
 }
 
+// What the tables say, in words. The value is white's view; a cursed win or a
+// blessed loss is a win that the 50-move rule turns into a draw.
+function tbSentence(score) {
+  const v = score.value;
+  const who = v > 0 ? 'White' : 'Black';
+  const dtz = score.dtz ? `, DTZ ${score.dtz}` : '';
+  if (v === 0) return 'Tablebase: draw.';
+  if (Math.abs(v) === 1) return `Tablebase: ${who} wins only past the 50-move rule (drawn)${dtz}.`;
+  return `Tablebase: ${who} wins${dtz}.`;
+}
+
+const TB_LABEL = { 2: 'Win', 1: 'Cursed win', 0: 'Draw', '-1': 'Blessed loss', '-2': 'Loss' };
+
+// Analyse mode's list of every legal move with its result for the side that
+// plays it, best first. Clicking one plays it.
+function renderTbMoves(s) {
+  const box = el('tb-moves');
+  const moves = s.mode === 'analyse' ? s.tbMoves : [];
+  box.hidden = !moves.length;
+  box.replaceChildren();
+  for (const m of moves) {
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = `tb-move wdl${m.wdl}`;
+    row.dataset.uci = m.uci;
+    const san = document.createElement('span');
+    san.textContent = m.san;
+    const result = document.createElement('span');
+    result.className = 'tb-result';
+    result.textContent = TB_LABEL[m.wdl] + (m.dtz ? ` · DTZ ${m.dtz}` : '');
+    row.append(san, result);
+    box.append(row);
+  }
+}
+
 // Where the bar sits, as white's share of it. The centipawn score goes through
 // a sigmoid: this engine's king-safety terms reach the thousands, so a linear
 // scale would sit pinned at one end for most of a game. Both ends stop short
 // of full, so a bar that does run out really does mean mate.
 function whiteShare(score) {
   if (score.kind === 'mate') return score.value >= 0 ? 0.97 : 0.03;
+  // Exact results: a win fills the bar, a cursed win (drawn under the 50-move
+  // rule) only leans.
+  if (score.kind === 'tb') return { 2: 0.97, 1: 0.58, 0: 0.5, '-1': 0.42, '-2': 0.03 }[score.value];
   return Math.min(0.97, Math.max(0.03, 1 / (1 + Math.exp(-score.value / 400))));
 }
 
@@ -1060,6 +1109,17 @@ function renderLine(s, ev, clickable) {
 function renderSettings(s) {
   el('set-evalbar').checked = s.settings.evalBar;
   el('set-engine-line').checked = s.settings.engineLine;
+  // Without tables there is nothing to switch, and the note says why.
+  const st = s.settings;
+  el('set-tb').checked = st.tb && st.tbAvailable;
+  el('set-tb').disabled = !st.tbAvailable;
+  el('set-tb-limit').value = String(st.tbLimit);
+  el('set-tb-limit').disabled = !st.tbAvailable;
+  for (const option of el('set-tb-limit').options)
+    option.disabled = Number(option.value) > st.tbMaxPieces;
+  el('set-tb-note').textContent = st.tbAvailable
+    ? 'Exact results from Syzygy tables, shown at once and given to the engines. Same lifetime as the two above.'
+    : st.tbReason;
 }
 
 function openShare(open) {

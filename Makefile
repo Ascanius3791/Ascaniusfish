@@ -106,7 +106,7 @@ tb-suite: $(UCI_TARGET) tools/tb_suite
 # Browser GUI server (issues #14-#17). Plain g++, no Node: gui/web/vendor holds
 # a prebuilt chessground bundle, and the HTTP/SSE server is gui/http_server.hpp.
 GUI_TARGET := gui/ascaniusfish_gui
-GUI_HEADERS := gui/http_server.hpp gui/session.hpp gui/move_tree.hpp gui/json.hpp gui/engine_link.hpp gui/analysis_store.hpp
+GUI_HEADERS := gui/http_server.hpp gui/session.hpp gui/move_tree.hpp gui/json.hpp gui/engine_link.hpp gui/analysis_store.hpp gui/tablebase_view.hpp
 
 $(GUI_TARGET): gui/gui_server.cpp $(GUI_HEADERS) tools/game_rules.hpp tools/uci_engine.hpp $(HEADERS) $(SOURCES)
 	$(CXX) $(CXXFLAGS) -pthread -o $@ gui/gui_server.cpp
@@ -145,7 +145,7 @@ gui-match: tools/gui_match
 # The board in the browser: prints a http://localhost:<port> URL and serves it.
 # Play mode drives $(UCI_TARGET) over pipes, so that has to exist too.
 gui: $(GUI_TARGET) $(UCI_TARGET)
-	./$(GUI_TARGET) $(if $(GUI_PORT),port=$(GUI_PORT)) $(if $(GUI_BIND),bind=$(GUI_BIND)) $(if $(GUI_TUNNEL),tunnel=$(GUI_TUNNEL))
+	./$(GUI_TARGET) $(if $(GUI_PORT),port=$(GUI_PORT)) $(if $(GUI_BIND),bind=$(GUI_BIND)) $(if $(GUI_TUNNEL),tunnel=$(GUI_TUNNEL)) $(if $(SYZYGY),syzygy=$(SYZYGY))
 
 # make gui plus a cloudflared quick tunnel, so the printed link is already
 # shareable — no separate terminal, no combining a token by hand (issue #27).

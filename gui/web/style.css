@@ -608,3 +608,29 @@ select:focus, input:focus { outline: none; border-color: var(--accent); }
 
 #adjudicate.active { border-color: var(--accent); color: var(--accent); }
 #adjudicate-choices[hidden] { display: none; }
+
+/* Analyse mode's tablebase list (#40): its own scroll box of a fixed height,
+   like the engine line above it, so the move list below never moves. */
+.tb-moves {
+  margin-top: 8px;
+  height: 9em;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.tb-move {
+  display: flex;
+  justify-content: space-between;
+  font: 13px/1.6 ui-monospace, "SF Mono", Menlo, monospace;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: none;
+  text-align: left;
+}
+
+.tb-move:hover { background: var(--bg); border-color: var(--accent); }
+.tb-move .tb-result { color: var(--muted); }
+.tb-move.wdl2 .tb-result { color: var(--accent); }
+.tb-move.wdl-2 .tb-result { color: var(--bad); }

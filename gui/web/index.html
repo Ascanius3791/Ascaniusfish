@@ -55,6 +55,20 @@
     <p class="note">Both apply in every mode. They last as long as the server
     runs and are not saved to a file.</p>
     <label class="switch">
+      <input type="checkbox" id="set-tb">
+      <span>Tablebases</span>
+    </label>
+    <label class="switch">
+      <span>Up to</span>
+      <select id="set-tb-limit">
+        <option value="3">3 pieces</option>
+        <option value="4">4 pieces</option>
+        <option value="5">5 pieces</option>
+      </select>
+    </label>
+    <p class="note" id="set-tb-note">Exact results from Syzygy tables, shown at
+    once and given to the engines. Same lifetime as the two above.</p>
+    <label class="switch">
       <input type="checkbox" id="set-sound">
       <span>Sound</span>
     </label>
@@ -256,6 +270,7 @@
       </div>
       <p id="analysis-stats" class="note"></p>
       <p id="analysis-line" class="line"></p>
+      <div id="tb-moves" class="tb-moves" hidden></div>
     </section>
 
     <section class="panel">

@@ -170,6 +170,16 @@ When editing engine internals, `lib/*.hpp` is the declaration/interface layer an
   page has been watching for 5 s — the self-play game is paused and the analysis toggle goes
   off first. Each process holds ~140 MB of tables, so leaving an idle pair around would eat the
   room this repo keeps for running several engines at once.
+- `gui/tablebase_view.hpp` — the server links `lib/syzygy.hpp` itself (#40), so a position with ≤ limit
+  pieces shows its exact result at once, with the analysis off. `./gui/ascaniusfish_gui syzygy=<dir>`
+  (`make gui SYZYGY=<dir>`) opens the tables once for every session (`tablebase_setup()`); without it,
+  or with no tables in it, the gear's switch is disabled and `settings.tbReason` says why. Per session
+  `tb_on`/`tb_limit` (3–5) live in the `Session` and go to every engine as `setoption SyzygyPath`
+  (`<empty>` when off) and `SyzygyProbeLimit`, sent by `Engine_Link` (`Search_Request::options`, only
+  what that process does not hold yet) before the next `position`/`go`. `eval_view()` puts the tables
+  first: `source` is `tb`, the score `{kind:"tb", value: white's WDL -2..2, dtz}`. In Analyse the state
+  also carries `tbMoves` (every legal move, best first, result for the mover; clicking one plays it).
+  `diagnostics/eval_view_test.cpp` covers it (needs `~/syzygy-nr` or argv[1]).
 - `gui/json.hpp` — a JSON writer that inserts the commas, plus a flat-object parser for request bodies.
 - `gui/web/` — `index.html`/`app.js`/`style.css`/`sound.js` and the `logo.png`/`favicon.png` (scaled
   down from the root's `Ascaniusfish.png`) are ours; `gui/web/vendor/` holds chessground

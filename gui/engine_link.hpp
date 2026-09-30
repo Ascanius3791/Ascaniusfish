@@ -15,6 +15,7 @@
 #include "../tools/uci_engine.hpp"
 #include <condition_variable>
 #include <functional>
+#include <map>
 #include <mutex>
 #include <thread>
 
@@ -84,6 +85,9 @@ struct Search_Request
     std::vector<std::string> moves;
     Go_Limits limits;
     bool new_game = false;       // send "ucinewgame" first
+    // UCI options this search runs under. Only the ones the engine does not
+    // hold already are sent, so the same list every time costs nothing.
+    std::vector<std::pair<std::string, std::string>> options;
     bool white_to_move = true;   // for a clocked search's own hang deadline
 };
 
@@ -189,6 +193,7 @@ class Engine_Link
     Search_Request pending;
     Search_Result result;
     Search_Info progress;
+    std::map<std::string, std::string> options_sent;   // what this process has been told; worker only
     long long next_token = 0, token = 0;
     long long progress_seq = 0, taken_progress = 0;
     bool searching = false, has_result = false, quitting = false;
@@ -222,10 +227,21 @@ class Engine_Link
                 if(!engine.start())
                 answer.error = "cannot start " + path + " (run make first, from the repo root)";
                 else
-                request.new_game = true;   // a fresh process has no game to forget
+                {
+                    request.new_game = true;   // a fresh process has no game to forget
+                    options_sent.clear();      // nor any option
+                }
             }
             if(answer.error.empty())
             {
+                for(const auto& option : request.options)
+                {
+                    std::string& held = options_sent[option.first];
+                    if(held==option.second)
+                    continue;
+                    send_locked("setoption name " + option.first + " value " + option.second);
+                    held = option.second;
+                }
                 if(request.new_game)
                 send_locked("ucinewgame");
                 std::string position = "position fen " + request.start_fen;
