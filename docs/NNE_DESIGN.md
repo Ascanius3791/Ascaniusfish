@@ -95,6 +95,18 @@ test is used only for the reported numbers.
 - The trainer exports the weights to a flat binary file (magic, version, layer
   sizes, float32 little-endian), about 400 kB, which is committed. It also writes
   its predictions on the test set, so the engine can be checked against it.
+- The trainer is `tools/nne_train` (#51, `make tools/nne_train`). The weights
+  are `nets/nne_d6.bin`, the test predictions `nets/nne_d6_test.tsv` (game, FEN,
+  static and label in white's view, the net's correction in the mover's view).
+  The file's layout, all little-endian: `"NNE1"`, uint32 version 1, uint32 layer
+  count 3, uint32 sizes `780 128 16 1`, then per layer float32 weights
+  `[in][out]` (one contiguous row of 128 per active input in the first layer)
+  and float32 bias `[out]`. The last layer is already scaled to centipawns, so
+  `c = b3 + clamp(b2 + clamp(b1 + Σ W1[active], 0, 1)·W2, 0, 1)·W3`.
+- Training: AdamW with weight decay 1 (best on the validation set among
+  0–3), batch 1024, learning rate 1e-3 halved after 3 epochs without a better
+  validation loss, stopped after 8. Numbers:
+  `docs/measurements/nne_train_2026-10-01.md`.
 
 ## The net in the engine
 
