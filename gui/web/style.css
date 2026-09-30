@@ -744,6 +744,12 @@ select:focus, input:focus { outline: none; border-color: var(--accent); }
 .terms-row span:nth-child(4) { font-weight: 600; }
 .terms-list .terms-row:hover { background: var(--bg); }
 .terms-row.bad, .terms-row.bad span { color: var(--bad); }
+.terms-parent { cursor: pointer; }
+/* A part of piece tables / piece activity (gui/eval_split.hpp): indented,
+   smaller and muted, its bar thinner, so the real terms still read first. */
+.terms-part { padding-left: 20px; font-size: 12px; color: var(--muted); }
+.terms-part span:nth-child(4) { font-weight: 400; }
+.terms-part .terms-bar { height: 2px; }
 
 /* One scale for every row, from the middle: right (blue) is white's, left (red)
    black's, in the plan view's two colours. */

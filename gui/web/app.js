@@ -81,6 +81,8 @@ let adjudicateOpen = false;
 // The plan view: which side's plans are drawn, the piece (by its square) clicked
 // to stay picked, and the one the pointer is over in the list.
 let planSide = 'both', planPinned = null, planHover = null;
+// The eval terms whose parts are folded away (by row name); all open at first.
+const termsFolded = new Set();
 let playKindChoice = 'depth', watchKindChoice = 'depth';
 let playCustomOpen = false, watchCustomOpen = false;
 let lastPlayClockOn = null, lastWatchClockOn = null;
@@ -606,6 +608,13 @@ el('plans-list').addEventListener('pointerover', event => {
 el('plans-list').addEventListener('pointerleave', () => {
   planHover = null;
   if (state) drawPlanShapes(state);
+});
+el('terms-list').addEventListener('click', event => {
+  const row = event.target.closest('.terms-parent[data-name]');
+  if (!row) return;
+  const name = row.dataset.name;
+  if (!termsFolded.delete(name)) termsFolded.add(name);
+  if (state) renderTerms(state);
 });
 el('set-tb').addEventListener('change', event =>
   command('/api/settings', { tb: event.target.checked }));
@@ -1286,19 +1295,10 @@ function renderTerms(s) {
   const top = Math.max(100, ...t.rows.map(r => Math.abs(r.total)));
   const list = el('terms-list');
   list.replaceChildren();
-  for (const r of t.rows) {
+  const addRow = (cells, total, title, classes) => {
     const row = document.createElement('div');
-    row.className = 'terms-row';
-    row.classList.toggle('bad', r.split === false);
-    row.title = r.info + (r.split === false ? ' — white − black is not the total!' : '');
-    if (r.name === 'Material' && r.white !== r.black)
-      row.title += ` (×${(r.total / (r.white - r.black)).toFixed(3)})`;
-    const cells = [
-      r.name,
-      r.white === null ? '·' : signed(r.white),
-      r.black === null ? '·' : signed(r.black),
-      signed(r.total),
-    ];
+    row.className = 'terms-row ' + classes;
+    row.title = title;
     for (const text of cells) {
       const cell = document.createElement('span');
       cell.textContent = text;
@@ -1307,13 +1307,44 @@ function renderTerms(s) {
     const bar = document.createElement('div');
     bar.className = 'terms-bar';
     const fill = document.createElement('i');
-    const width = 50 * Math.min(1, Math.abs(r.total) / top);
-    fill.className = r.total >= 0 ? 'white' : 'black';
+    const width = 50 * Math.min(1, Math.abs(total) / top);
+    fill.className = total >= 0 ? 'white' : 'black';
     fill.style.width = `${width}%`;
-    fill.style.left = r.total >= 0 ? '50%' : `${50 - width}%`;
+    fill.style.left = total >= 0 ? '50%' : `${50 - width}%`;
     bar.append(fill);
     row.append(bar);
     list.append(row);
+    return row;
+  };
+  for (const r of t.rows) {
+    let title = r.info + (r.split === false ? ' — white − black is not the total!' : '');
+    if (r.name === 'Material' && r.white !== r.black)
+      title += ` (×${(r.total / (r.white - r.black)).toFixed(3)})`;
+    const open = r.parts && !termsFolded.has(r.name);
+    const name = r.parts ? `${open ? '▾' : '▸'} ${r.name}` : r.name;
+    const cells = [
+      name,
+      r.white === null ? '·' : signed(r.white),
+      r.black === null ? '·' : signed(r.black),
+      signed(r.total),
+    ];
+    const bad = r.split === false || r.partsOk === false;
+    if (r.partsOk === false) title += ' — the parts below do not add up to this total (gui/eval_split.hpp is stale?)';
+    const row = addRow(cells, r.total, title, (bad ? 'bad ' : '') + (r.parts ? 'terms-parent' : ''));
+    if (!r.parts) continue;
+    row.dataset.name = r.name;
+    if (!open) continue;
+    // Each part unscaled in the owner's view; the engine divides only the sum by
+    // scale, so a part can be a fraction of a cp.
+    const cp = raw => {
+      const v = raw / r.scale;
+      return Number.isInteger(v) ? signed(v) : (v > 0 ? '+' : '−') + Math.abs(v).toFixed(1);
+    };
+    for (const p of r.parts) {
+      if (p.white === 0 && p.black === 0 && p.whiteCount === 0 && p.blackCount === 0) continue;
+      addRow([p.name, cp(p.white), cp(p.black), cp(p.white - p.black)], (p.white - p.black) / r.scale,
+             `${p.info}: white ${p.whiteCount}, black ${p.blackCount}`, 'terms-part');
+    }
   }
 
   const sum = el('terms-sum');

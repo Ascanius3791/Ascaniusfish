@@ -28,6 +28,7 @@
 #include "json.hpp"
 #include "move_tree.hpp"
 #include "tablebase_view.hpp"
+#include "eval_split.hpp"
 #include <algorithm>
 #include <map>
 #include <random>
@@ -1337,7 +1338,8 @@ class Session
     {
         const WEIGHTS& W = WEIGHTS_OG;
         int sum = 0;
-        auto row = [&](const char* name, bool sides, bool difference, int white, int black, int total, const std::string& info)
+        auto row = [&](const char* name, bool sides, bool difference, int white, int black, int total, const std::string& info,
+                       const Eval_Split* split = nullptr)
         {
             sum += total;
             o.obj();
@@ -1350,6 +1352,23 @@ class Session
             o.key("split");
             if(sides && difference) o.boolean(white - black == total); else o.null();
             o.key("info").str(info);
+            // The parts (gui/eval_split.hpp): unscaled, each side's own view;
+            // the page divides by scale, and partsOk says they add up to total.
+            if(split)
+            {
+                o.key("scale").num(split->scale);
+                o.key("partsOk").boolean(split->total() == total);
+                o.key("parts").arr();
+                for(int k=0;k<split->n;k++)
+                {
+                    const Eval_Part& p = split->parts[k];
+                    o.obj().key("name").str(p.name)
+                     .key("white").num(p.raw[1]).key("black").num(p.raw[0])
+                     .key("whiteCount").num(p.count[1]).key("blackCount").num(p.count[0])
+                     .key("info").str(p.info).end_obj();
+                }
+                o.end_arr();
+            }
             o.end_obj();
         };
 
@@ -1375,8 +1394,10 @@ class Session
         o.key("rows").arr();
         row("Material", true, false, material[1], material[0], material_eval(&pos, W),
             "piece values without the kings; the total is white - black scaled by the material left");
+        const Eval_Split tables = split_piecetable(&pos, W);
+        const Eval_Split activity = split_piece_activity(&pos);
         row("Piece tables", false, false, 0, 0, piecetable(&pos, W),
-            "opening and endgame tables blended by the phase below");
+            "opening and endgame tables blended by the phase below", &tables);
         row("King attack", true, true, -king[1].attack_penalty, -king[0].attack_penalty,
             king[0].attack_penalty - king[1].attack_penalty, danger);
         row("King shelter", true, true, -king[1].shelter_penalty, -king[0].shelter_penalty,
@@ -1388,7 +1409,7 @@ class Session
             5*(attacked[1] - attacked[0]),
             "5 per square: white " + std::to_string(attacked[1]) + ", black " + std::to_string(attacked[0]));
         row("Piece activity", false, false, 0, 0, piece_activity_eval(&pos, W),
-            "what each piece attacks and defends");
+            "what each piece attacks and defends", &activity);
         row("Plan", true, USE_PLAN_EVAL, plan[1], plan[0], plan_eval(&pos, W),
             USE_PLAN_EVAL ? "each piece's best square, db/(2+N)" : "USE_PLAN_EVAL is off: the sides are shown, not counted");
         o.end_arr();
