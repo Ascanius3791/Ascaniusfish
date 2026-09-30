@@ -3,6 +3,7 @@
 #define BASIC_EVAL_CPP
 #include "../lib/basic_eval.hpp"
 #include "../lib/king_safety.hpp"
+#include "../lib/plan_eval.hpp"
 
 
 // material of one side in 39ths: 8 pawns, 2 rooks, 4 bishops/knights, 1 queen = 8+10+12+9
