@@ -32,7 +32,7 @@ GUI_BIND ?=
 GUI_TUNNEL ?=
 SYZYGY_PATH ?= $(HOME)/syzygy-nr
 SYZYGY_RANDOM ?=
-TOOL_TARGETS := tools/perft tools/bench tools/speed_compare tools/match tools/make_openings tools/gui_match tools/tt_stats tools/syzygy_reference tools/tb_suite tools/tb_trade_suite
+TOOL_TARGETS := tools/perft tools/bench tools/speed_compare tools/match tools/make_openings tools/make_endgames tools/gui_match tools/tt_stats tools/syzygy_reference tools/tb_suite tools/tb_trade_suite
 PROFILE_CXXFLAGS ?= -O2 -mpopcnt -g -pg -Wall -Wno-unknown-pragmas -Wno-parentheses -Wno-unused-variable
 
 .PHONY: all run play asm tests debug profile-startpos perft bench speed-compare match gui-match gui tt-stats syzygy-test tb-suite tb-trade-suite clean rebuild
@@ -90,6 +90,9 @@ tools/gui_match: tools/gui_match.cpp tools/game_rules.hpp tools/uci_engine.hpp $
 
 tools/make_openings: tools/make_openings.cpp tools/game_rules.hpp $(HEADERS) $(SOURCES)
 	$(CXX) $(CXXFLAGS) -pthread -o $@ tools/make_openings.cpp
+
+tools/make_endgames: tools/make_endgames.cpp tools/game_rules.hpp tools/uci_engine.hpp $(HEADERS) $(SOURCES)
+	$(CXX) $(CXXFLAGS) -pthread -o $@ tools/make_endgames.cpp
 
 tools/syzygy_reference: tools/syzygy_reference.cpp tools/syzygy_positions.hpp $(HEADERS) $(SOURCES)
 	$(CXX) $(CXXFLAGS) -pthread -o $@ tools/syzygy_reference.cpp
