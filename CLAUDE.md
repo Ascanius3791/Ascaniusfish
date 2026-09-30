@@ -182,6 +182,11 @@ The plan term (#43, `lib/plan_eval.hpp` / `src/plan_eval.cpp`, switch `USE_PLAN_
   first: `source` is `tb`, the score `{kind:"tb", value: white's WDL -2..2, dtz}`. In Analyse the state
   also carries `tbMoves` (every legal move, best first, result for the mover; clicking one plays it).
   `diagnostics/eval_view_test.cpp` covers it (needs `~/syzygy-nr` or argv[1]).
+- The plan view (#44, only on the plan-eval branches): the gear's `plans` switch makes the state carry
+  `plans` (`Session::write_plans()`): the plan term's total, the static eval, and per piece its best
+  square with N, db (owner's view), term (white's view), one shortest `path` (`plan_path()` in
+  `lib/plan_eval.hpp`) and every square on some shortest path (`via`). The page draws the paths
+  as arrows and lists the pieces; hovering a row or clicking a piece shows just that one.
 - `gui/json.hpp` — a JSON writer that inserts the commas, plus a flat-object parser for request bodies.
 - `gui/web/` — `index.html`/`app.js`/`style.css`/`sound.js` and the `logo.png`/`favicon.png` (scaled
   down from the root's `Ascaniusfish.png`) are ours; `gui/web/vendor/` holds chessground
@@ -235,7 +240,7 @@ tick (`Session::clock_sync()`/`clock_ticking()`, `gui/session.hpp`). The server 
 flag falling — not just a clocked engine's own time management — on every poll iteration
 (`Session::check_flag()`; `gui/http_server.hpp`'s `poll_timeout` shortens while any clock ticks),
 ending the game the way a resignation does, with a `TimeControl` PGN tag alongside it.
-`POST /api/settings` carries the gear's switches (`evalBar`, `engineLine`), each applied only
+`POST /api/settings` carries the gear's switches (`evalBar`, `engineLine`, `plans`), each applied only
 when the body names it, so one can be flipped without saying anything about the other.
 `POST /api/analyse` is the engine on/off toggle; `POST /api/line` walks the board along a
 space-separated list of UCI `moves` (all of them or none), which is what clicking a move in the

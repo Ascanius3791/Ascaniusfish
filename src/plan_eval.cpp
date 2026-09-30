@@ -307,6 +307,88 @@ int plan_eval_detail(const BB* const original, const WEIGHTS& W, Plan_Target* ou
     return plan_eval_impl(original,W,out,count,reference);
 }
 
+// The BFS of plan_eval_impl() for one piece, kept per level: level[k] holds
+// the squares first reached after k moves. Returns the number of levels filled.
+static int plan_levels(const BB* const original, int piece, int from, uint64_t* level, int max_levels)
+{
+    const uint64_t* Board = original->Board;
+    const bool white = piece < 6;
+    const int type = piece % 6;
+    uint64_t occupancy = 0, enemy_pawn_attacks = 0;
+    for(int p=0;p<12;p++)
+    occupancy |= Board[p];
+    uint64_t pawns = Board[white ? 6 : 0];
+    while(pawns)
+    {
+        const int i = find_and_delete_trailling_1(pawns);
+        enemy_pawn_attacks |= white ? WP_template[i] : BP_template[i];// as pawn_attacks[] in plan_eval_impl()
+    }
+    const uint64_t others = occupancy & ~(1ULL << from);
+    uint64_t allowed = ~occupancy;
+    if(type == 0)
+    allowed &= ~(mask_row[0] | mask_row[7]);
+    else
+    allowed &= ~enemy_pawn_attacks;
+    uint64_t reached = 1ULL << from;
+    level[0] = reached;
+    int n = 1;
+    for(; n < max_levels && level[n-1]; n++)
+    {
+        uint64_t next = 0, frontier = level[n-1];
+        while(frontier)
+        next |= plan_step(type, white, find_and_delete_trailling_1(frontier), others);
+        level[n] = next & allowed & ~reached;
+        reached |= level[n];
+    }
+    return n;
+}
+
+int plan_path(const BB* const original, const Plan_Target& t, int* squares, uint64_t* via)
+{
+    *via = 0;
+    if(t.to < 0)
+    return 0;
+    uint64_t level[64];
+    const int levels = plan_levels(original, t.piece, t.from, level, 64);
+    if(t.n >= levels || !(level[t.n] >> t.to & 1))
+    return 0;
+    const bool white = t.piece < 6;
+    const int type = t.piece % 6;
+    uint64_t others = 0;
+    for(int p=0;p<12;p++)
+    others |= original->Board[p];
+    others &= ~(1ULL << t.from);
+    // Backwards from the target: the squares on a shortest path at step k are
+    // those of level k with a move onto one on a shortest path at step k+1.
+    uint64_t on_path = 1ULL << t.to;
+    *via = on_path;
+    squares[t.n] = t.to;
+    for(int k = t.n - 1; k >= 0; k--)
+    {
+        uint64_t prev = 0, candidates = level[k];
+        while(candidates)
+        {
+            const int s = find_and_delete_trailling_1(candidates);
+            if(plan_step(type, white, s, others) & on_path)
+            prev |= 1ULL << s;
+        }
+        on_path = prev;
+        *via |= prev;
+        // the drawn path: the first of them with a move onto the drawn step k+1
+        uint64_t drawn = prev;
+        while(drawn)
+        {
+            const int s = find_and_delete_trailling_1(drawn);
+            if(plan_step(type, white, s, others) >> squares[k+1] & 1)
+            {
+                squares[k] = s;
+                break;
+            }
+        }
+    }
+    return t.n + 1;
+}
+
 int plan_eval(const BB* const original, const WEIGHTS& W)
 {
     if(!USE_PLAN_EVAL)

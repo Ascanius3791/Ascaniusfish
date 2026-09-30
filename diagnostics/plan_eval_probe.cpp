@@ -136,7 +136,7 @@ static void symmetry_and_timing()
     }
     delete[] wfh;
 
-    int plan_bad = 0, eval_bad = 0, ref_bad = 0;
+    int plan_bad = 0, eval_bad = 0, ref_bad = 0, path_bad = 0;
     long long sum_abs = 0;
     for(const BB& pos : positions)
     {
@@ -154,6 +154,32 @@ static void symmetry_and_timing()
             std::printf("      fast != reference: %s\n", copy.get_FEN().c_str());
             ref_bad++;
         }
+        // plan_path(): N moves, each a move of that piece onto an allowed square
+        // (plan_levels() is the same BFS), ending on the target, inside via.
+        for(int i = 0; i < nf; i++)
+        {
+            int squares[64];
+            uint64_t via;
+            const int len = plan_path(&pos, fast[i], squares, &via);
+            bool good = fast[i].to < 0 ? len == 0 && via == 0
+                      : len == fast[i].n + 1 && squares[0] == fast[i].from && squares[len-1] == fast[i].to;
+            for(int k = 0; good && k < len; k++)
+            good = via >> squares[k] & 1;
+            for(int k = 0; good && k + 1 < len; k++)
+            {
+                uint64_t others = 0;
+                for(int q = 0; q < 12; q++)
+                others |= pos.Board[q];
+                others &= ~(1ULL << fast[i].from);
+                good = plan_step(fast[i].piece % 6, fast[i].piece < 6, squares[k], others) >> squares[k+1] & 1;
+            }
+            if(!good)
+            {
+                if(path_bad < 3)
+                std::printf("      bad path for the piece on %s: %s\n", sq_name(fast[i].from).c_str(), copy.get_FEN().c_str());
+                path_bad++;
+            }
+        }
         if(plan_eval_detail(&m, WEIGHTS_OG, nullptr, nullptr) != -p)
         plan_bad++;
         if(basic_eval(&m, WEIGHTS_OG) + basic_eval(&pos, WEIGHTS_OG) != 0)
@@ -163,6 +189,7 @@ static void symmetry_and_timing()
     std::string n = std::to_string(positions.size());
     std::printf("\n");
     expect(ref_bad == 0, "fast db equals the reference (partial evals recomputed): " + std::to_string(ref_bad) + "/" + std::to_string(positions.size()) + " differ");
+    expect(path_bad == 0, "plan_path() walks N legal steps to each target: " + std::to_string(path_bad) + " bad paths");
     expect(plan_bad == 0, "plan_eval mirror-symmetric: " + std::to_string(plan_bad) + "/" + n + " broken");
     expect(eval_bad == 0, "basic_eval mirror-symmetric: " + std::to_string(eval_bad) + "/" + n + " broken");
     std::printf("      mean |plan_eval| %.1f cp\n", sum_abs / (double)positions.size());

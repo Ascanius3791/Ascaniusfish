@@ -131,6 +131,9 @@ class Session
     // switches. Nothing is written to disk: they last as long as this process.
     bool show_eval_bar = true;
     bool show_engine_line = true;
+    // The plan view (#44): each piece's dream square from lib/plan_eval.hpp,
+    // drawn on the board with the path there. Off by default.
+    bool show_plans = false;
 
     // The tablebase switch and piece limit (#40), next to them in the gear. The
     // tables are the server's (tablebase_setup()); these say whether this
@@ -888,6 +891,12 @@ class Session
          .end_obj();
         o.end_arr();
 
+        o.key("plans");
+        if(show_plans)
+        write_plans(o, pos);
+        else
+        o.null();
+
         write_tree(o);
         o.key("pgn").str(pgn());
 
@@ -977,6 +986,7 @@ class Session
         o.key("settings").obj();
         o.key("evalBar").boolean(show_eval_bar);
         o.key("engineLine").boolean(show_engine_line);
+        o.key("plans").boolean(show_plans);
         o.key("tb").boolean(tb_on);
         o.key("tbLimit").num(tb_limit);
         o.key("tbAvailable").boolean(tablebase_setup().available());
@@ -1255,6 +1265,52 @@ class Session
     long long white_view(long long value) const
     {
         return tree.position().white_move ? value : -value;
+    }
+
+    // The plan view (#44): every piece's best target square from the plan term
+    // (lib/plan_eval.hpp), what moving there is worth (db, the owner's view),
+    // what it adds to the eval now (term, white's view, so it sums to "total"),
+    // one shortest path there and every square on some shortest path. A piece
+    // with nothing better to reach is left out.
+    void write_plans(json::Out& o, const BB& pos) const
+    {
+        Plan_Target targets[32];
+        int n = 0;
+        const int total = plan_eval_detail(&pos, WEIGHTS_OG, targets, &n);
+        o.obj();
+        o.key("total").num(total);
+        o.key("static").num(basic_eval(&pos, WEIGHTS_OG));
+        o.key("active").boolean(USE_PLAN_EVAL);
+        o.key("pieces").arr();
+        for(int k=0;k<n;k++)
+        {
+            const Plan_Target& t = targets[k];
+            if(t.to < 0)
+            continue;
+            const bool white = t.piece < 6;
+            int squares[64];
+            uint64_t via;
+            const int length = plan_path(&pos, t, squares, &via);
+            o.obj();
+            o.key("piece").str(std::string(1, "PRNBQK"[t.piece % 6]));
+            o.key("color").str(white ? "white" : "black");
+            o.key("from").str(square_name(t.from));
+            o.key("to").str(square_name(t.to));
+            o.key("n").num(t.n);
+            o.key("db").num(t.db);
+            o.key("term").num(white ? t.term : -t.term);
+            o.key("path").arr();
+            for(int i=0;i<length;i++)
+            o.str(square_name(squares[i]));
+            o.end_arr();
+            o.key("via").arr();
+            while(via)
+            o.str(square_name(find_and_delete_trailling_1(via)));
+            o.end_arr();
+            o.end_obj();
+        }
+        o.end_arr();
+        o.end_obj();
     }
 
     void write_eval(json::Out& o) const

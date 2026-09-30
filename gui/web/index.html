@@ -52,8 +52,12 @@
       <input type="checkbox" id="set-engine-line">
       <span>Engine line and search stats</span>
     </label>
-    <p class="note">Both apply in every mode. They last as long as the server
-    runs and are not saved to a file.</p>
+    <label class="switch">
+      <input type="checkbox" id="set-plans">
+      <span>Plans: each piece's dream square and the path there</span>
+    </label>
+    <p class="note">All three apply in every mode. They last as long as the
+    server runs and are not saved to a file.</p>
     <label class="switch">
       <input type="checkbox" id="set-tb">
       <span>Tablebases</span>
@@ -271,6 +275,25 @@
       <p id="analysis-stats" class="note"></p>
       <p id="analysis-line" class="line"></p>
       <div id="tb-moves" class="tb-moves" hidden></div>
+    </section>
+
+    <!-- The plan term (#44): per piece the square it would most like to be on
+         (db, what standing there is worth to its owner), the moves it needs (N)
+         and what that adds to the eval now (term, white's view). Hover a row or
+         click a piece to see its path; click the row again to let go. -->
+    <section class="panel" id="plans-panel" hidden>
+      <h2>Plans</h2>
+      <div class="plans-head">
+        <div id="plans-filter" class="controls">
+          <button data-side="both" class="active">Both</button>
+          <button data-side="white">White</button>
+          <button data-side="black">Black</button>
+        </div>
+        <span id="plans-total" class="score"></span>
+      </div>
+      <p id="plans-note" class="note"></p>
+      <div class="plans-row plans-legend"><span></span><span>to</span><span>N</span><span>db</span><span>term</span></div>
+      <div id="plans-list" class="plans-list cg-wrap"></div>
     </section>
 
     <section class="panel">

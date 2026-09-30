@@ -78,6 +78,9 @@ const HYPERBULLET_PRESETS = [
 // renderWatchPanel, via lastPlayClockOn/lastWatchClockOn), which is also what
 // resets it after a successful Apply.
 let adjudicateOpen = false;
+// The plan view: which side's plans are drawn, the piece (by its square) clicked
+// to stay picked, and the one the pointer is over in the list.
+let planSide = 'both', planPinned = null, planHover = null;
 let playKindChoice = 'depth', watchKindChoice = 'depth';
 let playCustomOpen = false, watchCustomOpen = false;
 let lastPlayClockOn = null, lastWatchClockOn = null;
@@ -239,7 +242,18 @@ const board = Chessground(el('board'), {
   draggable: { showGhost: true },
   movable: { free: false, color: 'both', showDests: true, events: { after: onUserMove } },
   premovable: { enabled: true, showDests: true, events: { set: onPremoveSet } },
-  drawable: { enabled: true },
+  drawable: {
+    enabled: true,
+    // The plan view's arrows (renderPlans): a colour per side, and the one piece
+    // looked at in the accent colour over faint circles on its other routes.
+    brushes: {
+      planWhite: { key: 'plw', color: '#3f8fd8', opacity: 0.75, lineWidth: 8 },
+      planBlack: { key: 'plb', color: '#d8503f', opacity: 0.75, lineWidth: 8 },
+      planPick:  { key: 'plp', color: '#e68f00', opacity: 0.95, lineWidth: 10 },
+      planVia:   { key: 'plv', color: '#e68f00', opacity: 0.35, lineWidth: 6 },
+    },
+  },
+  events: { select: key => pickPlanAt(key) },
 });
 
 // A right-click always means "forget the queue", never "start drawing" — capture phase
@@ -565,6 +579,32 @@ el('set-evalbar').addEventListener('change', event =>
   command('/api/settings', { evalBar: event.target.checked }));
 el('set-engine-line').addEventListener('change', event =>
   command('/api/settings', { engineLine: event.target.checked }));
+el('set-plans').addEventListener('change', event =>
+  command('/api/settings', { plans: event.target.checked }));
+el('plans-filter').addEventListener('click', event => {
+  const button = event.target.closest('button[data-side]');
+  if (!button) return;
+  planSide = button.dataset.side;
+  for (const b of el('plans-filter').children) b.classList.toggle('active', b === button);
+  if (state) renderPlans(state);
+});
+el('plans-list').addEventListener('click', event => {
+  const row = event.target.closest('.plans-row[data-from]');
+  if (!row) return;
+  planPinned = planPinned === row.dataset.from ? null : row.dataset.from;
+  if (state) renderPlans(state);
+});
+el('plans-list').addEventListener('pointerover', event => {
+  const row = event.target.closest('.plans-row[data-from]');
+  const from = row ? row.dataset.from : null;
+  if (from === planHover) return;
+  planHover = from;
+  if (state) drawPlanShapes(state);
+});
+el('plans-list').addEventListener('pointerleave', () => {
+  planHover = null;
+  if (state) drawPlanShapes(state);
+});
 el('set-tb').addEventListener('change', event =>
   command('/api/settings', { tb: event.target.checked }));
 el('set-tb-limit').addEventListener('change', event =>
@@ -745,6 +785,7 @@ function render(s) {
   renderPlayPanel(s);
   renderWatchPanel(s);
   renderEngine(s);
+  renderPlans(s);
   renderSettings(s);
 
   // Leave a FEN or a PGN the user is in the middle of typing alone.
@@ -1102,6 +1143,105 @@ function renderLine(s, ev, clickable) {
   });
 }
 
+// ---------------------------------------------------------------------- plans
+
+// The plan term (lib/plan_eval.hpp), as the server computed it for the position
+// on the board: per piece its best square, db (what standing there is worth to
+// its owner, cp), N (moves needed) and term (what that adds to the eval now,
+// white's view, cp). The list is by size of term; the board shows every listed
+// piece's path, or only the picked one's with its other shortest routes.
+const PLAN_ROLE = { K: 'king', Q: 'queen', R: 'rook', B: 'bishop', N: 'knight', P: 'pawn' };
+
+function signed(v) {
+  return (v > 0 ? '+' : v < 0 ? '−' : '') + Math.abs(v);
+}
+
+function shownPlans(s) {
+  if (!s.plans) return [];
+  return s.plans.pieces
+    .filter(p => planSide === 'both' || p.color === planSide)
+    .sort((a, b) => Math.abs(b.term) - Math.abs(a.term) || b.db - a.db);
+}
+
+function renderPlans(s) {
+  const panel = el('plans-panel');
+  panel.hidden = !s.plans;
+  if (!s.plans) {
+    planPinned = planHover = null;
+    board.setAutoShapes([]);
+    return;
+  }
+  const plans = shownPlans(s);
+  if (planPinned && !plans.some(p => p.from === planPinned)) planPinned = null;
+  el('plans-total').textContent = `${signed(s.plans.total)} cp`;
+  el('plans-note').textContent =
+    `Plan term ${signed(s.plans.total)} cp of the static eval ${signed(s.plans.static)} cp` +
+    (s.plans.active ? '' : ' (USE_PLAN_EVAL is off: shown, not counted)') +
+    `. ${s.plans.pieces.length} pieces have a better square.`;
+
+  const list = el('plans-list');
+  list.replaceChildren();
+  for (const p of plans) {
+    const row = document.createElement('div');
+    row.className = `plans-row ${p.color}`;
+    row.classList.toggle('picked', p.from === planPinned);
+    row.dataset.from = p.from;
+    row.title = `${p.path.join(' → ')}` +
+      (p.via.length > p.path.length ? ` (${p.via.length - 2} squares on some shortest path)` : '');
+    const piece = document.createElement('piece');
+    piece.className = `${PLAN_ROLE[p.piece]} ${p.color}`;
+    row.append(piece);
+    const cells = [
+      `${p.from}→${p.to}`,
+      String(p.n),
+      signed(p.db),
+      signed(p.term),
+    ];
+    for (const text of cells) {
+      const cell = document.createElement('span');
+      cell.textContent = text;
+      row.append(cell);
+    }
+    list.append(row);
+  }
+  drawPlanShapes(s);
+}
+
+// Arrows along each path, one per move. All pieces: a width that grows with the
+// term. One piece (hovered or picked): its path in the accent colour, a label
+// with db on the target, and a faint ring on every other square of a shortest path.
+function drawPlanShapes(s) {
+  if (!s.plans) return;
+  const plans = shownPlans(s);
+  const focus = planHover || planPinned;
+  const picked = focus && plans.find(p => p.from === focus);
+  const shapes = [];
+  const arrows = (p, brush, lineWidth) => {
+    for (let i = 0; i + 1 < p.path.length; i++)
+      shapes.push({ orig: p.path[i], dest: p.path[i + 1], brush, modifiers: { lineWidth } });
+  };
+  if (picked) {
+    for (const sq of picked.via)
+      if (!picked.path.includes(sq)) shapes.push({ orig: sq, brush: 'planVia' });
+    arrows(picked, 'planPick', 10);
+    shapes.push({ orig: picked.to, brush: 'planPick', label: { text: signed(picked.db), fill: '#e68f00' } });
+  } else {
+    const top = Math.max(1, ...plans.map(p => Math.abs(p.term)));
+    for (const p of plans)
+      arrows(p, p.color === 'white' ? 'planWhite' : 'planBlack', 3 + Math.round(9 * Math.abs(p.term) / top));
+  }
+  board.setAutoShapes(shapes);
+}
+
+// A click on a piece picks its plan, when the plan view is on and it has one.
+function pickPlanAt(key) {
+  if (!state || !state.plans) return;
+  const p = shownPlans(state).find(q => q.from === key);
+  if (!p) return;
+  planPinned = key;
+  renderPlans(state);
+}
+
 // ------------------------------------------------------------------- settings
 
 // The gear's switches. The server holds them, so this only draws them; a second
@@ -1109,6 +1249,7 @@ function renderLine(s, ev, clickable) {
 function renderSettings(s) {
   el('set-evalbar').checked = s.settings.evalBar;
   el('set-engine-line').checked = s.settings.engineLine;
+  el('set-plans').checked = s.settings.plans;
   // Without tables there is nothing to switch, and the note says why.
   const st = s.settings;
   el('set-tb').checked = st.tb && st.tbAvailable;

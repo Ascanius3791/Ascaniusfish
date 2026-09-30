@@ -44,6 +44,12 @@ int plan_eval(const BB* const original, const WEIGHTS& W = WEIGHTS_OG);
 // is given (it must hold 32 entries). Computed whatever USE_PLAN_EVAL says.
 int plan_eval_detail(const BB* const original, const WEIGHTS& W, Plan_Target* out, int* count, bool reference = false);
 
+// One shortest path of the piece in `t` to its target, for the GUI's plan view:
+// squares[0] = t.from ... squares[t.n] = t.to, returns t.n+1 (0 when t.to == -1).
+// *via gets every square on some shortest path, both ends included. Same rules
+// as plan_eval(): other pieces fixed, empty squares, no enemy-pawn squares.
+int plan_path(const BB* const original, const Plan_Target& t, int* squares, uint64_t* via);
+
 // piece tables + piece activity + pawn structure, white's view: what db is a change of.
 int plan_partial_eval(const BB* const original, const WEIGHTS& W = WEIGHTS_OG);
 
