@@ -203,7 +203,7 @@ When editing engine internals, `lib/*.hpp` is the declaration/interface layer an
 `GET /api/state`, `GET /api/events` (SSE),
 `POST /api/{move,fen,reset,undo,resign,play,watch,mode,flip,analyse,line,settings}`, all taking
 `id` (default `main`). Both Play and Watch play under a Clock or a fixed depth (#21), starting on a
-1+1 clock (`Session::play_base_ms`/`watch_base_ms`), which is also what Custom opens with; a `kind` of
+1+1 clock (a clock is seeded with base + increment, `Session::clock_start_ms()`, #58) (`Session::play_base_ms`/`watch_base_ms`), which is also what Custom opens with; a `kind` of
 `depth` carries `value` (Watch: per side), and a `kind` of `clock` carries `baseMs`/`incMs` in
 ms — presets and Custom base+increment are entirely a page-side concept (`gui/web/app.js`'s
 `CLOCK_PRESETS`/`HYPERBULLET_PRESETS`), resolved to a plain base+increment before the request is
@@ -267,7 +267,7 @@ things in **all three** modes (#25), drawn from `eval`; the gear in the header o
 panel, whose two switches turn either of them off everywhere at once, and with both off Play and
 Watch look exactly as they did before. The Engine panel also holds Analyse's on/off button, so
 there it stays whatever the switches say. The line's moves are buttons only in Analyse, where
-clicking one walks the board into it — in a game being played that would open a side line. It plays only from the **end of a line**,
+clicking one walks the board into it — in a game being played that would open a side line. Every move of the line is a fixed-width cell (a score sheet, so a line of fixed depth has a fixed length), and hovering one shows the position after it on a small `viewOnly` chessground beside the panel (#58); each `eval.line` entry carries that `fen`, so the page still plays no chess. It plays only from the **end of a line**,
 like Play, so stepping back into the game pauses it. The analysis toggle starts
 **off**: a `go infinite` search holds a core for as long as it runs, and this repo deliberately
 leaves room for several engine processes at once. `main()` ignores `SIGPIPE` — an engine that died must be a message on the page,

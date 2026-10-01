@@ -15,7 +15,7 @@
 // iteration of the running search: the page never waits for a search, it is
 // simply sent a new state whenever there is one.
 import { Chessground } from './vendor/chessground.min.js';
-import { playForTransition, initMuteToggle } from './sound.js';
+import { playForTransition, initMuteToggle, initLowTimeToggle, playLowTime } from './sound.js';
 
 const sessionId = new URLSearchParams(location.search).get('id') || 'main';
 const el = id => document.getElementById(id);
@@ -78,7 +78,7 @@ const HYPERBULLET_PRESETS = [
 // renderWatchPanel, via lastPlayClockOn/lastWatchClockOn), which is also what
 // resets it after a successful Apply.
 let adjudicateOpen = false;
-let playKindChoice = 'depth', watchKindChoice = 'depth';
+let playKindChoice = 'clock', watchKindChoice = 'clock';   // Clock is the default (#58)
 let playCustomOpen = false, watchCustomOpen = false;
 let lastPlayClockOn = null, lastWatchClockOn = null;
 
@@ -200,10 +200,31 @@ function updateClockAnchor(s) {
   };
 }
 
+// Whole seconds, rounded up, until the last ten: then tenths, rounded down,
+// as lichess shows them (#58) — "0:09.4", so the last second is never "0:01".
 function formatClock(ms) {
-  const total = Math.max(0, Math.ceil(ms / 1000));
+  ms = Math.max(0, ms);
+  if (ms < 10000) return `0:0${(Math.floor(ms / 100) / 10).toFixed(1)}`;
+  const total = Math.ceil(ms / 1000);
   const m = Math.floor(total / 60), sec = total % 60;
   return `${m}:${String(sec).padStart(2, '0')}`;
+}
+
+// The low-time warning sounds once when *your* clock in Play drops below 10 s,
+// never for an engine's (#58). Re-armed only once that clock is back above
+// 15 s, so a 1+1 game hovering around the mark is not a beep every move.
+const LOW_TIME_MS = 10000, LOW_TIME_REARM_MS = 15000;
+let lowTimeArmed = true;
+
+function watchLowTime(whiteMs, blackMs) {
+  if (state.mode !== 'play' || !state.play.clockOn || state.outcome.state !== 'ongoing') return;
+  const mine = state.play.humanColor === 'white' ? whiteMs : blackMs;
+  if (mine >= LOW_TIME_REARM_MS) lowTimeArmed = true;
+  else if (lowTimeArmed && mine > 0 && mine < LOW_TIME_MS && clockAnchor.running &&
+           clockAnchor.turn === state.play.humanColor) {
+    lowTimeArmed = false;
+    playLowTime();
+  }
 }
 
 // Runs on its own timer rather than from render(): a running clock has to
@@ -216,6 +237,7 @@ function tickClocks() {
     if (clockAnchor.turn === 'white') whiteMs = Math.max(0, whiteMs - elapsed);
     else blackMs = Math.max(0, blackMs - elapsed);
   }
+  watchLowTime(whiteMs, blackMs);
   const top = state.orientation === 'white' ? 'black' : 'white';
   drawClockChip(el('clock-top'), top === 'white' ? whiteMs : blackMs);
   drawClockChip(el('clock-bottom'), top === 'white' ? blackMs : whiteMs);
@@ -576,6 +598,7 @@ el('tb-moves').addEventListener('click', event => {
   if (row) command('/api/line', { moves: row.dataset.uci });
 });
 initMuteToggle(el('set-sound'));
+initLowTimeToggle(el('set-lowtime'));
 
 // Anywhere else closes it, as a menu does; the gear itself is its own toggle.
 document.addEventListener('pointerdown', event => {
@@ -982,7 +1005,7 @@ function renderEngine(s) {
   const canToggle = analysing || (halted(s) && s.mode !== 'analyse');
   panel.hidden = !canToggle && !showLine;
   renderTbMoves(s);
-  if (panel.hidden) return;
+  if (panel.hidden) { hidePreview(); shownLineKey = null; return; }
 
   panel.classList.toggle('running', (a.running || s.play.thinking || s.watch.thinking) && !a.error);
   panel.classList.toggle('has-line', showLine && ((known && ev.source !== 'tb') || a.running));
@@ -1077,32 +1100,149 @@ function whiteShare(score) {
 // move is a button: clicking it plays the line up to and including that move. In
 // Play and Watch it is a line to read, not one to walk into — the engine is in
 // the middle of a game there, and clicking a move would open a side line in it.
+//
+// Every move has the same width (#58), laid out like a score sheet: a full move
+// is a number slot and two move slots, so `e4` takes as much room as `exd5+` and
+// a line of a given depth is always as long. A move's number belongs to its
+// white move's cell, and a line starting with black's move keeps the white slot
+// empty inside black's cell, so the cells touch and there is no gap between two
+// moves for the pointer to fall through (see the preview below).
+let shownLine = [];      // the line the cells were drawn from, ev.line's entries
+let shownLineKey = null;
+
 function renderLine(s, ev, clickable) {
   const box = el('analysis-line');
+  const line = ev ? ev.line : [];
+  // A search pushes a state every iteration, mostly with the same line: leave
+  // the cells alone then, so the one under the pointer stays the same element.
+  const key = [clickable, s.fullmove, s.turn, s.orientation, ...line.map(m => m.uci)].join(' ');
+  if (key === shownLineKey) return;
+  shownLineKey = key;
+  shownLine = line;
   box.replaceChildren();
-  if (!ev) return;
   let fullmove = s.fullmove;
   let white = s.turn === 'white';
-  ev.line.forEach((move, ply) => {
+  let unit = null;
+  line.forEach((move, ply) => {
     if (white || ply === 0) {
-      const number = document.createElement('span');
-      number.className = 'move-number';
-      number.textContent = white ? `${fullmove}.` : `${fullmove}\u2026`;
-      box.append(number, ' ');
+      unit = document.createElement('span');
+      unit.className = 'pv-unit';
+      box.append(unit);
     }
     const chip = document.createElement(clickable ? 'button' : 'span');
     if (clickable) {
       chip.type = 'button';
-      chip.dataset.line = ev.line.slice(0, ply + 1).map(m => m.uci).join(' ');
+      chip.dataset.line = line.slice(0, ply + 1).map(m => m.uci).join(' ');
     }
     chip.className = 'pv-move';
-    chip.textContent = move.san;
+    chip.dataset.ply = ply;
     chip.title = move.uci;
-    box.append(chip, ' ');
+    if (white || ply === 0) {
+      const number = document.createElement('span');
+      number.className = 'move-number';
+      number.textContent = white ? `${fullmove}.` : `${fullmove}\u2026`;
+      chip.append(number);
+      if (!white) {
+        const empty = document.createElement('span');
+        empty.className = 'pv-san';
+        chip.append(empty);
+      }
+    }
+    const san = document.createElement('span');
+    san.className = 'pv-san';
+    san.textContent = move.san;
+    chip.append(san);
+    unit.append(chip);
     if (!white) fullmove++;
     white = !white;
   });
+  // The line changed under a hover: the move under the pointer is the same ply
+  // of the new line, since every cell is where it was.
+  if (preview.on) showPreview(preview.ply);
 }
+
+// ------------------------------------------------------------------- preview
+
+// Hovering a move of the line shows the position after it on a small board
+// above the line (#58), the way display_board.py does it: the first move shows
+// after a short delay, so a pointer just passing over the panel shows nothing,
+// and from then on every move switches at once — the board is never cleared
+// between two moves, only when the pointer leaves the line altogether. A gap
+// between cells (there should be none) keeps whatever is shown.
+const HOVER_DELAY_MS = 100;
+const PREVIEW_SIZE = 240;
+const preview = { on: false, ply: -1, timer: 0, board: null };
+
+function previewBoard() {
+  if (!preview.board)
+    preview.board = Chessground(el('preview-board'), {
+      viewOnly: true,
+      coordinates: false,
+      animation: { enabled: false },   // a jump per move, never a slide that lags the pointer
+      highlight: { lastMove: true, check: true },
+      drawable: { enabled: false, visible: false },
+    });
+  return preview.board;
+}
+
+function showPreview(ply) {
+  const move = shownLine[ply];
+  if (!move || !move.fen) return hidePreview();
+  preview.on = true;
+  preview.ply = ply;
+  const box = el('line-preview');
+  placePreview(box);
+  box.classList.add('shown');
+  const fields = move.fen.split(' ');
+  previewBoard().set({
+    fen: fields[0],
+    orientation: state.orientation,
+    turnColor: fields[1] === 'w' ? 'white' : 'black',
+    lastMove: [move.uci.slice(0, 2), move.uci.slice(2, 4)],
+    check: false,
+  });
+  for (const chip of el('analysis-line').querySelectorAll('.pv-move'))
+    chip.classList.toggle('previewed', Number(chip.dataset.ply) === ply);
+}
+
+function hidePreview() {
+  clearTimeout(preview.timer);
+  preview.on = false;
+  preview.ply = -1;
+  el('line-preview').classList.remove('shown');
+  for (const chip of el('analysis-line').querySelectorAll('.pv-move.previewed'))
+    chip.classList.remove('previewed');
+}
+
+// Beside the panel, level with the line, in the room a wide window leaves to
+// the right of the side column; without that room, right above the line (or
+// below it when the window has none above). Measured on every show, since the
+// aside scrolls.
+function placePreview(box) {
+  const line = el('analysis-line').getBoundingClientRect();
+  const panel = el('analysis-panel').getBoundingClientRect();
+  const clampTop = top => Math.max(4, Math.min(top, window.innerHeight - PREVIEW_SIZE - 4));
+  if (panel.right + 16 + PREVIEW_SIZE <= window.innerWidth - 4) {
+    box.style.left = `${panel.right + 16}px`;
+    box.style.top = `${clampTop(line.top)}px`;
+    return;
+  }
+  const above = line.top - PREVIEW_SIZE - 8;
+  box.style.top = `${above >= 4 ? above : line.bottom + 8}px`;
+  box.style.left = `${Math.max(4, panel.right - PREVIEW_SIZE)}px`;
+}
+
+el('analysis-line').addEventListener('mouseover', event => {
+  const chip = event.target.closest('.pv-move');
+  if (!chip) return;
+  const ply = Number(chip.dataset.ply);
+  if (preview.on) return showPreview(ply);
+  clearTimeout(preview.timer);
+  preview.ply = ply;
+  preview.timer = setTimeout(() => showPreview(preview.ply), HOVER_DELAY_MS);
+});
+el('analysis-line').addEventListener('mouseleave', hidePreview);
+el('analysis-line').addEventListener('scroll', () => { if (preview.on) placePreview(el('line-preview')); });
 
 // ------------------------------------------------------------------- settings
 

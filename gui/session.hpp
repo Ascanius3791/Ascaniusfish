@@ -317,7 +317,7 @@ class Session
     // Gives a colour its clock's full base time again. What a new clock setting
     // does to a game that is on: the numbers on the clocks are the game's, so
     // picking a clock means picking how much time is left.
-    void reseed_clock(int colour) { clock_remaining_ms[colour] = clocked_now() ? clock_base_ms(colour) : 0; }
+    void reseed_clock(int colour) { clock_remaining_ms[colour] = clocked_now() ? clock_start_ms(colour) : 0; }
 
     // Watch's analogue of start_play(): a new Clock/Fixed-depth or preset/
     // Custom choice restarts the self-play game from the position it began
@@ -517,6 +517,12 @@ class Session
 
     long long clock_base_ms(int colour) const { return mode==Mode::WATCH ? watch_base_ms[colour] : play_base_ms[colour]; }
     long long clock_inc_ms(int colour)  const { return mode==Mode::WATCH ? watch_inc_ms[colour]  : play_inc_ms[colour]; }
+
+    // What a clock shows before its side's first move: the base plus one
+    // increment, as a Fischer clock is set (1+1 starts at 1:01, #58). The
+    // increment then follows every move as before, so each move, the first
+    // included, has had one added before it is played.
+    long long clock_start_ms(int colour) const { return clock_base_ms(colour)+clock_inc_ms(colour); }
 
     // Should the clock be counting down right now. Neither side's clock runs
     // before the game's first move — the time to decide it is free, the same
@@ -748,8 +754,8 @@ class Session
         live_valid = false;
         watch_pause();
         forget_analysis();
-        clock_remaining_ms[0] = clocked_now() ? clock_base_ms(0) : 0;
-        clock_remaining_ms[1] = clocked_now() ? clock_base_ms(1) : 0;
+        reseed_clock(0);
+        reseed_clock(1);
         clock_mover_since_ms = 0;
         return true;
     }
@@ -1277,9 +1283,17 @@ class Session
         o.null();
         else
         o.obj().key("kind").str(v.score_kind).key("value").num(v.score_value).key("dtz").num(v.tb_dtz).end_obj();
+        // Each move also carries the position after it, which is what the page's
+        // preview board shows while a move of the line is hovered (#58); the page
+        // plays no chess itself, so it cannot work that out on its own.
+        Game walk;
+        walk.start(tree.position(), tree.halfmove_clock(), tree.fullmove());
         o.key("line").arr();
         for(size_t i=0;i<v.san.size();i++)
-        o.obj().key("uci").str(v.uci[i]).key("san").str(v.san[i]).end_obj();
+        {
+            walk.play(v.uci[i]);
+            o.obj().key("uci").str(v.uci[i]).key("san").str(v.san[i]).key("fen").str(walk.fen()).end_obj();
+        }
         o.end_arr();
     }
 
@@ -1305,8 +1319,8 @@ class Session
         // here). Left unarmed (clock_mover_since_ms stays 0) — the very next
         // clock_sync(), moments later from state_json() or the server's tick,
         // arms it from that real timestamp instead of one taken here.
-        clock_remaining_ms[0] = clocked_now() ? clock_base_ms(0) : 0;
-        clock_remaining_ms[1] = clocked_now() ? clock_base_ms(1) : 0;
+        reseed_clock(0);
+        reseed_clock(1);
         clock_mover_since_ms = 0;
     }
 

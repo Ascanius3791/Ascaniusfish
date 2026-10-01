@@ -929,7 +929,14 @@ static Response handle_post_authed(const Request& req)
         else if(parsed==Mode::ANALYSE && !keep_game)
         session.start_analyse();
         else
-        session.mode = parsed;
+        {
+            session.mode = parsed;
+            // Watch keeps the board as it is, but its clocks are its own: from
+            // Analyse they would otherwise still read 0:00 until a preset was
+            // clicked, though the 1+1 it starts on is already set (#58).
+            session.reseed_clock(0);
+            session.reseed_clock(1);
+        }
     }
     else if(req.path=="/api/play")
     {

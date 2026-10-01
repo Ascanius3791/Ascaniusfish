@@ -79,8 +79,13 @@
       <input type="checkbox" id="set-sound">
       <span>Sound</span>
     </label>
-    <p class="note">Whether this browser plays sound, so it stays a
-    per-browser choice (in localStorage) rather than one the server holds.</p>
+    <label class="switch">
+      <input type="checkbox" id="set-lowtime">
+      <span>Low-time warning</span>
+    </label>
+    <p class="note">Whether this browser plays sound, and whether it warns once
+    when your clock in Play drops below 10&nbsp;s. Per-browser choices (in
+    localStorage) rather than ones the server holds.</p>
   </section>
   <section class="panel settings share-panel" id="share" hidden>
     <h2>Position</h2>
@@ -172,17 +177,10 @@
         <div class="field">
           <span class="label">Engine thinks</span>
           <div id="play-kind" class="controls">
-            <button type="button" data-kind="depth">Fixed depth</button>
             <button type="button" data-kind="clock">Clock</button>
+            <button type="button" data-kind="depth">Fixed depth</button>
           </div>
         </div>
-
-        <form id="play-depth-form" class="field" autocomplete="off">
-          <div class="controls">
-            <input id="play-depth-value" type="number" min="1" step="1" aria-label="Depth">
-            <button type="submit">Apply</button>
-          </div>
-        </form>
 
         <div id="play-clock-form" class="field">
           <div id="play-presets" class="controls presets"></div>
@@ -198,6 +196,12 @@
             </div>
           </form>
         </div>
+        <form id="play-depth-form" class="field" autocomplete="off">
+          <div class="controls">
+            <input id="play-depth-value" type="number" min="1" step="1" aria-label="Depth">
+            <button type="submit">Apply</button>
+          </div>
+        </form>
       </div>
 
       <p class="note">Settings can be changed while the game is paused, and the
@@ -222,26 +226,9 @@
         <div class="field">
           <span class="label">Engine thinks</span>
           <div id="watch-kind" class="controls">
-            <button type="button" data-kind="depth">Fixed depth</button>
             <button type="button" data-kind="clock">Clock</button>
+            <button type="button" data-kind="depth">Fixed depth</button>
           </div>
-        </div>
-
-        <div id="watch-depth-form">
-          <form class="field watch-side" data-side="white" autocomplete="off">
-            <span class="label">White thinks</span>
-            <div class="controls">
-              <input class="watch-depth-value" type="number" min="1" step="1" aria-label="White depth">
-              <button type="submit">Apply</button>
-            </div>
-          </form>
-          <form class="field watch-side" data-side="black" autocomplete="off">
-            <span class="label">Black thinks</span>
-            <div class="controls">
-              <input class="watch-depth-value" type="number" min="1" step="1" aria-label="Black depth">
-              <button type="submit">Apply</button>
-            </div>
-          </form>
         </div>
 
         <div id="watch-clock-form" class="field">
@@ -254,6 +241,22 @@
               <label>Black inc (s) <input id="watch-custom-black-inc" type="number" min="0" step="1"></label>
             </div>
             <div class="controls">
+              <button type="submit">Apply</button>
+            </div>
+          </form>
+        </div>
+        <div id="watch-depth-form">
+          <form class="field watch-side" data-side="white" autocomplete="off">
+            <span class="label">White thinks</span>
+            <div class="controls">
+              <input class="watch-depth-value" type="number" min="1" step="1" aria-label="White depth">
+              <button type="submit">Apply</button>
+            </div>
+          </form>
+          <form class="field watch-side" data-side="black" autocomplete="off">
+            <span class="label">Black thinks</span>
+            <div class="controls">
+              <input class="watch-depth-value" type="number" min="1" step="1" aria-label="Black depth">
               <button type="submit">Apply</button>
             </div>
           </form>
@@ -299,6 +302,13 @@
 
   </aside>
 </main>
+
+<!-- The position after a move of the engine line, while that move is hovered
+     (#58). Always the same place, just above the line, and never in the way of
+     the pointer: it takes no events, so it cannot steal the hover it shows. -->
+<div id="line-preview" class="line-preview" aria-hidden="true">
+  <div id="preview-board"></div>
+</div>
 
 <script type="module" src="app.js"></script>
 </body>

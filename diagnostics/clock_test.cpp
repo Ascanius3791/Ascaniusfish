@@ -134,17 +134,20 @@ static void test_freezes_while_reviewing()
     check_eq(session.clock_remaining_ms[0], 60000, "White's still hasn't moved");
 }
 
-// An increment is credited to whoever just moved, once, right after their
-// move lands — not before, and not to the side about to move next. Taking
-// 10s over the opening move costs nothing (issue #31), so the increment is
-// all that changes White's clock.
+// A clock starts at base + increment, as a Fischer clock is set (#58): the
+// first move gets its increment too. After that an increment is credited to
+// whoever just moved, once, right after their move lands — not before, and
+// not to the side about to move next. Taking 10s over the opening move costs
+// nothing (issue #31), so the increment is all that changes White's clock.
 static void test_increment_credited_after_move()
 {
     long long t = 1000000;
     Session session = clocked_play(60000, 2000, t);
+    check_eq(session.clock_remaining_ms[0], 62000, "White starts at base + increment");
+    check_eq(session.clock_remaining_ms[1], 62000, "so does Black");
     check(move_at(session, t+10000, "e2e4"), "White moves after 10s");
-    check_eq(session.clock_remaining_ms[0], 62000, "base + increment, none of the 10s charged");
-    check_eq(session.clock_remaining_ms[1], 60000, "Black's increment isn't credited until Black moves");
+    check_eq(session.clock_remaining_ms[0], 64000, "one more increment, none of the 10s charged");
+    check_eq(session.clock_remaining_ms[1], 62000, "Black's increment isn't credited until Black moves");
 }
 
 // A clock reaching zero ends the game exactly like a resignation: result()
@@ -183,6 +186,7 @@ static void test_watch_clock_survives_pause()
     session.mode = Mode::WATCH;
     session.watch_clock_on = true;
     session.watch_base_ms[0] = session.watch_base_ms[1] = 30000;
+    session.watch_inc_ms[0] = session.watch_inc_ms[1] = 0;
     session.reset();
     play(session, "e2e4");
     play(session, "e7e5");
@@ -230,6 +234,7 @@ static void test_no_clock_before_first_move()
     watch_session.mode = Mode::WATCH;
     watch_session.watch_clock_on = true;
     watch_session.watch_base_ms[0] = watch_session.watch_base_ms[1] = 60000;
+    watch_session.watch_inc_ms[0] = watch_session.watch_inc_ms[1] = 0;
     watch_session.reset();
     watch_session.watch_running = true;
     watch_session.searching = Search_Kind::WATCH;   // a search for the very first move is already out

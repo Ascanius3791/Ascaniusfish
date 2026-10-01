@@ -65,3 +65,41 @@ export function initMuteToggle(checkbox) {
   checkbox.checked = !isMuted();
   checkbox.addEventListener('change', event => setMuted(!event.target.checked));
 }
+
+// The low-time warning (#58): two short beeps, synthesized rather than a file,
+// since lila's standard theme has no low-time sound we ship. It obeys the
+// Sound switch above and has a switch of its own, both per-browser.
+const LOWTIME_KEY = 'ascaniusfish-lowtime-off';
+let audio = null;
+
+function lowTimeOn() {
+  try { return localStorage.getItem(LOWTIME_KEY) !== '1'; }
+  catch { return true; }
+}
+
+export function playLowTime() {
+  if (isMuted() || !lowTimeOn()) return;
+  try {
+    audio = audio || new AudioContext();
+    for (const start of [0, 0.18]) {
+      const osc = audio.createOscillator();
+      const gain = audio.createGain();
+      const at = audio.currentTime + start;
+      osc.frequency.value = 880;
+      gain.gain.setValueAtTime(0.0001, at);
+      gain.gain.exponentialRampToValueAtTime(0.25, at + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.0001, at + 0.12);
+      osc.connect(gain).connect(audio.destination);
+      osc.start(at);
+      osc.stop(at + 0.13);
+    }
+  } catch { /* no Web Audio: the red clock is still there */ }
+}
+
+export function initLowTimeToggle(checkbox) {
+  checkbox.checked = lowTimeOn();
+  checkbox.addEventListener('change', event => {
+    try { localStorage.setItem(LOWTIME_KEY, event.target.checked ? '0' : '1'); }
+    catch { /* won't persist, as with the mute switch */ }
+  });
+}
