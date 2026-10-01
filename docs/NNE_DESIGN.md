@@ -47,11 +47,26 @@ fallback if 128 underfits.
 
 ## Loss
 
-`log(|static + c_pred − label| + ε)` with **ε = 50 cp**. Near zero that is
-roughly linear in the error; beyond 50 cp it grows logarithmically, so the huge
-king-safety evals (up to ±300000 cp) cannot dominate training. (A tiny ε would
-make the gradient `1/(|r|+ε)` explode at small errors, so the net would fit a
-few points exactly.)
+The net is trained in two runs (#54):
+
+1. `log(|static + c_pred − label| + ε)` with **ε = 50 cp**, all layers. Near
+   zero that is roughly linear in the error; beyond 50 cp it grows
+   logarithmically, so a few large errors cannot dominate. (A tiny ε would make
+   the gradient `1/(|r|+ε)` explode at small errors, so the net would fit a few
+   points exactly.) The reason first given here, king-safety evals of up to
+   ±300000 cp, has been gone since #42 (|static| p99 2290 cp, max 8477); the log
+   loss stays because it plays better, not because of that tail.
+2. Only the **last layer refitted** under Stockfish's expected-score loss
+   `|E(static + c) − E(label)|^2.5`, with
+   `E(x) = ½·(1 + σ((x−o)/s) − σ((−x−o)/s))` fitted to 400 of our own games at
+   5+0.05 by maximum likelihood over W/D/L (`tools/wdl_fit`): **o = 219.8 cp,
+   s = 267.7 cp**. This gains +22.6 ± 18.7 Elo over step 1 alone (1000 games).
+
+Trained from scratch, the expected-score loss is no better (s: +16.5 ± 30.4,
+2s: −13.0, s/2: −18.3, 400 games each): it weights the few positions where E
+moves a lot and leaves the corrections of clearly won or lost positions, where E
+is flat, nearly untrained (test median error 71–76 cp against 58). Numbers:
+`docs/measurements/nne_wdl_loss_2026-10-01.md`.
 
 ## Data
 
@@ -106,7 +121,8 @@ test is used only for the reported numbers.
 - Training: AdamW with weight decay 1 (best on the validation set among
   0–3), batch 1024, learning rate 1e-3 halved after 3 epochs without a better
   validation loss, stopped after 8. Numbers:
-  `docs/measurements/nne_train_2026-10-01.md`.
+  `docs/measurements/nne_train_2026-10-01.md`. The loss's second step:
+  `tools/nne_train loss=wdl init=<step-1 net> train=last` (see "Loss").
 
 ## The net in the engine
 
@@ -170,6 +186,17 @@ The first variant already gains, so the fallbacks (the correction at stand pat
 too, hidden size 256, another d, self-play data) were not tried. Numbers:
 `docs/measurements/nne_elo_2026-10-01.md`.
 
+The loss (#54), against the log-loss net above, 5+0.05:
+
+| Variant | Games | Elo B−A (95% CI) |
+|---|---:|---|
+| expected-score loss from scratch, s = 267.7 | 400 | +16.5 ± 30.4 |
+| … 2s | 400 | −13.0 ± 30.0 |
+| … s/2 | 400 | −18.3 ± 29.1 |
+| **log-loss net, last layer refitted with the expected-score loss at s** | 1000 | **+22.6 ± 18.7** [+4.0, +41.4] |
+
+The last is `nets/nne_d6.bin` since #54.
+
 ## Issues
 
 - #50: 500k labelled quiet positions from Lichess games (data tool, labels, split).
@@ -177,3 +204,5 @@ too, hidden size 256, another d, self-play data) were not tried. Numbers:
 - #52: the engine evaluates quiet leaves with the net (inference, UCI options,
   the patch to `ascaniusfish_2.hpp`).
 - #53: the net gains Elo at 5+0.05 (the match, and what to try if it doesn't).
+- #54: the loss chosen by Elo (Stockfish's WDL curve fitted to our games,
+  the last layer refitted under it).
