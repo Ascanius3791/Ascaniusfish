@@ -85,3 +85,4 @@ tools/tb_trade_suite
 # The eval-correction net's dataset (tools/nne_data, #50)
 data/
 nets/*.prev.*
+nets/*.log.*

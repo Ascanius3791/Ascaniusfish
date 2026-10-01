@@ -24,8 +24,10 @@ make nne-retrain MINUTES=60      # stop the relabel after an hour; the same comm
    `data/nne-relabel/`. The FEN list is built from `data/nne/` if it is missing, or
    else fetched from branch `nne-fens`. This takes 85–105 min.
 2. **Train.** It runs `tools/nne_train data=data/nne-relabel` into
-   `nets/nne_d6.bin` and `nets/nne_d6_test.tsv`. The old pair is kept as
-   `nets/*.prev.*`. This takes about 3.5 min on the GPU.
+   `nets/nne_d6.log.bin`, then refits that net's last layer with the WDL loss
+   (`loss=wdl train=last`, #54) into `nets/nne_d6.bin` and
+   `nets/nne_d6_test.tsv`. The old pair is kept as `nets/*.prev.*`. This takes
+   about 4 min on the GPU.
 3. **Check.** It runs `make nne-test`'s check on the new net.
 
 `tools/nne_train` has to be built on its own (`make tools/nne_train`, peak 1.25 GB).

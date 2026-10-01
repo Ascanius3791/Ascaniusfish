@@ -15,7 +15,8 @@
 #    pushed branch's nne-labels/parts are fetched into out/parts, merged here
 #    (game, ply, FEN and features come from the FEN list) and spot-checked
 #    against ~1000 positions labelled locally, all columns equal.
-# 2. tools/nne_train data=out/ into net (the old net is kept as *.prev.*).
+# 2. tools/nne_train data=out/ with the log loss, then its last layer refitted
+#    with the WDL loss (#54) into net (the old net is kept as *.prev.*).
 # 3. make nne-test's check, on that net and its test predictions.
 # Labels are searched with the net off, as nne_data never loads one.
 set -euo pipefail
@@ -94,6 +95,8 @@ for f in "$net" "$preds"; do
     [ -f "$f" ] && cp "$f" "${f%.*}.prev.${f##*.}"
 done
 make tools/nne_train >/dev/null
-./tools/nne_train data="$out" out="$net" preds="$preds"
+log_net="${net%.*}.log.${net##*.}"
+./tools/nne_train data="$out" out="$log_net" preds=-
+./tools/nne_train data="$out" loss=wdl init="$log_net" train=last out="$net" preds="$preds"
 make diagnostics/nne_inference_test >/dev/null
 ./diagnostics/nne_inference_test "$net" "$preds"
