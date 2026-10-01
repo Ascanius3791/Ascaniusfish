@@ -89,3 +89,7 @@ step 2 replaced by "Run `MINUTES=1 tools/nne_cloud_relabel.sh` once; exit status
 expected." Here, `git fetch origin <its branch>` and
 `git show FETCH_HEAD:nne-labels/commit.txt` show that the labels arrived. Then delete
 the branch.
+
+Done on 2026-10-01 at 26efb91: 15,993 positions in 60 s on the 4-vCPU Xeon (about
+266/s, so a full relabel is about 33 min), committed and pushed by the script. 32 of
+them relabelled here gave the same static, qs and label.
