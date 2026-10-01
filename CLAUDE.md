@@ -40,6 +40,7 @@ make bench        # fixed-depth search; prints "bench: nodes N ..." (the search 
 make speed-compare A=main B=.   # nps A/B of two git refs, 95% CI ("." = working tree)
 make tt-stats DEPTH=5 GAMES=4   # TT discards later re-requested, by depth (only build with -DTT_STATS)
 make gui          # build + run the browser GUI server (GUI_PORT=8173 to pick the port)
+make nne-retrain  # after an eval() change: relabel the NNE dataset, retrain, check (docs/NNE_RELABEL.md; FROM=<branch> takes a cloud session's labels)
 make rebuild      # clean + all
 make clean        # remove build artifacts
 ```
