@@ -113,14 +113,24 @@ test is used only for the reported numbers.
 - The engine **never links libtorch** (1.6 GB of libraries per process would
   break the several-engines-at-once budget). Inference is hand-written in
   `lib/nne.hpp` / `src/nne.cpp` (Claude-owned) and reads the exported file.
-- **Float32**. The first layer is recomputed at every eval: at most 32 + 5 active
-  inputs × 128 ≈ 5k additions. Estimated at about 100 ns; measured (#52) at
-  about 1.7k cycles, mostly waiting on the W1 rows from L2, which costs the
-  search about 16% nps (`docs/measurements/nne_nps_2026-10-01.md`). Nothing is
-  added to `BB` or `make_move` (both Ascanius-owned; `BB` is copied every ply).
-  An incrementally updated first layer comes later, only if #53 shows the cost
-  matters. `make nne-test` checks the engine against the trainer's test-set
-  predictions; `NNE=nets/nne_d6.bin` on the bench target searches with the net on.
+- **Integers, quantized at load** (#55; #52's float32 version cost the search
+  about 16% per node, `docs/measurements/nne_nps_2026-10-01.md`). The file stays
+  float32, and `nne::load()` picks every scale from the weights it reads, so
+  any net of this shape works without retuning. Layer 1 is int16 with one
+  scale per unit, the largest that no position can overflow; layer 2 is int16
+  × int16 into int32 (`pmaddwd`), again with the largest safe scale; b2, layer
+  2's clipped ReLU and layer 3 are float. Integer sums are exact, so AVX2 (chosen
+  at run time, the build flags stay SSE2) and the generic code give the same
+  bits on every machine, and the first layer can be **updated rather than
+  recomputed**: each thread keeps the last position's sums per side to move, the
+  inputs as a 13-word bitset, and a leaf adds and subtracts only the rows whose
+  bits differ (4.8 rows on average in `make bench`, 3.7% of leaves from scratch).
+  Nothing is added to `BB`, `make_move` or the search (all Ascanius-owned), and a
+  per-ply stack fed by the search would save about one more row per leaf.
+  Cost and exactness: `docs/measurements/nne_int_2026-10-01.md`. `make nne-test`
+  checks the engine against the trainer's test-set predictions (≤ 1 cp), the
+  updated layer against one from scratch and AVX2 against the generic code;
+  `NNE=nets/nne_d6.bin` on the bench target searches with the net on.
 - **Where**: the quiet leaf of `minimax_tactical` (`ascaniusfish_2.hpp`, the
   `eval(original, W, 0)` after the TT probe) returns `static + correction`. Stand
   pat keeps the raw static eval, since non-quiet positions are not in the data.
