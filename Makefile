@@ -36,7 +36,7 @@ SYZYGY_RANDOM ?=
 TOOL_TARGETS := tools/perft tools/bench tools/speed_compare tools/match tools/make_openings tools/make_endgames tools/gui_match tools/tt_stats tools/syzygy_reference tools/tb_suite tools/tb_trade_suite tools/nne_data
 PROFILE_CXXFLAGS ?= -O2 -mpopcnt -g -pg -Wall -Wno-unknown-pragmas -Wno-parentheses -Wno-unused-variable
 
-.PHONY: all run play asm tests debug profile-startpos perft bench speed-compare match gui-match gui tt-stats syzygy-test nne-test tb-suite tb-trade-suite clean rebuild
+.PHONY: all run play asm tests debug profile-startpos perft bench speed-compare match gui-match gui tt-stats syzygy-test nne-test nne-retrain tb-suite tb-trade-suite clean rebuild
 
 all: $(TARGET) $(UCI_TARGET)
 
@@ -155,6 +155,13 @@ diagnostics/nne_inference_test: diagnostics/nne_inference_test.cpp $(HEADERS) $(
 
 nne-test: diagnostics/nne_inference_test
 	./diagnostics/nne_inference_test
+
+# After a change to eval(): relabel the dataset's positions, retrain the net
+# and run nne-test's check on it (#56, docs/NNE_RELABEL.md). FROM=<branch>
+# takes a cloud session's labels; MINUTES=M stops the relabel after M minutes
+# (run again to carry on).
+nne-retrain:
+	tools/nne_retrain.sh $(if $(FROM),from=$(FROM)) $(if $(MINUTES),minutes=$(MINUTES)) $(if $(JOBS),jobs=$(JOBS))
 
 # Move generation vs known perft counts (PERFT_DEPTH=4 for a quick check)
 perft: tools/perft

@@ -6,7 +6,7 @@
 //                    [seed=50] [games=N] [syzygy=~/syzygy-nr]
 //   ./tools/nne_data merge [out=data/nne]
 //   ./tools/nne_data count <dump.pgn.zst>...
-//   ./tools/nne_data relabel <data.tsv>... [out=data/nne-relabel] [jobs=6]
+//   ./tools/nne_data relabel <data.tsv[.zst]>... [out=data/nne-relabel] [jobs=6]
 //                    [depth=6] [syzygy=~/syzygy-nr] [minutes=M]
 //
 // run: `jobs` forked workers each read every dump and take every jobs-th game
@@ -29,11 +29,17 @@
 // count: only the game filter, no positions; how many games a dump gives.
 //
 // relabel (#56): the positions of existing dataset files (only their game,
-// index, ply and FEN columns are read) labelled again by the current engine:
-// static, qsearch, label and features are computed afresh, and a position that
-// is no longer quiet, or whose label is now a mate or table score, is dropped.
-// Worker w takes every jobs-th position in index order; part files, resuming
-// and merge are the same as run's, so the output is a dataset like run's.
+// index, ply and FEN columns are read, so data/nne_fens.tsv.zst, those four
+// columns alone, will do; *.zst is read through zstdcat) labelled again by the
+// current engine, with the net off as nothing here loads one: static, qsearch,
+// label and features are computed afresh, and a position that is no longer
+// quiet, or whose label is now a mate or table score, is dropped. Worker w
+// takes every jobs-th position in index order. Its part lines hold only the
+// index, status and scores; merge joins game, ply and FEN back from the input
+// and computes the features, so part files labelled elsewhere (a cloud
+// session, docs/NNE_RELABEL.md) are merged here by running the same command
+// with them in out/parts. Resuming works as in run, and the output is a
+// dataset like run's.
 //
 // minutes=M (run and relabel): every worker stops after M minutes, and the
 // run exits with status 3 without merging; started again with the same
@@ -269,20 +275,9 @@ bool quiet(BB& pos, Labeller& lab, int& stat, int& qs)
     return qs==stat;
 }
 
-// A quiet position's record: "ok" and its columns, or why it is dropped.
-std::string label_record(const BB& pos, const std::string& id, int ply, const std::string& fen, int stat, int qs, const Options& opt, Labeller& lab)
+// nne::active_features() of a position, comma separated.
+std::string feature_list(const BB& pos)
 {
-    if(piece_count(pos)<MIN_PIECES)
-    return "tb";
-
-    auto t0 = std::chrono::steady_clock::now();
-    int label = lab.label(pos, opt.depth);
-    long long ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-t0).count();
-    if(is_mate_score(label))
-    return "mate";
-    if(is_tb_score(label))
-    return "tblabel";
-
     int feats[nne::MAX_ACTIVE];
     int n = nne::active_features(pos, feats);
     std::string f;
@@ -291,9 +286,28 @@ std::string label_record(const BB& pos, const std::string& id, int ply, const st
         if(i) f += ',';
         f += std::to_string(feats[i]);
     }
-    return "ok\t" + id + "\t" + std::to_string(ply) + "\t" + fen + "\t"
-         + std::to_string(stat) + "\t" + std::to_string(qs) + "\t" + std::to_string(label) + "\t"
-         + std::to_string(ms) + "\t" + f;
+    return f;
+}
+
+// A quiet position's scores in `out`, "static qsearch label ms" tab separated;
+// or false and why it is dropped.
+bool label_scores(const BB& pos, int stat, int qs, const Options& opt, Labeller& lab, std::string& out)
+{
+    if(piece_count(pos)<MIN_PIECES)
+    {
+        out = "tb";
+        return false;
+    }
+    auto t0 = std::chrono::steady_clock::now();
+    int label = lab.label(pos, opt.depth);
+    long long ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-t0).count();
+    if(is_mate_score(label) || is_tb_score(label))
+    {
+        out = is_mate_score(label) ? "mate" : "tblabel";
+        return false;
+    }
+    out = std::to_string(stat) + "\t" + std::to_string(qs) + "\t" + std::to_string(label) + "\t" + std::to_string(ms);
+    return true;
 }
 
 // One game a worker took, as its line in the part file (without the index).
@@ -323,12 +337,18 @@ std::string process_game(const std::string& game, long long index, const Options
         int stat, qs;
         if(!quiet(pos, lab, stat, qs))
         continue;
-        return label_record(pos, game_id(game), ply, fen, stat, qs, opt, lab);
+        std::string scores;
+        if(!label_scores(pos, stat, qs, opt, lab, scores))
+        return scores;
+        return "ok\t" + game_id(game) + "\t" + std::to_string(ply) + "\t" + fen + "\t" + scores + "\t" + feature_list(pos);
     }
     return "noquiet";
 }
 
-// One relabelled position's line in the part file (without the index).
+// One relabelled position's line in the part file (without the index): "ok"
+// and the scores only. The game, ply, FEN and features follow from the input,
+// and merge joins them back by index, which keeps the part files small enough
+// to push from a cloud session (#56).
 std::string process_position(const Source_Position& p, const Options& opt, Labeller& lab)
 {
     BB pos;
@@ -337,7 +357,10 @@ std::string process_position(const Source_Position& p, const Options& opt, Label
     int stat, qs;
     if(!quiet(pos, lab, stat, qs))
     return "noquiet";
-    return label_record(pos, p.game, p.ply, p.fen, stat, qs, opt, lab);
+    std::string scores;
+    if(!label_scores(pos, stat, qs, opt, lab, scores))
+    return scores;
+    return "ok\t" + scores;
 }
 
 std::string part_path(const Options& opt, int w)
@@ -501,7 +524,9 @@ double percentile(const std::vector<long long>& sorted, double p)
     return sorted[lo] + (at-lo)*(sorted[hi]-sorted[lo]);
 }
 
-int merge(const Options& opt)
+// `positions` are relabel's input (index order), whose game, ply, FEN and
+// features its part lines leave out; empty for run's part files.
+int merge(const Options& opt, const std::vector<Source_Position>& positions = {})
 {
     std::map<std::string, long long> status;
     std::vector<Record> records;
@@ -519,18 +544,43 @@ int merge(const Options& opt)
             continue;
             std::string key = f[1]=="filter" && f.size()>2 ? "filter " + f[2] : f[1];
             status[key]++;
-            if(f[1]!="ok" || f.size()<10)
+            if(f[1]!="ok")
             continue;
             Record r;
             r.index = std::atoll(f[0].c_str());
-            r.game = f[2];
-            r.ply = std::atoi(f[3].c_str());
-            r.fen = f[4];
-            r.stat = std::atoi(f[5].c_str());
-            r.qs = std::atoi(f[6].c_str());
-            r.label = std::atoi(f[7].c_str());
-            r.ms = std::atoi(f[8].c_str());
-            r.features = f[9];
+            if(f.size()==6)  // relabel's: index ok static qsearch label ms
+            {
+                auto p = std::lower_bound(positions.begin(), positions.end(), r.index,
+                                          [](const Source_Position& a, long long i) { return a.index<i; });
+                BB pos;
+                if(p==positions.end() || p->index!=r.index || !uci_parse_fen(p->fen, pos))
+                {
+                    std::fprintf(stderr, "%s: index %lld is not in the positions relabelled%s\n", part_path(opt, w).c_str(), r.index,
+                                 positions.empty() ? " (relabel's parts are merged by running the same relabel command again)" : "");
+                    return 1;
+                }
+                r.game = p->game;
+                r.ply = p->ply;
+                r.fen = p->fen;
+                r.stat = std::atoi(f[2].c_str());
+                r.qs = std::atoi(f[3].c_str());
+                r.label = std::atoi(f[4].c_str());
+                r.ms = std::atoi(f[5].c_str());
+                r.features = feature_list(pos);
+            }
+            else if(f.size()>=10)  // run's: index ok game ply fen static qsearch label ms features
+            {
+                r.game = f[2];
+                r.ply = std::atoi(f[3].c_str());
+                r.fen = f[4];
+                r.stat = std::atoi(f[5].c_str());
+                r.qs = std::atoi(f[6].c_str());
+                r.label = std::atoi(f[7].c_str());
+                r.ms = std::atoi(f[8].c_str());
+                r.features = f[9];
+            }
+            else
+            continue;
             label_ms += r.ms;
             records.push_back(std::move(r));
         }
@@ -640,17 +690,41 @@ int count(const Options& opt)
 
 // ---------------------------------------------------------------- main
 
+// A whole text file; a *.zst one through zstdcat.
+bool read_text(const std::string& path, std::string& text)
+{
+    text.clear();
+    if(path.size()<4 || path.compare(path.size()-4, 4, ".zst")!=0)
+    {
+        std::ifstream in(path, std::ios::binary);
+        if(!in)
+        return false;
+        text.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+        return true;
+    }
+    std::string cmd = "zstdcat -- '" + path + "'";
+    FILE* pipe = popen(cmd.c_str(), "r");
+    if(!pipe)
+    return false;
+    char buf[1<<16];
+    size_t n;
+    while((n = std::fread(buf, 1, sizeof buf, pipe)) > 0)
+    text.append(buf, n);
+    return pclose(pipe)==0;
+}
+
 // relabel's input: the game, index, ply and FEN of every record, in index order.
 bool read_positions(const Options& opt, std::vector<Source_Position>& positions)
 {
     for(const std::string& path : opt.dumps)
     {
-        std::ifstream in(path);
-        if(!in)
+        std::string text;
+        if(!read_text(path, text))
         {
             std::fprintf(stderr, "cannot read %s\n", path.c_str());
             return false;
         }
+        std::istringstream in(text);
         std::string line;
         while(std::getline(in, line))
         {
@@ -744,7 +818,7 @@ int run(const Options& opt)
         std::fprintf(stderr, "stopped after %g minutes; run again with the same arguments to carry on\n", opt.minutes);
         return STOPPED;
     }
-    return merge(opt);
+    return merge(opt, positions);
 }
 
 int main(int argc, char** argv)
