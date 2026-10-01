@@ -6,6 +6,8 @@
 //                    [seed=50] [games=N] [syzygy=~/syzygy-nr]
 //   ./tools/nne_data merge [out=data/nne]
 //   ./tools/nne_data count <dump.pgn.zst>...
+//   ./tools/nne_data relabel <data.tsv>... [out=data/nne-relabel] [jobs=6]
+//                    [depth=6] [syzygy=~/syzygy-nr] [minutes=M]
 //
 // run: `jobs` forked workers each read every dump and take every jobs-th game
 // (games are numbered from 0 across all dumps, in order). A game is kept when
@@ -25,6 +27,17 @@
 // distribution of the correction label - static in the mover's view.
 //
 // count: only the game filter, no positions; how many games a dump gives.
+//
+// relabel (#56): the positions of existing dataset files (only their game,
+// index, ply and FEN columns are read) labelled again by the current engine:
+// static, qsearch, label and features are computed afresh, and a position that
+// is no longer quiet, or whose label is now a mate or table score, is dropped.
+// Worker w takes every jobs-th position in index order; part files, resuming
+// and merge are the same as run's, so the output is a dataset like run's.
+//
+// minutes=M (run and relabel): every worker stops after M minutes, and the
+// run exits with status 3 without merging; started again with the same
+// arguments it carries on. That keeps one call inside a time limit.
 //
 // Output columns (tab separated, one header line starting with '#'):
 //   game  index  ply  fen  static  qsearch  label  features
@@ -69,6 +82,16 @@ struct Options
     uint64_t seed = 50;
     long long games = -1;           // stop after this many games (-1: all)
     std::string syzygy = std::string(getenv("HOME") ? getenv("HOME") : "") + "/syzygy-nr";
+    double minutes = 0;             // stop every worker after this long (0: never)
+    bool out_given = false;
+};
+
+// A position of an existing dataset, for relabel.
+struct Source_Position
+{
+    long long index;
+    std::string game, fen;
+    int ply;
 };
 
 // ---------------------------------------------------------------- reading
@@ -233,6 +256,46 @@ int piece_count(const BB& pos)
     return n;
 }
 
+// Not in check, a legal move, and the quiescence score equals the static eval.
+bool quiet(BB& pos, Labeller& lab, int& stat, int& qs)
+{
+    if(pos.get_in_check())
+    return false;
+    BB children[MAX_LEGAL_MOVES];
+    if(std::get<0>(all_moves(&pos, children))==0)
+    return false;
+    stat = eval(&pos, WEIGHTS_OG, 0);
+    qs = minimax_tactical(&pos, lab.wfh, WEIGHTS_OG, INT_MIN, INT_MAX, nullptr).eval;
+    return qs==stat;
+}
+
+// A quiet position's record: "ok" and its columns, or why it is dropped.
+std::string label_record(const BB& pos, const std::string& id, int ply, const std::string& fen, int stat, int qs, const Options& opt, Labeller& lab)
+{
+    if(piece_count(pos)<MIN_PIECES)
+    return "tb";
+
+    auto t0 = std::chrono::steady_clock::now();
+    int label = lab.label(pos, opt.depth);
+    long long ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-t0).count();
+    if(is_mate_score(label))
+    return "mate";
+    if(is_tb_score(label))
+    return "tblabel";
+
+    int feats[nne::MAX_ACTIVE];
+    int n = nne::active_features(pos, feats);
+    std::string f;
+    for(int i=0;i<n;i++)
+    {
+        if(i) f += ',';
+        f += std::to_string(feats[i]);
+    }
+    return "ok\t" + id + "\t" + std::to_string(ply) + "\t" + fen + "\t"
+         + std::to_string(stat) + "\t" + std::to_string(qs) + "\t" + std::to_string(label) + "\t"
+         + std::to_string(ms) + "\t" + f;
+}
+
 // One game a worker took, as its line in the part file (without the index).
 std::string process_game(const std::string& game, long long index, const Options& opt, Labeller& lab, Move_Tree& tree)
 {
@@ -257,39 +320,24 @@ std::string process_game(const std::string& game, long long index, const Options
         BB pos;
         if(!uci_parse_fen(fen, pos))  // the record is the FEN: label what it reads back as
         return "bad";
-        if(pos.get_in_check())
+        int stat, qs;
+        if(!quiet(pos, lab, stat, qs))
         continue;
-        BB children[MAX_LEGAL_MOVES];
-        if(std::get<0>(all_moves(&pos, children))==0)
-        continue;
-        int stat = eval(&pos, WEIGHTS_OG, 0);
-        int qs = minimax_tactical(&pos, lab.wfh, WEIGHTS_OG, INT_MIN, INT_MAX, nullptr).eval;
-        if(qs!=stat)
-        continue;
-        if(piece_count(pos)<MIN_PIECES)
-        return "tb";
-
-        auto t0 = std::chrono::steady_clock::now();
-        int label = lab.label(pos, opt.depth);
-        long long ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-t0).count();
-        if(is_mate_score(label))
-        return "mate";
-        if(is_tb_score(label))
-        return "tblabel";
-
-        int feats[nne::MAX_ACTIVE];
-        int n = nne::active_features(pos, feats);
-        std::string f;
-        for(int i=0;i<n;i++)
-        {
-            if(i) f += ',';
-            f += std::to_string(feats[i]);
-        }
-        return "ok\t" + game_id(game) + "\t" + std::to_string(ply) + "\t" + fen + "\t"
-             + std::to_string(stat) + "\t" + std::to_string(qs) + "\t" + std::to_string(label) + "\t"
-             + std::to_string(ms) + "\t" + f;
+        return label_record(pos, game_id(game), ply, fen, stat, qs, opt, lab);
     }
     return "noquiet";
+}
+
+// One relabelled position's line in the part file (without the index).
+std::string process_position(const Source_Position& p, const Options& opt, Labeller& lab)
+{
+    BB pos;
+    if(!uci_parse_fen(p.fen, pos))
+    return "bad";
+    int stat, qs;
+    if(!quiet(pos, lab, stat, qs))
+    return "noquiet";
+    return label_record(pos, p.game, p.ply, p.fen, stat, qs, opt, lab);
 }
 
 std::string part_path(const Options& opt, int w)
@@ -316,7 +364,14 @@ long long resume_point(const std::string& path)
     return std::atoll(all.c_str()+begin);
 }
 
-int worker(int w, const Options& opt)
+constexpr int STOPPED = 3;  // a worker's exit status when minutes= ran out
+
+bool out_of_time(const Options& opt, std::chrono::steady_clock::time_point t0)
+{
+    return opt.minutes>0 && std::chrono::duration<double>(std::chrono::steady_clock::now()-t0).count() > 60*opt.minutes;
+}
+
+int worker(int w, const Options& opt, const std::vector<Source_Position>& positions)
 {
     std::string path = part_path(opt, w);
     long long done = resume_point(path);
@@ -330,6 +385,31 @@ int worker(int w, const Options& opt)
     Move_Tree* tree = new Move_Tree;
     long long index = -1, taken = 0, kept = 0;
     auto t0 = std::chrono::steady_clock::now();
+    if(opt.command=="relabel")
+    {
+        for(size_t k=w; k<positions.size(); k+=opt.jobs)
+        {
+            if(positions[k].index<=done)
+            continue;
+            if(out_of_time(opt, t0))
+            {
+                std::fclose(out);
+                return STOPPED;
+            }
+            std::string result = process_position(positions[k], opt, lab);
+            std::fprintf(out, "%lld\t%s\n", positions[k].index, result.c_str());
+            std::fflush(out);
+            taken++;
+            kept += result.compare(0, 3, "ok\t")==0;
+            if(w==0 && taken%2000==0)
+            {
+                double s = std::chrono::duration<double>(std::chrono::steady_clock::now()-t0).count();
+                std::fprintf(stderr, "worker 0: %lld relabelled, %lld kept, %.0f s\n", taken, kept, s);
+            }
+        }
+        std::fclose(out);
+        return 0;
+    }
     std::string game;
     for(const std::string& dump : opt.dumps)
     {
@@ -346,6 +426,11 @@ int worker(int w, const Options& opt)
             break;
             if(index%opt.jobs!=w || index<=done)
             continue;
+            if(out_of_time(opt, t0))
+            {
+                std::fclose(out);
+                return STOPPED;
+            }
             std::string result = process_game(game, index, opt, lab, *tree);
             std::fprintf(out, "%lld\t%s\n", index, result.c_str());
             std::fflush(out);
@@ -555,6 +640,36 @@ int count(const Options& opt)
 
 // ---------------------------------------------------------------- main
 
+// relabel's input: the game, index, ply and FEN of every record, in index order.
+bool read_positions(const Options& opt, std::vector<Source_Position>& positions)
+{
+    for(const std::string& path : opt.dumps)
+    {
+        std::ifstream in(path);
+        if(!in)
+        {
+            std::fprintf(stderr, "cannot read %s\n", path.c_str());
+            return false;
+        }
+        std::string line;
+        while(std::getline(in, line))
+        {
+            if(line.empty() || line[0]=='#')
+            continue;
+            std::vector<std::string> f = split_tabs(line);
+            if(f.size()<4)
+            {
+                std::fprintf(stderr, "%s: a line without game, index, ply and FEN\n", path.c_str());
+                return false;
+            }
+            positions.push_back({std::atoll(f[1].c_str()), f[0], f[3], std::atoi(f[2].c_str())});
+        }
+    }
+    std::sort(positions.begin(), positions.end(), [](const Source_Position& a, const Source_Position& b) { return a.index<b.index; });
+    std::fprintf(stderr, "%zu positions to relabel\n", positions.size());
+    return true;
+}
+
 // The arguments a part file was written with: a run that carries on must use
 // the same, or its games would be numbered or labelled differently. Dumps may
 // only be added at the end, which leaves the numbers of the games before alone.
@@ -564,7 +679,7 @@ std::string run_config(const Options& opt)
                   + " seed=" + std::to_string(opt.seed) + " tt=" + std::to_string(TT_EXPONENT_FOR_SIZE);
     for(const std::string& d : opt.dumps)
     c += " " + d.substr(d.rfind('/')+1);
-    return c;
+    return opt.command=="relabel" ? "relabel " + c : c;
 }
 
 int run(const Options& opt)
@@ -588,6 +703,11 @@ int run(const Options& opt)
     if(!opt.syzygy.empty() && syzygy::init(opt.syzygy)==0)
     std::fprintf(stderr, "no tables in %s: labels are searched without them\n", opt.syzygy.c_str());
 
+    std::vector<Source_Position> positions;
+    if(opt.command=="relabel" && !read_positions(opt, positions))
+    return 1;
+
+    auto t0 = std::chrono::steady_clock::now();
     std::vector<pid_t> pids;
     for(int w=0; w<opt.jobs; w++)
     {
@@ -599,21 +719,30 @@ int run(const Options& opt)
             prctl(PR_SET_PDEATHSIG, SIGTERM);
             if(getppid()==1)
             _exit(1);
-            _exit(worker(w, opt));
+            _exit(worker(w, opt, positions));
         }
         pids.push_back(pid);
     }
-    bool failed = false;
+    bool failed = false, stopped = false;
     for(pid_t pid : pids)
     {
         int st = 0;
         waitpid(pid, &st, 0);
-        failed |= !WIFEXITED(st) || WEXITSTATUS(st)!=0;
+        bool stop = WIFEXITED(st) && WEXITSTATUS(st)==STOPPED;
+        stopped |= stop;
+        failed |= !stop && (!WIFEXITED(st) || WEXITSTATUS(st)!=0);
     }
+    double wall = std::chrono::duration<double>(std::chrono::steady_clock::now()-t0).count();
+    std::fprintf(stderr, "workers done in %.0f s wall\n", wall);
     if(failed)
     {
         std::fprintf(stderr, "a worker failed; run again to carry on\n");
         return 1;
+    }
+    if(stopped)
+    {
+        std::fprintf(stderr, "stopped after %g minutes; run again with the same arguments to carry on\n", opt.minutes);
+        return STOPPED;
     }
     return merge(opt);
 }
@@ -623,7 +752,7 @@ int main(int argc, char** argv)
     Options opt;
     if(argc<2)
     {
-        std::fprintf(stderr, "usage: %s run|merge|count <dump.pgn.zst>... [out=] [jobs=] [depth=] [seed=] [games=] [syzygy=]\n", argv[0]);
+        std::fprintf(stderr, "usage: %s run|merge|count|relabel <dump.pgn.zst or data.tsv>... [out=] [jobs=] [depth=] [seed=] [games=] [syzygy=] [minutes=]\n", argv[0]);
         return 2;
     }
     opt.command = argv[1];
@@ -633,12 +762,13 @@ int main(int argc, char** argv)
         size_t eq = a.find('=');
         if(eq==std::string::npos) { opt.dumps.push_back(a); continue; }
         std::string k = a.substr(0, eq), v = a.substr(eq+1);
-        if(k=="out") opt.out = v;
+        if(k=="out") { opt.out = v; opt.out_given = true; }
         else if(k=="jobs") opt.jobs = std::max(1, std::atoi(v.c_str()));
         else if(k=="depth") opt.depth = std::max(1, std::atoi(v.c_str()));
         else if(k=="seed") opt.seed = std::strtoull(v.c_str(), nullptr, 10);
         else if(k=="games") opt.games = std::atoll(v.c_str());
         else if(k=="syzygy") opt.syzygy = v;
+        else if(k=="minutes") opt.minutes = std::atof(v.c_str());
         else { std::fprintf(stderr, "unknown option %s\n", k.c_str()); return 2; }
     }
 
@@ -648,8 +778,11 @@ int main(int argc, char** argv)
     init_sliders_attacks(1);//bishop
     init_sliders_attacks(0);//rook
 
+    if(opt.command=="relabel" && !opt.out_given)
+    opt.out = "data/nne-relabel";
     if(opt.command=="merge") return merge(opt);
     if(opt.dumps.empty()) { std::fprintf(stderr, "no dump given\n"); return 2; }
+    if(opt.command=="relabel") return run(opt);
     if(opt.command=="count") return count(opt);
     if(opt.command=="run") return run(opt);
     std::fprintf(stderr, "unknown command %s\n", opt.command.c_str());
