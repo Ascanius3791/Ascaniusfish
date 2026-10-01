@@ -141,6 +141,10 @@ class Session
 
     bool tb_active() const { return tb_on && tablebase_setup().available(); }
 
+    // The eval-correction net (#53), on by default like the engine's own UseNNE.
+    // It reaches every engine of the session as setoption, like the tables.
+    bool nne_on = true;
+
     // The UCI options this session's engines should have. With the tables off
     // the path is the engine's own "empty" default, which is how it lets go.
     std::vector<std::pair<std::string, std::string>> engine_options() const
@@ -148,6 +152,7 @@ class Session
         std::vector<std::pair<std::string, std::string>> options;
         options.push_back({"SyzygyPath", tb_active() ? tablebase_setup().dir : "<empty>"});
         options.push_back({"SyzygyProbeLimit", std::to_string(tb_limit)});
+        options.push_back({"UseNNE", nne_on ? "true" : "false"});
         return options;
     }
 
@@ -982,6 +987,7 @@ class Session
         o.key("tbAvailable").boolean(tablebase_setup().available());
         o.key("tbReason").str(tablebase_setup().reason);
         o.key("tbMaxPieces").num(std::min(TB_LIMIT_MAX, tablebase_setup().max_pieces()));
+        o.key("nne").boolean(nne_on);
         o.end_obj();
 
         o.end_obj();

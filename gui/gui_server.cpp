@@ -1102,6 +1102,22 @@ static Response handle_post_authed(const Request& req)
             return Response::json(json::error("tbLimit must be 3, 4 or 5"), 400);
             session.tb_limit = n;
         }
+        // The eval-correction net (#53). A running analysis starts again under
+        // the new eval, and what was kept from the old one is forgotten; a Play or
+        // Watch search keeps its options, like the tables, and the next move has them.
+        auto nne = body.find("nne");
+        if(nne!=body.end())
+        {
+            if(nne->second!="true" && nne->second!="false")
+            return Response::json(json::error("nne must be true or false"), 400);
+            if(session.nne_on!=(nne->second=="true"))
+            {
+                session.nne_on = nne->second=="true";
+                if(session.analysing())
+                abort_search(session);
+                session.forget_analysis();
+            }
+        }
     }
     else
     return Response::text("not found: " + req.path, 404);

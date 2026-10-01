@@ -569,6 +569,8 @@ el('set-tb').addEventListener('change', event =>
   command('/api/settings', { tb: event.target.checked }));
 el('set-tb-limit').addEventListener('change', event =>
   command('/api/settings', { tbLimit: Number(event.target.value) }));
+el('set-nne').addEventListener('change', event =>
+  command('/api/settings', { nne: event.target.checked }));
 el('tb-moves').addEventListener('click', event => {
   const row = event.target.closest('button.tb-move');
   if (row) command('/api/line', { moves: row.dataset.uci });
@@ -1120,6 +1122,7 @@ function renderSettings(s) {
   el('set-tb-note').textContent = st.tbAvailable
     ? 'Exact results from Syzygy tables, shown at once and given to the engines. Same lifetime as the two above.'
     : st.tbReason;
+  el('set-nne').checked = st.nne;
 }
 
 function openShare(open) {

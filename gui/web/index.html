@@ -69,6 +69,13 @@
     <p class="note" id="set-tb-note">Exact results from Syzygy tables, shown at
     once and given to the engines. Same lifetime as the two above.</p>
     <label class="switch">
+      <input type="checkbox" id="set-nne">
+      <span>Eval-correction net</span>
+    </label>
+    <p class="note">Corrects the engines' static eval at quiet leaves (+80 Elo
+    at 5+0.05). Switching it restarts the analysis and forgets the evals kept
+    from the other setting.</p>
+    <label class="switch">
       <input type="checkbox" id="set-sound">
       <span>Sound</span>
     </label>
