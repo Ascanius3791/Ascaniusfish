@@ -19,6 +19,7 @@ tools/gui_match
 tools/tt_stats
 tools/nne_data
 tools/nne_train
+tools/wdl_fit
 gui_match.pgn
 match.pgn
 benchmarks/profile_startpos

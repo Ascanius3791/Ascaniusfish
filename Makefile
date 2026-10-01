@@ -33,7 +33,7 @@ GUI_BIND ?=
 GUI_TUNNEL ?=
 SYZYGY_PATH ?= $(HOME)/syzygy-nr
 SYZYGY_RANDOM ?=
-TOOL_TARGETS := tools/perft tools/bench tools/speed_compare tools/match tools/make_openings tools/make_endgames tools/gui_match tools/tt_stats tools/syzygy_reference tools/tb_suite tools/tb_trade_suite tools/nne_data
+TOOL_TARGETS := tools/perft tools/bench tools/speed_compare tools/match tools/make_openings tools/make_endgames tools/gui_match tools/tt_stats tools/syzygy_reference tools/tb_suite tools/tb_trade_suite tools/nne_data tools/wdl_fit
 PROFILE_CXXFLAGS ?= -O2 -mpopcnt -g -pg -Wall -Wno-unknown-pragmas -Wno-parentheses -Wno-unused-variable
 
 .PHONY: all run play asm tests debug profile-startpos perft bench speed-compare match gui-match gui tt-stats syzygy-test nne-test nne-retrain tb-suite tb-trade-suite clean rebuild
@@ -100,6 +100,10 @@ tools/make_endgames: tools/make_endgames.cpp tools/game_rules.hpp tools/uci_engi
 NNE_TT ?= 13
 tools/nne_data: tools/nne_data.cpp gui/move_tree.hpp tools/game_rules.hpp $(HEADERS) $(SOURCES)
 	$(CXX) $(CXXFLAGS) -DTT_EXPONENT=$(NNE_TT) -pthread -o $@ tools/nne_data.cpp
+
+# Stockfish's win/draw/loss curve fitted to tools/match PGN (#54).
+tools/wdl_fit: tools/wdl_fit.cpp
+	$(CXX) -O2 -std=c++17 -Wall -o $@ tools/wdl_fit.cpp
 
 # The eval-correction net's trainer (#51), against the libtorch inside the
 # installed torch wheel. Not part of any other target: compiling it peaks at
