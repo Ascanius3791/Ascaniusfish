@@ -70,7 +70,7 @@ Every issue gets its own git worktree, so sessions on different issues never sha
 1. In the worktree: `git rebase main`, resolving conflicts there. Show Ascanius any resolution that changes an Ascanius-owned file before continuing.
 2. Re-verify on the new base: `make`, plus `make perft`/`make bench` as the commit rules require. If the tip commit's `bench:` no longer matches, amend it.
 3. In the main folder: `git merge --ff-only issue/N`. If it refuses (another issue landed first, or Ascanius has uncommitted edits in the same files), say so. Never force it.
-4. `git worktree remove .claude/worktrees/issue-N`, `git branch -d issue/N`, then close the issue (`Done in <hash>: …`).
+4. `git worktree remove .claude/worktrees/issue-N`, `git branch -d issue/N`, then close the issue (`Done in <hash>: …`). The issue's sessions stay in the session history: `.claude/hooks/adopt_worktree_sessions.py` moves their transcripts into the main folder's project once the worktree is gone (after `git worktree remove` and at every session start).
 
 Work without an issue number (a quick fix Ascanius asks for directly) stays in the main folder on `main`, as before.
 
