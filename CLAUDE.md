@@ -284,8 +284,10 @@ The table set is `~/syzygy-nr` (default `SYZYGY_PATH`): the standard `.rtbw` fil
 ### Python GUI bridge
 `lib/python_communication.hpp` / `src/python_communication.cpp` opens `display_board.py` as a subprocess via `popen` (piping UCI move strings to its stdin) so the C++ engine can drive a tkinter/pygame board with sound effects. Separately, `read_from_last_move()` (`ascaniusfish_2.hpp`) and `display_board.py`'s `write_to_last_move_file()` coordinate human-vs-engine play through the shared file `last_move.txt`, polling every 200ms; the color suffix (`ww`/`bb`) written after the move string is a same-color echo used to signal "no new move yet". Treat `last_move.txt` as ephemeral IPC state, not data to commit meaningfully.
 
-### NNUE
-`lib/NNUE.hpp` / `src/NNUE.cpp` exist but are **not wired into the build** — `lib/NNUE.hpp` includes a network implementation via a hardcoded path outside this repo (`../../../../Documents/Semester_7/ML/Semesterprojekt_2/...`) and nothing else in the codebase includes `NNUE.hpp`. Don't assume it compiles or is on the active eval path.
+### The net (NNE)
+`lib/nne.hpp` / `src/nne.cpp` is the eval-correction net (`nets/nne_d6.bin`, UCI `UseNNE`/`NNEFile`; design in `docs/NNE_DESIGN.md`). Ascanius may call it "the net", "NNE" or "NNUE"; all mean this one.
+
+**Retraining it.** When Ascanius asks to retrain or relabel the net, "locally" or "in the cloud", read `docs/NNE_RELABEL.md` and tell Ascanius the steps for that route; don't start the run yourself. Locally it is `make nne-retrain` (~1.5–2 h, needs `data/nne/` and `tools/nne_train` built once, alone). In the cloud Ascanius pastes the prompt from that doc into a Claude cloud session, and afterwards runs `make nne-retrain FROM=<the session's branch>` here.
 
 ### Settings
 `lib/Settings.hpp` are compile-time `constexpr bool`/`int` toggles (print verbosity, per-category timing display, `DEBUG_MODE` for consistency checks like `saefty_checks`, `MAX_PV_Lenght`, `max_mating_seq`). Flip these instead of adding new runtime flags for engine-internal debugging output.

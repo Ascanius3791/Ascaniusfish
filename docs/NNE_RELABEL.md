@@ -52,10 +52,10 @@ is not needed. GitHub is reached through the session's git proxy.
 
 **Each relabel**
 
-1. Push the branch whose `eval()` should label, e.g. `git push origin issue/60`, and
-   note its commit.
-2. Start a cloud session on the repo and paste the prompt below, with the commit and
-   branch filled in.
+1. The cloud session labels with the code it starts on: `main` as pushed to GitHub.
+   So push `main` first. To label with an eval change that has not landed, push its
+   branch and fill in the prompt's optional `Code:` line.
+2. Start a cloud session on the repo and paste the prompt below.
 3. The session runs `tools/nne_cloud_relabel.sh` once per chunk of at most 25 min,
    usually twice. Each chunk commits `nne-labels/parts` (14 MB in all) and
    `nne-labels/commit.txt` and pushes them to the session's branch, so nothing is
@@ -72,11 +72,10 @@ If a VM is reclaimed mid-run, start a new session with the same prompt and add t
 
 ```
 Label the NNE dataset for Ascaniusfish (docs/NNE_RELABEL.md, "In a Claude cloud session").
-Code: commit <hash>, on branch <branch>.
-Labels so far: none        (or: branch <labels branch>)
-1. `git fetch origin <branch>`, then `git checkout -B <your working branch> <hash>`.
-   If labels so far are on a branch: `git fetch origin <labels branch>` and
-   `git checkout -B <your working branch> FETCH_HEAD` instead.
+1. Stay on your working branch, as it is. Only if a line below says so, first run
+   `git fetch origin <that branch>` and `git reset --hard FETCH_HEAD`:
+   Code: main             (or: branch <branch>, to label with that branch's code)
+   Labels so far: none    (or: branch <labels branch>; then reset to it instead)
 2. Run `tools/nne_cloud_relabel.sh` in the background (one call takes up to 27 min) and
    wait for it. Exit status 3 means a chunk is done and pushed; run it again. Stop when
    it prints "relabel: done".
@@ -84,3 +83,9 @@ Labels so far: none        (or: branch <labels branch>)
    "workers done" and "label search time".
 Change no file yourself: the script commits and pushes nne-labels/ on its own.
 ```
+
+**A trial** of the round trip, a few minutes and no retraining: the same prompt with
+step 2 replaced by "Run `MINUTES=1 tools/nne_cloud_relabel.sh` once; exit status 3 is
+expected." Here, `git fetch origin <its branch>` and
+`git show FETCH_HEAD:nne-labels/commit.txt` show that the labels arrived. Then delete
+the branch.
