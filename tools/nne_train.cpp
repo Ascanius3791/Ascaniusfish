@@ -21,6 +21,8 @@
 //              s' = sfac * WDL_S, the curve tools/wdl_fit fitted to our games.
 // init= starts from an exported net instead of random weights, and
 // train=last then refits only its last layer. epochs=0 only scores `init`.
+// nets/nne_d6.bin is two runs (#54, docs/NNE_DESIGN.md "Loss"): the log loss
+// (out=nets/nne_log.bin preds=-), then loss=wdl init=nets/nne_log.bin train=last.
 //
 // frac < 1 trains on that share of the training set (a fixed random subset,
 // for the learning curve); validation and test are always whole. Adam (AdamW
