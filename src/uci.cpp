@@ -180,6 +180,7 @@ static std::string nne_resolve(const std::string& file)
 // were scored with the other one.
 void UCI_Engine::apply_nne()
 {
+    nne_applied = true;
     const bool was_enabled = nne::enabled;
     const std::string was_loaded = nne::loaded_path;
     nne::enabled = false;
@@ -626,12 +627,14 @@ int UCI_Engine::loop()
             send("option name SyzygyPath type string default <empty>");
             send("option name SyzygyProbeLimit type spin default 5 min 0 max 5");
             send("option name NNEFile type string default nets/nne_d6.bin");
-            send("option name UseNNE type check default false");
+            send("option name UseNNE type check default true");
             send("uciok");
         }
         else if(cmd=="isready")
         {
             ensure_table();
+            if(!nne_applied)
+            apply_nne();//the default UseNNE=true, when no setoption has applied it yet
             send("readyok");
         }
         else if(cmd=="ucinewgame")
@@ -650,7 +653,11 @@ int UCI_Engine::loop()
             handle_position(tokens);
         }
         else if(cmd=="go")
-        handle_go(tokens);
+        {
+            if(!nne_applied)
+            apply_nne();//see isready
+            handle_go(tokens);
+        }
         else if(cmd=="stop")
         stop_search();
         else if(cmd=="quit")

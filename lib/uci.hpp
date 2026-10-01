@@ -78,7 +78,8 @@ class UCI_Engine
     void search_tb_root(const BB& root, const std::vector<Move>& moves, const std::vector<BB>& children, const std::vector<int>& keep, int tb_class, int ply, const UCI_Limits& limits, long long start_ns);
     std::string syzygy_dir;
     std::string nne_file = "nets/nne_d6.bin";  // NNEFile
-    bool use_nne = false;                      // UseNNE; nne::enabled says whether it is in effect
+    bool use_nne = true;                       // UseNNE; nne::enabled says whether it is in effect
+    bool nne_applied = false;                  // apply_nne() has run; the default is applied on the first isready/go
     void apply_nne();
     std::vector<std::string> pv_to_uci(const BB& root, const PV_Line& pv);
 };

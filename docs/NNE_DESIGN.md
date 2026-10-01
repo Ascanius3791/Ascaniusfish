@@ -126,8 +126,12 @@ test is used only for the reported numbers.
   pat keeps the raw static eval, since non-quiet positions are not in the data.
   This is a patch to an Ascanius-owned file, applied with Ascanius's approval
   (#52). The sum is clamped so it can never reach the mate or tablebase bands.
-- **UCI options** `NNEFile` (path) and `UseNNE` (default false), so one binary
-  plays both sides of a match. With `UseNNE` off, `make bench` is unchanged.
+- **UCI options** `NNEFile` (path) and `UseNNE`, so one binary plays both sides
+  of a match. `UseNNE` defaults to true since #53 showed the gain; a match against
+  the net-less engine passes `UseNNE=false` to that side. The default is applied
+  at the first `isready`/`go` unless a `setoption` came first. `make bench` runs
+  without the net unless given `NNE=`, so its signature is unchanged. The GUI's
+  gear has a switch for it (on by default).
 - **CPU, not GPU.** Alpha-beta asks for one eval at a time, and each depends on
   the cutoffs before it. A GPU call costs microseconds of launch and PCIe transfer
   against about 100 ns on the CPU, and a CUDA context costs hundreds of MB per
