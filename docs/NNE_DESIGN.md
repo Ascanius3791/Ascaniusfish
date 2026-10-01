@@ -147,6 +147,16 @@ test is used only for the reported numbers.
   Elo B−A is above 0 with its 95% interval. Both sides have the same clock, so any
   nps cost counts against the net.
 
+## Variants tried (#53)
+
+| Variant | Games | Elo B−A (95% CI) |
+|---|---:|---|
+| d = 6, hidden 128, 426k Lichess positions, correction at the quiet leaf only | 200 | **+79.5 ± 45.8** [+35.1, +126.7] |
+
+The first variant already gains, so the fallbacks (the correction at stand pat
+too, hidden size 256, another d, self-play data) were not tried. Numbers:
+`docs/measurements/nne_elo_2026-10-01.md`.
+
 ## Issues
 
 - #50: 500k labelled quiet positions from Lichess games (data tool, labels, split).
