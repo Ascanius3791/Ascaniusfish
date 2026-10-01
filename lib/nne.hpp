@@ -43,32 +43,33 @@ inline int to_mover(int score, bool white_move)
     return white_move ? score : -score;
 }
 
-// Writes the indices of the active inputs to `out`, ascending, and returns how
-// many there are (at most MAX_ACTIVE).
-inline int active_features(const BB& pos, int* out)
+// The inputs as a set of bits: input i is bit i%64 of word i/64. Words 0-11 are
+// the piece bitboards themselves (seen from the mover), word 12 the castling
+// rights and the en-passant file, so two positions' inputs differ exactly where
+// their words do (what the engine's first layer is updated by, #55).
+constexpr int FEATURE_WORDS = 13;
+
+inline void feature_set(const BB& pos, uint64_t* words)
 {
     const bool white = pos.white_move;
     const int own = white ? 0 : 6, opp = white ? 6 : 0;
-    int n = 0;
-    for(int side=0; side<2; side++)
     for(int piece=0; piece<6; piece++)
     {
-        uint64_t b = pos.Board[(side==0 ? own : opp) + piece];
+        uint64_t o = pos.Board[own + piece], t = pos.Board[opp + piece];
         if(!white)
-        b = __builtin_bswap64(b);  // one byte per rank: swapping bytes flips the ranks
-        const int base = (side*6 + piece)*64;
-        while(b)
         {
-            out[n++] = base + __builtin_ctzll(b);
-            b &= b-1;
+            o = __builtin_bswap64(o);  // one byte per rank: swapping bytes flips the ranks
+            t = __builtin_bswap64(t);
         }
+        words[piece] = o;
+        words[6 + piece] = t;
     }
     // castle[colour][side]: colour 1 white, 0 black; side 1 king side, 0 queen side
     const int us = white ? 1 : 0, them = 1-us;
-    if(pos.castle[us][1])   out[n++] = CASTLING_INPUT + 0;
-    if(pos.castle[us][0])   out[n++] = CASTLING_INPUT + 1;
-    if(pos.castle[them][1]) out[n++] = CASTLING_INPUT + 2;
-    if(pos.castle[them][0]) out[n++] = CASTLING_INPUT + 3;
+    uint64_t extra = uint64_t(pos.castle[us][1]   ? 1 : 0) << (CASTLING_INPUT + 0 - N_PIECE_INPUTS)
+                   | uint64_t(pos.castle[us][0]   ? 1 : 0) << (CASTLING_INPUT + 1 - N_PIECE_INPUTS)
+                   | uint64_t(pos.castle[them][1] ? 1 : 0) << (CASTLING_INPUT + 2 - N_PIECE_INPUTS)
+                   | uint64_t(pos.castle[them][0] ? 1 : 0) << (CASTLING_INPUT + 3 - N_PIECE_INPUTS);
 
     const uint64_t ep = pos.en_passant;
     if(ep)
@@ -78,14 +79,27 @@ inline int active_features(const BB& pos, int* out)
         const uint64_t from = white ? ((ep >> 7) & ~FILE_A) | ((ep >> 9) & ~FILE_H)
                                     : ((ep << 7) & ~FILE_H) | ((ep << 9) & ~FILE_A);
         if(from & pos.Board[own])
-        out[n++] = EN_PASSANT_INPUT + __builtin_ctzll(ep) % 8;
+        extra |= uint64_t(1) << (EN_PASSANT_INPUT - N_PIECE_INPUTS + __builtin_ctzll(ep) % 8);
     }
+    words[12] = extra;
+}
+
+// Writes the indices of the active inputs to `out`, ascending, and returns how
+// many there are (at most MAX_ACTIVE).
+inline int active_features(const BB& pos, int* out)
+{
+    uint64_t words[FEATURE_WORDS];
+    feature_set(pos, words);
+    int n = 0;
+    for(int w=0; w<FEATURE_WORDS; w++)
+    for(uint64_t b = words[w]; b; b &= b-1)
+    out[n++] = 64*w + __builtin_ctzll(b);
     return n;
 }
 
 // The net, 780 -> 128 -> 16 -> 1 with a clipped ReLU (clamp to [0, 1]) after
-// both hidden layers, float32 like the trainer. Weights are [in][out], so an
-// active input is one contiguous row of W1. The last layer is already in cp:
+// both hidden layers, float32 in the file and the trainer. Weights are [in][out],
+// so an active input is one contiguous row of W1. The last layer is already in cp:
 //   c = b3 + clamp(b2 + clamp(b1 + sum of W1[active], 0, 1) W2, 0, 1) W3
 constexpr int HIDDEN_1 = 128;
 constexpr int HIDDEN_2 = 16;
@@ -100,18 +114,51 @@ struct Net
     float b3;
 };
 
-inline Net net;               // what load() read; zero until then
+// What the engine computes with (#55), integers up to layer 2's sums, with
+// every scale chosen at load time from the file's weights:
+// - Layer 1 is int16: unit j's weights and bias are scaled by scale[j] and
+//   rounded, scale[j] as large as it can be while no set of inputs can take the
+//   unit's sum out of int16 (|b1| plus its 37 largest |W1|, times the scale,
+//   stays under 32768). The clipped ReLU is then clamp(sum, 0, scale[j]).
+// - Layer 2 is int16 times int16 into int32: W2[j][k] / scale[j] * w2_scale,
+//   rounded, with w2_scale as large as it can be while no h1 can take a sum
+//   out of int32 and no weight out of int16. Weights are stored by pairs of
+//   units, [j/2][k][j%2], as pmaddwd multiplies and adds them.
+// - b2, layer 2's clipped ReLU and layer 3 are float, in one fixed order.
+// Integer sums are exact, so they are the same whatever order or SIMD width
+// they are added in: a first layer can be updated from another position's
+// instead of recomputed, and every machine gets the same bits.
+struct Quantized_Net
+{
+    alignas(64) int16_t w1[N_INPUTS*HIDDEN_1];
+    alignas(64) int16_t b1[HIDDEN_1];
+    alignas(64) int16_t scale[HIDDEN_1];
+    alignas(64) int16_t w2[HIDDEN_1*HIDDEN_2];  // [j/2][k][j%2]
+    float w2_scale;
+    alignas(64) float b2[HIDDEN_2];
+    float w3[HIDDEN_2];
+    float b3;
+};
+
+inline Quantized_Net qnet;    // load()'s file, quantized; zero until then
 inline bool enabled = false;  // UseNNE: the quiet leaf of minimax_tactical() adds the net's correction
-inline std::string loaded_path;  // the file in `net`, empty if none
+inline std::string loaded_path;  // the file in `qnet`, empty if none
+inline bool use_avx2 = false;    // set by load() from the CPU; both paths give identical results
 
 // Reads a weights file ("NNE1", version 1, 3 layers, sizes 780 128 16 1, then
-// per layer float32 W [in][out] and b [out], little-endian) into `net`. On any
-// error `net` and loaded_path are left as they were and `error` says why.
+// per layer float32 W [in][out] and b [out], little-endian) and quantizes it
+// into `qnet`. On any error `qnet` and loaded_path are left as they were and
+// `error` says why.
 bool load(const std::string& path, std::string& error);
 
 // The net's correction for `pos` in centipawns, in the mover's view. Needs a
-// loaded net.
+// loaded net. The first layer's sums are kept per thread and side to move and
+// updated from the last position's by the inputs that differ, so a leaf next to
+// the previous one costs a few rows of W1 rather than all of them.
 float correction(const BB& pos);
+// The same, with the first layer summed from scratch (for tests: it must give
+// exactly what correction() does).
+float correction_from_scratch(const BB& pos);
 
 // The quiet-leaf score: `static_eval` (white's view, from eval()) plus the net's
 // correction, rounded and clamped to +-SCORE_LIMIT, so however large the static
