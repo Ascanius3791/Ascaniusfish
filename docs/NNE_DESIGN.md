@@ -146,7 +146,6 @@ test is used only for the reported numbers.
   the cutoffs before it. A GPU call costs microseconds of launch and PCIe transfer
   against about 100 ns on the CPU, and a CUDA context costs hundreds of MB per
   engine process. The GPU pays off for large batches, which is training.
-- `lib/NNUE.hpp` / `src/NNUE.cpp` (Ascanius-owned, not wired in) stay untouched.
 
 ## How success is measured
 
