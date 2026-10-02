@@ -68,6 +68,12 @@ it (or without the cookie it sets on the first correct one) gets a plain 401
 and never touches a session or an engine. Both the token and the tunnel's URL
 are new every run, so an old link stops working the moment you restart.
 
+**Who is on it**: the silver bar's counter left of `live` says how many pages
+are open on the server (every tab, every session), e.g. `2 online · 1 remote`.
+A page counts as remote when it came through the tunnel (cloudflared forwards
+from localhost but adds a `Cf-Connecting-Ip` header) or from another machine
+on the LAN. It updates as soon as a page opens or closes.
+
 **Ctrl-C stops everything**: the server, every engine it started, and the
 tunnel — `gui-remote` owns the `cloudflared` process it launched and kills it
 on the way out, so nothing is left forwarding to a server that's gone.

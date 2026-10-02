@@ -568,6 +568,24 @@ static void collect_all()
     any_clock_ticking = ticking;
 }
 
+// The header's page counter (#68): how many pages are open on this server, in
+// every session, and how many of them came through the tunnel or the LAN. Sent
+// to every stream whenever that changes, and whenever a stream opens, so a new
+// page gets it without asking.
+static void publish_audience()
+{
+    static Http_Server::Audience sent{-1, -1};
+    static long long sent_opened = -1;
+    Http_Server::Audience now = server.audience();
+    if(now==sent && server.streams_opened==sent_opened)
+    return;
+    sent = now;
+    sent_opened = server.streams_opened;
+    json::Out o;
+    o.obj().key("pages").num(now.pages).key("remote").num(now.remote).end_obj();
+    server.publish_all("audience", o.s);
+}
+
 // The UCI binary Play mode drives: as given, else next to the working directory
 // or beside gui/, so the server plays from the repo root and from gui/ alike.
 static std::string find_engine(const std::string& option)
@@ -1329,7 +1347,7 @@ int main(int argc, char** argv)
     server.on_subscribe = [](const std::string& topic) { broadcast(sessions.get(topic)); };
     // Where a finished search becomes a move on the board: on this thread, so
     // nothing the worker produced ever touches a socket itself.
-    server.on_tick = collect_all;
+    server.on_tick = [] { collect_all(); publish_audience(); };
     // A running clock is checked for a flag fall often; an idle server sits
     // at the old fixed interval and costs nothing.
     server.poll_timeout = [] { return any_clock_ticking ? CLOCK_POLL_MS : IDLE_POLL_MS; };

@@ -1187,6 +1187,7 @@ function renderLine(s, ev, clickable) {
   shownLineKey = key;
   shownLine = line;
   box.replaceChildren();
+  fitLine();
   let fullmove = s.fullmove;
   let white = s.turn === 'white';
   let unit = null;
@@ -1228,16 +1229,51 @@ function renderLine(s, ev, clickable) {
   if (preview.on) showPreview(preview.ply);
 }
 
+// The line's box is as tall as a line of LINE_PLIES needs at its width (#68),
+// so a line is never scrolled to be read whole, and its height still depends
+// on nothing but the width: the move list below does not walk on every
+// iteration. A full move is 17.5ch (.move-number and two .pv-san); a line that
+// starts with black's move takes one cell more.
+const LINE_PLIES = 50;
+let lineRows = 0;
+
+function fitLine() {
+  const box = el('analysis-line');
+  const width = box.clientWidth;
+  if (!width) return;   // not shown: measured again when it is
+  const ch = parseFloat(getComputedStyle(box).fontSize) * charRatio(box);
+  const perRow = Math.max(1, Math.floor(width / (17.5 * ch)));
+  const rows = Math.ceil((LINE_PLIES / 2 + 1) / perRow);
+  if (rows !== lineRows) {
+    lineRows = rows;
+    box.style.height = `${rows * 1.8}em`;
+  }
+}
+
+// The width of the line font's `0` per pixel of font size: what one `ch` is.
+let charRatioCache = 0;
+function charRatio(box) {
+  if (!charRatioCache) {
+    const probe = document.createElement('span');
+    probe.style.cssText = 'position:absolute;visibility:hidden;width:100ch;font-size:100px';
+    box.append(probe);
+    charRatioCache = probe.offsetWidth / 100 / 100;
+    probe.remove();
+  }
+  return charRatioCache;
+}
+
+new ResizeObserver(fitLine).observe(el('analysis-panel'));
+
 // ------------------------------------------------------------------- preview
 
-// Hovering a move of the line shows the position after it on a small board
-// above the line (#58), the way display_board.py does it: the first move shows
+// Hovering a move of the line shows the position after it on a board laid over
+// the move list (#58, #68), the way display_board.py does it: the first move shows
 // after a short delay, so a pointer just passing over the panel shows nothing,
 // and from then on every move switches at once — the board is never cleared
 // between two moves, only when the pointer leaves the line altogether. A gap
 // between cells (there should be none) keeps whatever is shown.
 const HOVER_DELAY_MS = 100;
-const PREVIEW_SIZE = 240;
 const preview = { on: false, ply: -1, timer: 0, board: null };
 
 function previewBoard() {
@@ -1281,22 +1317,36 @@ function hidePreview() {
     chip.classList.remove('previewed');
 }
 
-// Beside the panel, level with the line, in the room a wide window leaves to
-// the right of the side column; without that room, right above the line (or
-// below it when the window has none above). Measured on every show, since the
-// aside scrolls.
+// Over the game's move list, as lichess does it (#68): the line stays in view
+// and the moves it would replace are what the board covers. As wide as the list
+// (within PREVIEW_MIN..PREVIEW_MAX, whole pixels per square). When the list is
+// not on the screen (scrolled away, or the stacked layout), right above the
+// line instead, or below it when the window has no room above. Measured on
+// every show, since the aside scrolls.
+const PREVIEW_MIN = 240, PREVIEW_MAX = 360;
+
 function placePreview(box) {
+  const moves = el('moves').getBoundingClientRect();
+  const size = Math.floor(Math.min(PREVIEW_MAX, Math.max(PREVIEW_MIN, moves.width)) / 8) * 8;
+  if (box.offsetWidth !== size) {
+    box.style.width = box.style.height = `${size}px`;
+    if (preview.board) preview.board.redrawAll();
+  }
+  // Moved up as far as the window needs, over the line box's empty rows, but
+  // never over a move of the line itself.
   const line = el('analysis-line').getBoundingClientRect();
-  const panel = el('analysis-panel').getBoundingClientRect();
-  const clampTop = top => Math.max(4, Math.min(top, window.innerHeight - PREVIEW_SIZE - 4));
-  if (panel.right + 16 + PREVIEW_SIZE <= window.innerWidth - 4) {
-    box.style.left = `${panel.right + 16}px`;
-    box.style.top = `${clampTop(line.top)}px`;
+  const cells = el('analysis-line').querySelectorAll('.pv-move');
+  const lineEnd = cells.length ? cells[cells.length - 1].getBoundingClientRect().bottom : line.top;
+  const top = Math.max(lineEnd + 8, Math.min(moves.top, window.innerHeight - size - 4));
+  if (moves.top >= 4 && top + size <= window.innerHeight - 4) {
+    box.style.top = `${top}px`;
+    box.style.left = `${moves.left}px`;
     return;
   }
-  const above = line.top - PREVIEW_SIZE - 8;
+  const panel = el('analysis-panel').getBoundingClientRect();
+  const above = line.top - size - 8;
   box.style.top = `${above >= 4 ? above : line.bottom + 8}px`;
-  box.style.left = `${Math.max(4, panel.right - PREVIEW_SIZE)}px`;
+  box.style.left = `${Math.max(4, panel.right - size)}px`;
 }
 
 el('analysis-line').addEventListener('mouseover', event => {
@@ -1763,7 +1813,22 @@ function connect() {
     appliedSeq = -1;
     setLink('live', 'live');
   });
-  events.addEventListener('error', () => setLink('reconnecting…', 'down'));
+  events.addEventListener('error', () => {
+    setLink('reconnecting…', 'down');
+    el('audience').hidden = true;   // a count from before the break may be stale
+  });
+  events.addEventListener('audience', event => showAudience(JSON.parse(event.data)));
+}
+
+// The pages open on this server, this one included, in every session (#68).
+// The remote ones are those that came through the tunnel's link or the LAN.
+function showAudience({ pages, remote }) {
+  const box = el('audience');
+  box.hidden = false;
+  box.classList.toggle('remote', remote > 0);
+  box.textContent = remote > 0 ? `${pages} online · ${remote} remote` : `${pages} online`;
+  box.title = `${pages} page${pages === 1 ? '' : 's'} open on this server`
+    + (remote > 0 ? `, ${remote} through the remote link` : ', all on this machine');
 }
 
 function setLink(text, kind) {
@@ -1773,13 +1838,23 @@ function setLink(text, kind) {
 
 // The narrow stacked layout in style.css; keep this query in step with it.
 const stacked = window.matchMedia('(max-width: 860px)');
+const BOARD_COLUMN_MAX = 620;   // .board-column's max-width in style.css
 
 function fitBoard() {
   // chessground needs a pixel size, and a whole number of pixels per square
   // keeps the piece SVGs from shimmering. The frame is what gets the size, not
   // the board inside it, so the promotion overlay stays on the squares too.
   const frame = document.querySelector('.board-frame');
-  const room = Math.min(document.querySelector('.board-fit').clientWidth, boardRoom());
+  const fit = document.querySelector('.board-fit');
+  const height = boardRoom();
+  // When the height decides the board's size, the column is cut down to the
+  // board (#68), so the room it would leave empty goes to the side column
+  // rather than sitting between the board and the engine line.
+  const column = document.querySelector('.board-column');
+  const width = stacked.matches ? ''
+    : `${Math.min(BOARD_COLUMN_MAX, Math.max(256, Math.floor(height / 8) * 8) + column.clientWidth - fit.clientWidth)}px`;
+  if (column.style.maxWidth !== width) column.style.maxWidth = width;
+  const room = Math.min(fit.clientWidth, height);
   const size = `${Math.max(256, Math.floor(room / 8) * 8)}px`;
   if (frame.style.width !== size) {         // otherwise the observer hearing our own change
     frame.style.width = frame.style.height = size;

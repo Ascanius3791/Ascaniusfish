@@ -212,8 +212,13 @@ When editing engine internals, `lib/*.hpp` is the declaration/interface layer an
   here: it scrolls every scrollable ancestor, the document among them (#22). Above and below the
   board sit two fixed-height `.player-strip`s, one per side: lichess's material diff (counted from
   the FEN, drawn with chessground's own piece images at a small size) and the clock chip.
-  `fitBoard()` lines them up with the board rather than the column. Queued premoves are marked by
-  chessground's `current-premove` square colour (`highlight.custom`), not by arrows.
+  `fitBoard()` lines them up with the board rather than the column, and when the height decides
+  the board's size it cuts the column down to the board, so the side column (300–800px) gets
+  the rest (#68). Queued premoves are marked by
+  chessground's `current-premove` square colour (`highlight.custom`), not by arrows. The header
+  is a silver bar; left of `live` it counts the pages open on the server, every session, and
+  how many came through the tunnel or the LAN (`Http_Server::audience()`, an `audience` SSE
+  event sent to every stream on a change, #68).
 
 **The server owns the position and the page owns nothing** — reloading the browser is just another
 `GET /api/state`. All chess logic stays in C++; the JS is presentation only. Routes:
@@ -284,7 +289,7 @@ things in **all three** modes (#25), drawn from `eval`; the gear in the header o
 panel, whose two switches turn either of them off everywhere at once, and with both off Play and
 Watch look exactly as they did before. The Engine panel also holds Analyse's on/off button, so
 there it stays whatever the switches say. The line's moves are buttons only in Analyse, where
-clicking one walks the board into it — in a game being played that would open a side line. Every move of the line is a fixed-width cell (a score sheet, so a line of fixed depth has a fixed length), and hovering one shows the position after it on a small `viewOnly` chessground beside the panel (#58); each `eval.line` entry carries that `fen`, so the page still plays no chess. It plays only from the **end of a line**,
+clicking one walks the board into it — in a game being played that would open a side line. Every move of the line is a fixed-width cell (a score sheet, so a line of fixed depth has a fixed length), and hovering one shows the position after it on a `viewOnly` chessground laid over the move list, as lichess does (#58, #68); each `eval.line` entry carries that `fen`, so the page still plays no chess. The line's box is as tall as a 50-ply line needs at its width (`fitLine()`), so a line is read whole without scrolling. It plays only from the **end of a line**,
 like Play, so stepping back into the game pauses it. The analysis toggle starts
 **off**: a `go infinite` search holds a core for as long as it runs, and this repo deliberately
 leaves room for several engine processes at once. `main()` ignores `SIGPIPE` — an engine that died must be a message on the page,

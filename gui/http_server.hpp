@@ -241,6 +241,42 @@ class Http_Server
         flush_all();
     }
 
+    // Sends one event to every stream, whatever its topic.
+    void publish_all(const std::string& event, const std::string& data)
+    {
+        std::string frame = "event: " + event + "\ndata: " + data + "\n\n";
+        for(Client& c : clients)
+        if(c.sse && !c.done)
+        queue(c, frame);
+        flush_all();
+    }
+
+    // The pages watching right now (#68): every open stream, and how many of
+    // them came from elsewhere — through a tunnel (cloudflared forwards from
+    // localhost, but adds the visitor's address as a header) or from the LAN.
+    struct Audience
+    {
+        int pages = 0;
+        int remote = 0;
+        bool operator==(const Audience& o) const { return pages==o.pages && remote==o.remote; }
+    };
+
+    Audience audience() const
+    {
+        Audience a;
+        for(const Client& c : clients)
+        if(c.sse && !c.done)
+        {
+            a.pages++;
+            a.remote += c.remote;
+        }
+        return a;
+    }
+
+    // Every stream ever opened, so a page taking the place of one that closed
+    // in the same tick still counts as a change.
+    long long streams_opened = 0;
+
     int subscribers(const std::string& topic) const
     {
         int n = 0;
@@ -308,7 +344,9 @@ class Http_Server
         std::string in, out;
         bool sse = false;
         std::string topic;
-        bool done = false;            // close once `out` is drained
+        bool loopback = true;         // the peer is 127.0.0.0/8
+        bool remote = false;          // an SSE stream from elsewhere, see audience()
+        bool done = false;           // close once `out` is drained
         size_t content_length = 0;
         size_t header_end = 0;        // 0 until the blank line arrived
         std::map<std::string, std::string> headers;  // filled once header_end is set
@@ -335,11 +373,14 @@ class Http_Server
     {
         for(;;)
         {
-            int fd = accept4(listen_fd, nullptr, nullptr, SOCK_CLOEXEC | SOCK_NONBLOCK);
+            sockaddr_in peer{};
+            socklen_t peer_len = sizeof peer;
+            int fd = accept4(listen_fd, (sockaddr*)&peer, &peer_len, SOCK_CLOEXEC | SOCK_NONBLOCK);
             if(fd<0)
             return;
             Client c;
             c.fd = fd;
+            c.loopback = peer.sin_family==AF_INET && (ntohl(peer.sin_addr.s_addr)>>24)==127;
             clients.push_back(c);
         }
     }
@@ -454,6 +495,8 @@ class Http_Server
             queue(c, head);
             c.sse = true;
             c.topic = res.topic;
+            c.remote = !c.loopback || req.headers.count("cf-connecting-ip") || req.headers.count("x-forwarded-for");
+            streams_opened++;
             flush(c);
             if(on_subscribe)
             on_subscribe(c.topic);   // may publish(), which queues onto this client

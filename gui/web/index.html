@@ -27,6 +27,9 @@
     <button data-mode="play">Play</button>
     <button data-mode="watch">Watch</button>
   </nav>
+  <!-- How many pages are open on this server (#68), and how many came from
+       elsewhere: the tunnel's shareable link, or the LAN. -->
+  <span id="audience" hidden></span>
   <span id="link" title="connection to the engine server"></span>
   <button id="share-toggle" class="gear" title="Share: FEN and PGN" aria-label="Share"
           aria-expanded="false" aria-controls="share">
@@ -370,7 +373,7 @@
 </main>
 
 <!-- The position after a move of the engine line, while that move is hovered
-     (#58). Always the same place, just above the line, and never in the way of
+     (#58). Laid over the move list (#68), and never in the way of
      the pointer: it takes no events, so it cannot steal the hover it shows. -->
 <div id="line-preview" class="line-preview" aria-hidden="true">
   <div id="preview-board"></div>
