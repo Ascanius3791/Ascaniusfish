@@ -94,6 +94,7 @@ class Engine
         in = to_child[1];
         out = from_child[0];
         buffer.clear();
+        advertised.clear();
         send("uci");
         if(!wait_for("uciok", 10000))
         return false;
@@ -153,8 +154,17 @@ class Engine
                 return true;
             }
             last_info = line.compare(0, 5, "info ")==0 && line.find(" score ")!=std::string::npos ? line : last_info;
+            size_t type = line.find(" type ");
+            if(line.compare(0, 12, "option name ")==0 && type!=std::string::npos)
+            advertised.push_back(line.substr(12, type-12));
         }
         return false;
+    }
+
+    // Whether the engine named this option in its answer to "uci".
+    bool has_option(const std::string& name) const
+    {
+        return std::find(advertised.begin(), advertised.end(), name)!=advertised.end();
     }
 
     // Asks the engine to quit and waits up to wait_ms before killing it.
@@ -192,6 +202,7 @@ class Engine
     }
 
     std::string last_info;  // last "info ... score ..." line of the current search
+    std::vector<std::string> advertised;  // option names from the answer to "uci"
 
     private:
     int in = -1, out = -1;

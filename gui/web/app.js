@@ -593,6 +593,10 @@ el('set-tb-limit').addEventListener('change', event =>
   command('/api/settings', { tbLimit: Number(event.target.value) }));
 el('set-nne').addEventListener('change', event =>
   command('/api/settings', { nne: event.target.checked }));
+el('set-narrow').addEventListener('change', event =>
+  command('/api/settings', { narrow: event.target.checked }));
+el('set-narrow-deeper').addEventListener('change', event =>
+  command('/api/settings', { narrowDeeper: event.target.checked }));
 el('tb-moves').addEventListener('click', event => {
   const row = event.target.closest('button.tb-move');
   if (row) command('/api/line', { moves: row.dataset.uci });
@@ -1263,6 +1267,17 @@ function renderSettings(s) {
     ? 'Exact results from Syzygy tables, shown at once and given to the engines. Same lifetime as the two above.'
     : st.tbReason;
   el('set-nne').checked = st.nne;
+  // Which build the engine is (#65): only a TT_BOUNDS_NEVER_NARROW=0 build can
+  // narrow, and "deeper" is a step on top of narrowing.
+  el('set-narrow').checked = st.narrow;
+  el('set-narrow').disabled = !st.narrowAvailable;
+  el('set-narrow-deeper').checked = st.narrowDeeper;
+  el('set-narrow-deeper').disabled = !st.narrowAvailable || !st.narrow;
+  el('set-narrow-note').textContent = !st.engineKnown
+    ? 'Engine build unknown: it did not answer at startup.'
+    : st.narrowAvailable
+      ? 'Narrowing build (TT_BOUNDS_NEVER_NARROW=0): a stored bound may narrow alpha and beta, from a search of the same depth or, with the second switch, a deeper one. Switching restarts the analysis.'
+      : 'Default build (TT_BOUNDS_NEVER_NARROW): a stored bound only cuts, it never narrows the window.';
 }
 
 function openShare(open) {

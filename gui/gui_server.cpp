@@ -1125,6 +1125,39 @@ static Response handle_post_authed(const Request& req)
                 session.forget_analysis();
             }
         }
+        // Narrowing on stored bounds (#65), only in an engine built with it.
+        // Deeper is a step on top of narrow: it cannot be on alone, and turning
+        // narrow off takes it along. Like the net, a change restarts the analysis.
+        auto narrow = body.find("narrow");
+        auto deeper = body.find("narrowDeeper");
+        if(narrow!=body.end() || deeper!=body.end())
+        {
+            bool want_narrow = session.narrow_on, want_deeper = session.narrow_deeper;
+            for(auto given : { narrow, deeper })
+            {
+                if(given==body.end())
+                continue;
+                if(given->second!="true" && given->second!="false")
+                return Response::json(json::error(given->first + " must be true or false"), 400);
+                (given==narrow ? want_narrow : want_deeper) = given->second=="true";
+            }
+            if((want_narrow || want_deeper) && !engine_build().narrowing)
+            return Response::json(json::error("this engine is built without narrowing (TT_BOUNDS_NEVER_NARROW)"), 409);
+            if(want_deeper && !want_narrow)
+            {
+                if(deeper!=body.end())
+                return Response::json(json::error("narrowDeeper needs narrow on"), 409);
+                want_deeper = false;   // narrow switched off: deeper goes with it
+            }
+            if(want_narrow!=session.narrow_on || want_deeper!=session.narrow_deeper)
+            {
+                session.narrow_on = want_narrow;
+                session.narrow_deeper = want_deeper;
+                if(session.analysing())
+                abort_search(session);
+                session.forget_analysis();
+            }
+        }
     }
     else
     return Response::text("not found: " + req.path, 404);
@@ -1250,6 +1283,9 @@ int main(int argc, char** argv)
     }
 
     engine_path = find_engine(engine_option);
+    engine_build().probe(engine_path);
+    std::printf("Engine: %s, %s\n", engine_path.c_str(), !engine_build().known ? "did not answer uci"
+                : engine_build().narrowing ? "narrowing build (TTNarrowing/TTNarrowingDeeper)" : "stored bounds only cut");
     web_root = find_web_root(root_option);
     if(!std::ifstream(web_root + "/index.html").good())
     {

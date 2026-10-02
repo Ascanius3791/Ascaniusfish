@@ -40,6 +40,7 @@ make bench        # fixed-depth search; prints "bench: nodes N ..." (the search 
 make speed-compare A=main B=.   # nps A/B of two git refs, 95% CI ("." = working tree)
 make tt-stats DEPTH=5 GAMES=4   # TT discards later re-requested, by depth (only build with -DTT_STATS)
 make gui          # build + run the browser GUI server (GUI_PORT=8173 to pick the port)
+make gui NARROW=1 # the same, driving ./ascaniusfish_uci_narrow (-DTT_BOUNDS_NEVER_NARROW=0, #65)
 make nne-retrain  # after an eval() change: relabel the NNE dataset, retrain, check (docs/NNE_RELABEL.md; FROM=<branch> takes a cloud session's labels)
 make rebuild      # clean + all
 make clean        # remove build artifacts
@@ -291,6 +292,15 @@ The table set is `~/syzygy-nr` (default `SYZYGY_PATH`): the standard `.rtbw` fil
 
 ### Settings
 `lib/Settings.hpp` are compile-time `constexpr bool`/`int` toggles (print verbosity, per-category timing display, `DEBUG_MODE` for consistency checks like `saefty_checks`, `MAX_PV_Lenght`, `max_mating_seq`). Flip these instead of adding new runtime flags for engine-internal debugging output.
+
+#### Narrowing on stored bounds (#65)
+`TT_BOUNDS_NEVER_NARROW` (default 1) keeps #64's rule: in `minimax()` a stored bound only
+cuts, it never narrows alpha and beta. Built with `-DTT_BOUNDS_NEVER_NARROW=0`
+(`make ascaniusfish_uci_narrow`), the UCI check options `TTNarrowing` (a same-depth bound
+narrows, the pre-#64 rule) and `TTNarrowingDeeper` (a deeper one too; only with the former)
+set `tt_narrowing` (`lib/search_control.hpp`); `tools/bench narrow=0|1|2` does the same.
+The GUI asks its engine once at startup which build it is (`engine_build()`,
+`gui/engine_link.hpp`) and shows it, with both switches, in the gear.
 
 #### Transposition table size: do not raise it
 `TT_EXPONENT` (default 15) and `TT_BUCKET_SIZE` (8) in `lib/Settings.hpp` give the

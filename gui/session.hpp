@@ -145,6 +145,12 @@ class Session
     // It reaches every engine of the session as setoption, like the tables.
     bool nne_on = true;
 
+    // Narrowing alpha and beta on a stored bound (#65), off like the engine's
+    // own defaults; only an engine built with it (engine_build()) is told.
+    // Deeper is the step above: it only counts while narrow_on is on.
+    bool narrow_on = false;
+    bool narrow_deeper = false;
+
     // The UCI options this session's engines should have. With the tables off
     // the path is the engine's own "empty" default, which is how it lets go.
     std::vector<std::pair<std::string, std::string>> engine_options() const
@@ -153,6 +159,11 @@ class Session
         options.push_back({"SyzygyPath", tb_active() ? tablebase_setup().dir : "<empty>"});
         options.push_back({"SyzygyProbeLimit", std::to_string(tb_limit)});
         options.push_back({"UseNNE", nne_on ? "true" : "false"});
+        if(engine_build().narrowing)
+        {
+            options.push_back({"TTNarrowing", narrow_on ? "true" : "false"});
+            options.push_back({"TTNarrowingDeeper", narrow_deeper ? "true" : "false"});
+        }
         return options;
     }
 
@@ -994,6 +1005,10 @@ class Session
         o.key("tbReason").str(tablebase_setup().reason);
         o.key("tbMaxPieces").num(std::min(TB_LIMIT_MAX, tablebase_setup().max_pieces()));
         o.key("nne").boolean(nne_on);
+        o.key("engineKnown").boolean(engine_build().known);
+        o.key("narrowAvailable").boolean(engine_build().narrowing);
+        o.key("narrow").boolean(narrow_on);
+        o.key("narrowDeeper").boolean(narrow_deeper);
         o.end_obj();
 
         o.end_obj();

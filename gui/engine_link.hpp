@@ -306,4 +306,28 @@ class Engine_Link
     }
 };
 
+// What the engine binary was built with (#65), asked once at startup: only a
+// build with -DTT_BOUNDS_NEVER_NARROW=0 names TTNarrowing/TTNarrowingDeeper.
+// In the default build a stored bound only cuts, and the gear says so.
+struct Engine_Build
+{
+    bool known = false;       // the engine answered "uci"
+    bool narrowing = false;   // its options can narrow alpha and beta on a stored bound
+
+    void probe(const std::string& path)
+    {
+        Engine engine;
+        engine.path = path;
+        known = engine.start();
+        narrowing = known && engine.has_option("TTNarrowing") && engine.has_option("TTNarrowingDeeper");
+        engine.stop();
+    }
+};
+
+inline Engine_Build& engine_build()
+{
+    static Engine_Build build;
+    return build;
+}
+
 #endif // GUI_ENGINE_LINK_HPP

@@ -5,6 +5,7 @@ a.out
 ascaniusfish
 ascaniusfish_test
 ascaniusfish_uci
+ascaniusfish_uci_narrow
 hash_table_test
 hash_game_test
 pv_first_move_diagnostic

@@ -47,6 +47,12 @@ $(TARGET): $(MAIN) $(HEADERS) $(SOURCES)
 $(UCI_TARGET): ascaniusfish_uci.cpp $(HEADERS) $(SOURCES)
 	$(CXX) $(CXXFLAGS) -pthread -o $@ ascaniusfish_uci.cpp
 
+# The same engine with -DTT_BOUNDS_NEVER_NARROW=0 (#65): UCI TTNarrowing/TTNarrowingDeeper
+# switch narrowing on stored bounds back on. make gui NARROW=1 drives it.
+UCI_NARROW_TARGET := ascaniusfish_uci_narrow
+$(UCI_NARROW_TARGET): ascaniusfish_uci.cpp $(HEADERS) $(SOURCES)
+	$(CXX) $(CXXFLAGS) -DTT_BOUNDS_NEVER_NARROW=0 -pthread -o $@ ascaniusfish_uci.cpp
+
 a.out: $(MAIN) $(HEADERS) $(SOURCES)
 	$(CXX) $(CXXFLAGS) -o $@ $(MAIN)
 
@@ -193,9 +199,10 @@ gui-match: tools/gui_match
 # The board in the browser: prints a http://localhost:<port> URL and serves it.
 # Tablebases are on by default when $(SYZYGY_PATH) exists; SYZYGY=<dir> picks another, SYZYGY=none turns them off.
 SYZYGY ?= $(wildcard $(SYZYGY_PATH))
-# Play mode drives $(UCI_TARGET) over pipes, so that has to exist too.
-gui: $(GUI_TARGET) $(UCI_TARGET)
-	./$(GUI_TARGET) $(if $(GUI_PORT),port=$(GUI_PORT)) $(if $(GUI_BIND),bind=$(GUI_BIND)) $(if $(GUI_TUNNEL),tunnel=$(GUI_TUNNEL)) $(if $(filter-out none,$(SYZYGY)),syzygy=$(SYZYGY))
+# Play mode drives $(UCI_TARGET) over pipes, so that has to exist too; NARROW=1 drives
+# $(UCI_NARROW_TARGET) instead, whose narrowing the gear then switches (#65).
+gui: $(GUI_TARGET) $(if $(NARROW),$(UCI_NARROW_TARGET),$(UCI_TARGET))
+	./$(GUI_TARGET) $(if $(NARROW),engine=./$(UCI_NARROW_TARGET)) $(if $(GUI_PORT),port=$(GUI_PORT)) $(if $(GUI_BIND),bind=$(GUI_BIND)) $(if $(GUI_TUNNEL),tunnel=$(GUI_TUNNEL)) $(if $(filter-out none,$(SYZYGY)),syzygy=$(SYZYGY))
 
 # make gui plus a cloudflared quick tunnel, so the printed link is already
 # shareable — no separate terminal, no combining a token by hand (issue #27).
@@ -217,4 +224,4 @@ debug: $(TARGET)
 rebuild: clean all
 
 clean:
-	rm -f $(TARGET) $(UCI_TARGET) a.out ascaniusfish.s $(TEST_TARGETS) $(TOOL_TARGETS) diagnostics/syzygy_test diagnostics/nne_inference_test tools/nne_train $(GUI_TARGET) benchmarks/profile_startpos benchmarks/gmon.out benchmarks/profile_startpos.gprof
+	rm -f $(TARGET) $(UCI_TARGET) $(UCI_NARROW_TARGET) a.out ascaniusfish.s $(TEST_TARGETS) $(TOOL_TARGETS) diagnostics/syzygy_test diagnostics/nne_inference_test tools/nne_train $(GUI_TARGET) benchmarks/profile_startpos benchmarks/gmon.out benchmarks/profile_startpos.gprof
