@@ -33,10 +33,10 @@ GUI_BIND ?=
 GUI_TUNNEL ?=
 SYZYGY_PATH ?= $(HOME)/syzygy-nr
 SYZYGY_RANDOM ?=
-TOOL_TARGETS := tools/perft tools/bench tools/speed_compare tools/match tools/make_openings tools/make_endgames tools/gui_match tools/tt_stats tools/syzygy_reference tools/tb_suite tools/tb_trade_suite tools/nne_data tools/wdl_fit
+TOOL_TARGETS := tools/perft tools/bench tools/speed_compare tools/match tools/make_openings tools/make_endgames tools/gui_match tools/tt_stats tools/syzygy_reference tools/tb_suite tools/tb_trade_suite tools/nne_data tools/wdl_fit tools/tempo_swing
 PROFILE_CXXFLAGS ?= -O2 -mpopcnt -g -pg -Wall -Wno-unknown-pragmas -Wno-parentheses -Wno-unused-variable
 
-.PHONY: all run play asm tests debug profile-startpos perft bench speed-compare match gui-match gui tt-stats syzygy-test nne-test nne-retrain tb-suite tb-trade-suite clean rebuild
+.PHONY: all run play asm tests debug profile-startpos perft bench speed-compare match gui-match gui tt-stats tempo-swing syzygy-test nne-test nne-retrain tb-suite tb-trade-suite clean rebuild
 
 all: $(TARGET) $(UCI_TARGET)
 
@@ -135,6 +135,15 @@ tb-suite: $(UCI_TARGET) tools/tb_suite
 
 tools/tb_trade_suite: tools/tb_trade_suite.cpp tools/syzygy_positions.hpp tools/uci_engine.hpp $(HEADERS) $(SOURCES)
 	$(CXX) $(CXXFLAGS) -pthread -o $@ tools/tb_trade_suite.cpp
+
+# The static eval's tempo bias from the odd/even swing of the root score (#70):
+# median per phase bin and depth, net off. TEMPO_ARGS e.g. engine=<ref|binary> per_bin=900.
+TEMPO_ARGS ?=
+tools/tempo_swing: tools/tempo_swing.cpp tools/git_build.hpp tools/uci_engine.hpp $(HEADERS) $(SOURCES)
+	$(CXX) $(CXXFLAGS) -pthread -o $@ tools/tempo_swing.cpp
+
+tempo-swing: tools/tempo_swing
+	./tools/tempo_swing $(TEMPO_ARGS)
 
 # 6-7 piece positions where the right trade decides the result (issue #39): the
 # solve count with the tables (TB_TRADE_ARGS=tables=off for the baseline).
