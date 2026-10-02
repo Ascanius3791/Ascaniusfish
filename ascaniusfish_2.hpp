@@ -387,12 +387,18 @@ PV_Line minimax(const BB*const original ,BB* const wfh ,int depth = 0, const WEI
                 {
                     if(readout.pv_line.bound_type==0)//exact
                     return readout.pv_line;
-                    else if(depth==readout.pv_line.depth)//same depth: a bound decides the node only if it already lies outside the window
+                    else if(depth==readout.pv_line.depth)//only on exact depth alpha and beta can be updated
                     {
-                        if(readout.pv_line.bound_type == -1 && readout.pv_line.eval >= beta)  // lower bound: fail-high
-                        return readout.pv_line;
-                        if(readout.pv_line.bound_type == 1 && readout.pv_line.eval <= alpha)  // upper bound: fail-low
-                        return readout.pv_line;
+                        //update alpha and beta based on the bound type
+                        if(readout.pv_line.bound_type == -1) // lower bound
+                        alpha = max(alpha, readout.pv_line.eval);
+                        else if(readout.pv_line.bound_type == 1) // upper bound
+                        beta = min(beta, readout.pv_line.eval);
+                        if(alpha >= beta)
+                        {
+                            // Prune the search
+                            return readout.pv_line;
+                        }
                     }
                 }
                 tt_hint=readout.pv_line;
