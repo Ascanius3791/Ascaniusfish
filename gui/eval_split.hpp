@@ -353,6 +353,24 @@ inline Eval_Split split_attacked(const BB* const original)
     return s;
 }
 
+// tempo_eval() (#70): the side to move's tempo, from TEMPO_ENDGAME with bare
+// kings to TEMPO_OPENING with all material, blended by both sides' material.
+inline Eval_Split split_tempo(const BB* const original)
+{
+    Eval_Split s;
+    int phase = 0;
+    for(int side=0;side<2;side++)
+    phase += 1*count(original->Board[0+6*side]) + 5*count(original->Board[1+6*side]) + 3*count(original->Board[2+6*side])
+           + 3*count(original->Board[3+6*side]) + 9*count(original->Board[4+6*side]);
+    phase = std::min(phase, 2*MATERIAL_MAX);
+    Eval_Part& p = s.add("Side to move", "the mover's tempo: " + std::to_string(TEMPO_ENDGAME) + " cp with bare kings to "
+                         + std::to_string(TEMPO_OPENING) + " with all material; material here " + std::to_string(phase) + "/78");
+    const int mover = original->white_move;
+    p.count[mover] = 1;
+    p.raw[mover] = (TEMPO_OPENING*phase + TEMPO_ENDGAME*(2*MATERIAL_MAX-phase))/(2*MATERIAL_MAX);
+    return s;
+}
+
 // One row of the breakdown: a term of basic_eval(), rebuilt from its parts
 // (`rebuilt`) and as basic_eval() computes it (`real`, from the function it
 // calls; a term with no function of its own has real == rebuilt). Both white's
@@ -367,7 +385,7 @@ struct Eval_Row
     Eval_Split split;
 };
 
-static const int EVAL_ROWS = 6;
+static const int EVAL_ROWS = 7;
 
 // Every term in basic_eval()'s order. `basic` is basic_eval() itself and
 // `real_sum` the real terms added up, so real_sum != basic means basic_eval()
@@ -401,6 +419,7 @@ inline Eval_Breakdown eval_breakdown(const BB* const pos, const WEIGHTS& W)
     set(3, "Pawn structure",   "positional_eval()",     true,  positional_eval(pos, W),     split_pawn_structure(pos, W));
     set(4, "Attacked squares", "basic_eval()'s 5*(attacked squares) line", false, 0,     split_attacked(pos));
     set(5, "Piece activity",   "piece_activity_eval()", true,  piece_activity_eval(pos, W), split_piece_activity(pos));
+    set(6, "Tempo",            "tempo_eval()",          true,  tempo_eval(pos),             split_tempo(pos));
     b.basic = basic_eval(pos, W);
     return b;
 }

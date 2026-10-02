@@ -1421,10 +1421,11 @@ class Session
             "doubled, tripled and isolated pawns, pawns supporting their own pieces",
             "5 per square the side attacks (an inline line in basic_eval)",
             "what each piece attacks and defends",
+            "the side to move's tempo, more with more material on the board",
         };
         // Which rows have sides of their own, and whether white − black is the total.
-        static const bool sides[EVAL_ROWS]      = { true,  false, true, true, true, false };
-        static const bool difference[EVAL_ROWS] = { false, false, true, true, true, false };
+        static const bool sides[EVAL_ROWS]      = { true,  false, true, true, true, false, true };
+        static const bool difference[EVAL_ROWS] = { false, false, true, true, true, false, true };
         const Eval_Breakdown b = eval_breakdown(&pos, W);
         o.obj();
         o.key("rows").arr();
