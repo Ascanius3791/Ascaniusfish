@@ -469,13 +469,16 @@ PV_Line minimax(const BB*const original ,BB* const wfh ,int depth = 0, const WEI
     // root check above: engine_move() can seed ply at a nonzero value from
     // real game history, so a literal ply>0 test would fire at the wrong node.
     // The zugzwang guard (side_to_move_lacks_non_pawn_material) is a crude
-    // first cut - see its TODO in src/basic_eval.cpp.
+    // first cut - see its TODO in src/basic_eval.cpp. The last test (#71): the
+    // null search hands the opponent a free move, so it rarely ends above the
+    // static eval - from below beta it would almost never cut.
     if(ENABLE_NULL_MOVE_PRUNING
        && depth >= NULL_MOVE_MIN_DEPTH
        && ply != effective_root_ply
        && null_move_allowed
        && !side_to_move_lacks_non_pawn_material(original)
-       && !original->get_in_check())
+       && !original->get_in_check()
+       && (original->white_move ? static_eval(original, W)>=beta : static_eval(original, W)<=alpha))
     {
         BB null_child(original, "base"); // flips side to move, clears en passant, keeps castling rights
         Zobrist::update_zobrist_hash_null_move(*original, null_child);

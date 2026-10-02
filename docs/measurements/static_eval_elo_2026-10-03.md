@@ -35,6 +35,17 @@ the net 58889 → 54807 for change 1).
 
 It does not measurably lose, so it lands (the issue's rule for this change).
 
+## Change 2: null move only where it can cut (A = p1, B = p2)
+
+| Games | W / D / L (B) | Score | Pairs 0/½/1/1½/2 | Elo B−A (95% CI) |
+|---|---|---|---|---|
+| 200 (pass 1) | 77 / 50 / 73 | 51.0% | 9 / 18 / 43 / 20 / 10 | +6.9 ± 36.5 |
+| 200 (pass 2) | 81 / 55 / 64 | 54.2% | 8 / 18 / 39 / 19 / 16 | +29.6 ± 39.3 |
+| **400** | 158 / 105 / 137 | 52.6% | 17 / 36 / 82 / 39 / 26 | **+18.3** [−8.4, +45.1], LOS 91.0% |
+
+Below the issue's LOS 95%. Ascanius accepted it at 400 games and stopped the
+games beyond them (a third pass was cut off unfinished).
+
 ## Cost
 
 `tools/bench 6` (30 positions, depth 6), nodes and `perf stat -e instructions:u
