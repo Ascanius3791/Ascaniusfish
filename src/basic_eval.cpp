@@ -294,6 +294,18 @@ int positional_eval(const BB* const original, const WEIGHTS& W)
 
 }
 
+// The side to move is worth a tempo (#70). Without it the eval gave the side
+// that just moved too much: tools/tempo_swing measures that as half the odd/even
+// swing of the root score (net off), from TEMPO_ENDGAME with bare kings
+// to TEMPO_OPENING with all material on the board.
+static const int TEMPO_OPENING = 24, TEMPO_ENDGAME = 9;
+int tempo_eval(const BB* const original)
+{
+    int OW = std::min(enemy_material_left_39ths(original,1)+enemy_material_left_39ths(original,0), 2*MATERIAL_MAX);//both sides' material, 0..78
+    int tempo = (TEMPO_OPENING*OW + TEMPO_ENDGAME*(2*MATERIAL_MAX-OW))/(2*MATERIAL_MAX);
+    return original->white_move ? tempo : -tempo;
+}
+
 int basic_eval(const BB*const original , const WEIGHTS& W)// return the evaluation in centipawns
 {
     int score=0;
@@ -311,6 +323,8 @@ int basic_eval(const BB*const original , const WEIGHTS& W)// return the evaluati
     score+= 5*(count(original->get_attacked_squares(1))-count(original->get_attacked_squares(0)));
     
     score += piece_activity_eval(original,W);
+
+    score += tempo_eval(original);
 
     return score;
 }

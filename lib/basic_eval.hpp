@@ -26,6 +26,8 @@ int pawn_struckture_eval_of_colour(const BB* const original, bool white, const W
 
 int positional_eval(const BB* const original, const WEIGHTS& W = WEIGHTS_OG);
 
+int tempo_eval(const BB* const original);// the side to move's tempo, white's view (#70)
+
 int basic_eval(const BB*const original , const WEIGHTS& W = WEIGHTS_OG);// return the evaluation in centipawns
 
 int tactical_potential(const BB* const original, int king_safety_white, int king_safety_black, const WEIGHTS& W=WEIGHTS_OG);

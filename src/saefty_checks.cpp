@@ -9,7 +9,7 @@ void check_for_symmetrical_evaluation(const BB* const original)
     BB* temp = new BB;
     copy_BB(original,temp);
     temp->white_move=!temp->white_move;
-    if(basic_eval(original)!=basic_eval(temp))
+    if(basic_eval(original)-tempo_eval(original)!=basic_eval(temp)-tempo_eval(temp))//only the tempo depends on the side to move
     {
         std::cout << "The evaluation is not symmetrical" << std::endl;
         std::cout << "The evaluation of the original is: " << basic_eval(original) << std::endl;
