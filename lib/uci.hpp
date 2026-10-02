@@ -80,6 +80,7 @@ class UCI_Engine
     std::string nne_file = "nets/nne_d6.bin";  // NNEFile
     bool use_nne = true;                       // UseNNE; nne::enabled says whether it is in effect
     bool nne_applied = false;                  // apply_nne() has run; the default is applied on the first isready/go
+    bool narrow = false, narrow_deeper = false; // TTNarrowing, TTNarrowingDeeper (#65); the second only counts with the first
     void apply_nne();
     std::vector<std::string> pv_to_uci(const BB& root, const PV_Line& pv);
 };

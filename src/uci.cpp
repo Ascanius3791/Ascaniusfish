@@ -628,6 +628,11 @@ int UCI_Engine::loop()
             send("option name SyzygyProbeLimit type spin default 5 min 0 max 5");
             send("option name NNEFile type string default nets/nne_d6.bin");
             send("option name UseNNE type check default true");
+            if(!tt_bounds_never_narrow)//only a -DTT_BOUNDS_NEVER_NARROW=0 build can narrow (#65)
+            {
+                send("option name TTNarrowing type check default false");
+                send("option name TTNarrowingDeeper type check default false");
+            }
             send("uciok");
         }
         else if(cmd=="isready")
@@ -702,6 +707,12 @@ int UCI_Engine::loop()
                 stop_search();
                 use_nne = value=="true";
                 apply_nne();
+            }
+            else if(!tt_bounds_never_narrow && (name=="TTNarrowing" || name=="TTNarrowingDeeper"))
+            {
+                stop_search();
+                (name=="TTNarrowing" ? narrow : narrow_deeper) = value=="true";
+                tt_narrowing = narrow ? (narrow_deeper ? 2 : 1) : 0;
             }
         }
         else if(cmd=="debug" || cmd=="register" || cmd=="ponderhit")

@@ -4,10 +4,11 @@
 // The total node count is a signature of search behaviour: it changes only
 // when the search itself changes, never with machine speed.
 //
-//   ./tools/bench [depth] [-q] [nne=<file>]
+//   ./tools/bench [depth] [-q] [nne=<file>] [narrow=0|1|2]
 // -q prints only the final "bench:" line (used by tools/speed_compare).
 // nne=<file> evaluates quiet leaves with that eval-correction net (UCI UseNNE,
 // #52); the node count is then a different signature.
+// narrow=n sets tt_narrowing (#65); only a -DTT_BOUNDS_NEVER_NARROW=0 build reads it.
 // The last line is always: bench: nodes <N> time_ms <T> nps <X>
 #include "../lib/uci.hpp"
 
@@ -61,6 +62,7 @@ int main(int argc, char** argv)
     {
         if(std::strcmp(argv[i], "-q")==0) quiet = true;
         else if(std::strncmp(argv[i], "nne=", 4)==0) nne_file = argv[i]+4;
+        else if(std::strncmp(argv[i], "narrow=", 7)==0) tt_narrowing = std::atoi(argv[i]+7);//#65, only a -DTT_BOUNDS_NEVER_NARROW=0 build reads it
         else depth = std::atoi(argv[i]);
     }
     if(nne_file)
