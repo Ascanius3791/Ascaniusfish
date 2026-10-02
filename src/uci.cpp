@@ -515,6 +515,30 @@ void UCI_Engine::search_tb_root(const BB& root, const std::vector<Move>& moves, 
     send("bestmove " + best);
 }
 
+std::vector<PV_Line> multipv_search(const BB& root, BB* wfh, int depth, lookup_table* table, BB* path_history, int ply,
+                                    const CuckooCycleTable* cycle_table, int lines_wanted)
+{
+    // Pass k searches the root without the first moves of lines 1..k-1;
+    // pass 1 is the plain search.
+    std::vector<PV_Line> lines;
+    std::vector<Move> excluded;
+    for(int k=0; k<lines_wanted; k++)
+    {
+        PV_Line line = minimax(&root, wfh, depth, WEIGHTS_OG, INT_MIN, INT_MAX, table, path_history, ply, cycle_table,
+                               INT_MIN, true, excluded.data(), (int)excluded.size());
+        if(k>0 && line.current_lenght==0)
+        break;
+        if(line.current_lenght>0)
+        excluded.push_back(line.at(0));
+        lines.push_back(std::move(line));
+    }
+    // A later pass can find more than an earlier one (it sees the TT entries
+    // the earlier ones left): best first for the side to move.
+    std::stable_sort(lines.begin(), lines.end(), [&](const PV_Line& a, const PV_Line& b)
+    { return root.white_move ? a.eval>b.eval : a.eval<b.eval; });
+    return lines;
+}
+
 void UCI_Engine::search(UCI_Limits limits, long long start_ns)
 {
     if(table) table->new_search();
@@ -558,35 +582,42 @@ void UCI_Engine::search(UCI_Limits limits, long long start_ns)
     max_depth = 1;  // forced move: keep the clock, depth 1 only for the score
     long long nodes_before = search_nodes;
     const long long tb_hits_before = tb_hits;
+    const int lines_wanted = std::min(multipv, n);
     for(int d=1; d<=max_depth; d++)
     {
         if(search_stop_requested())
         break;
-        PV_Line pv;
+        // A depth aborted part way keeps the previous set.
+        std::vector<PV_Line> lines;
         try
         {
-            pv = minimax(&root, wfh, d, WEIGHTS_OG, INT_MIN, INT_MAX, table, path_history, ply, cycle_table);
+            lines = multipv_search(root, wfh, d, table, path_history, ply, cycle_table, lines_wanted);
         }
         catch(const search_aborted&)
         {
             break;
         }
+        const PV_Line& pv = lines[0];
 
         long long elapsed_ms = (steady_now_ns()-start_ns)/1000000;
         long long nodes = search_nodes-nodes_before;
-        std::vector<std::string> line = pv_to_uci(root, pv);
-        if(!line.empty())
-        best = line[0];
-        std::string info = "info depth " + std::to_string(d)
-                         + " score " + uci_score(pv.eval, root.white_move)
-                         + " nodes " + std::to_string(nodes)
-                         + " nps " + std::to_string(nodes*1000/std::max(1LL, elapsed_ms))
-                         + " time " + std::to_string(elapsed_ms)
-                         + " tbhits " + std::to_string(tb_hits-tb_hits_before)
-                         + " pv";
-        for(const std::string& m : line)
-        info += " " + m;
-        send(info);
+        for(size_t k=0; k<lines.size(); k++)
+        {
+            std::vector<std::string> line = pv_to_uci(root, lines[k]);
+            if(k==0 && !line.empty())
+            best = line[0];
+            std::string info = "info depth " + std::to_string(d)
+                             + (lines_wanted>1 ? " multipv " + std::to_string(k+1) : "")
+                             + " score " + uci_score(lines[k].eval, root.white_move)
+                             + " nodes " + std::to_string(nodes)
+                             + " nps " + std::to_string(nodes*1000/std::max(1LL, elapsed_ms))
+                             + " time " + std::to_string(elapsed_ms)
+                             + " tbhits " + std::to_string(tb_hits-tb_hits_before)
+                             + " pv";
+            for(const std::string& m : line)
+            info += " " + m;
+            send(info);
+        }
 
         bool proven_mate = pv.eval <= INT_MIN + max_mating_seq || pv.eval >= INT_MAX - max_mating_seq;
         if(proven_mate && !limits.infinite)
@@ -628,6 +659,7 @@ int UCI_Engine::loop()
             send("option name SyzygyProbeLimit type spin default 5 min 0 max 5");
             send("option name NNEFile type string default nets/nne_d6.bin");
             send("option name UseNNE type check default true");
+            send("option name MultiPV type spin default 1 min 1 max " + std::to_string(MAX_ORDERED_MOVES));
             if(!tt_bounds_never_narrow)//only a -DTT_BOUNDS_NEVER_NARROW=0 build can narrow (#65)
             {
                 send("option name TTNarrowing type check default false");
@@ -701,6 +733,11 @@ int UCI_Engine::loop()
                 stop_search();
                 nne_file = value;
                 apply_nne();
+            }
+            else if(name=="MultiPV")
+            {
+                stop_search();
+                multipv = std::max(1, std::min(MAX_ORDERED_MOVES, std::atoi(value.c_str())));
             }
             else if(name=="UseNNE")
             {

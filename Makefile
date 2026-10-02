@@ -83,7 +83,7 @@ profile-startpos: benchmarks/profile_startpos
 tools/perft: tools/perft.cpp $(HEADERS) $(SOURCES)
 	$(CXX) $(CXXFLAGS) -pthread -o $@ tools/perft.cpp
 
-tools/bench: tools/bench.cpp $(HEADERS) $(SOURCES)
+tools/bench: tools/bench.cpp tools/bench_positions.hpp $(HEADERS) $(SOURCES)
 	$(CXX) $(CXXFLAGS) -pthread -o $@ tools/bench.cpp
 
 tools/speed_compare: tools/speed_compare.cpp tools/git_build.hpp

@@ -15,7 +15,7 @@
 #include <thread>
 
 // UCI front end. Implements uci, isready, ucinewgame, position, go, stop,
-// quit (setoption handles SyzygyPath, SyzygyProbeLimit, NNEFile and UseNNE, debug/register/ponderhit are accepted and ignored), plus
+// quit (setoption handles SyzygyPath, SyzygyProbeLimit, NNEFile, UseNNE and MultiPV, debug/register/ponderhit are accepted and ignored), plus
 // the non-standard "go perft N" for checking move generation from any FEN.
 // The search runs on its own thread so "stop"/"isready" are answered while
 // it thinks; see lib/search_control.hpp for how a search is aborted.
@@ -43,6 +43,12 @@ bool uci_apply_move(const BB& pos, const std::string& uci, BB& out);
 // Legal move-path count to `depth` from `pos`; `buf` is BB scratch
 // (depth*~256 entries suffice).
 long long perft(const BB* pos, int depth, BB* buf);
+
+// MultiPV (#69): one depth's `lines_wanted` lines (at most the legal moves),
+// best first for the side to move, with distinct first moves. 1 = the plain
+// minimax() call. Throws search_aborted like minimax().
+std::vector<PV_Line> multipv_search(const BB& root, BB* wfh, int depth, lookup_table* table, BB* path_history, int ply,
+                                    const CuckooCycleTable* cycle_table, int lines_wanted);
 
 // "cp N" or "mate N", from the side to move's point of view.
 std::string uci_score(int eval, bool white_to_move);
@@ -80,6 +86,7 @@ class UCI_Engine
     std::string nne_file = "nets/nne_d6.bin";  // NNEFile
     bool use_nne = true;                       // UseNNE; nne::enabled says whether it is in effect
     bool nne_applied = false;                  // apply_nne() has run; the default is applied on the first isready/go
+    int multipv = 1;                           // MultiPV (#69): lines per depth, best first; 1 = the plain search
     bool narrow = false, narrow_deeper = false; // TTNarrowing, TTNarrowingDeeper (#65); the second only counts with the first
     void apply_nne();
     std::vector<std::string> pv_to_uci(const BB& root, const PV_Line& pv);
