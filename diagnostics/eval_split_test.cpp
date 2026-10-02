@@ -1,7 +1,8 @@
 // OWNERSHIP=Claude
 // The GUI's eval breakdown (gui/eval_split.hpp, #66) against the real eval:
 // runs eval_self_check() with the dreamer, the same check the page runs when
-// "Advanced debugging" is switched on, and prints the breakdown of a position.
+// "Advanced debugging" is switched on, without the net and with it (#67, the
+// NNE switch's two settings), and prints the breakdown of a position.
 // Exit code 1 on any mismatch, so it can follow an eval change.
 //
 //   g++ -O3 -mpopcnt -fwhole-program -Wall -Wno-unknown-pragmas -Wno-parentheses
@@ -40,10 +41,27 @@ int main(int argc, char** argv)
     }
     std::printf("%-18s %35d %8d%s\n", "sum / basic_eval", b.real_sum, b.basic, b.real_sum==b.basic ? "" : "  MISMATCH");
     std::printf("%-18s %35d\n", "dreamer", plan_eval(&pos, WEIGHTS_OG));
+    const Gui_Net& net = gui_net();
+    if(net.ok)
+    {
+        std::printf("%-18s %35ld  (%s)\n", "net correction", std::lround(net_correction_white(pos)), net.path.c_str());
+        std::printf("%-18s %35d\n", "dreamer with net",
+                    plan_eval_detail(&pos, WEIGHTS_OG, nullptr, nullptr, false, PLAN_Q2_MODE, true));
+    }
+    else
+    std::printf("net not loaded: %s (%s)\n", net.error.c_str(), net.path.c_str());
 
-    const Eval_Check c = eval_self_check(pos, true);
-    std::printf("\nself-check: %d positions, %.2f ms, %s\n", c.positions, c.ms, c.ok() ? "all match" : "MISMATCH");
-    for(const std::string& m : c.messages)
-    std::printf("  %s\n", m.c_str());
-    return c.ok() ? 0 : 1;
+    bool ok = net.ok;
+    for(bool with_net : {false, true})
+    {
+        if(with_net && !net.ok)
+        continue;
+        const Eval_Check c = eval_self_check(pos, true, with_net);
+        std::printf("\nself-check%s: %d positions, %.2f ms, %s\n", with_net ? " with the net" : "", c.positions, c.ms,
+                    c.ok() ? "all match" : "MISMATCH");
+        for(const std::string& m : c.messages)
+        std::printf("  %s\n", m.c_str());
+        ok = ok && c.ok();
+    }
+    return ok ? 0 : 1;
 }

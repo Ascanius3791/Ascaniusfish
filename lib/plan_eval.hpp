@@ -2,6 +2,7 @@
 #ifndef PLAN_EVAL_HPP
 #define PLAN_EVAL_HPP
 #include "basic_eval.hpp"
+#include "nne.hpp"
 
 // Plan eval, "the dreamer" (#43-#47; brought to main by #66 as a GUI-only
 // term). NOT part of the engine: basic_eval() does not call it and nothing in
@@ -18,7 +19,8 @@
 // For every piece of both sides: over every square t it can reach, db is the
 // gain of moving just that piece from its square to t (all other pieces fixed)
 // in piece tables + piece activity + pawn structure - no material, no king
-// safety - from its owner's point of view, and N is the least number of moves
+// safety; with the net (with_nne below) also its correction - from its
+// owner's point of view, and N is the least number of moves
 // it needs. The piece adds the best db/(2+N), or nothing when db <= 0
 // everywhere, for both sides alike (#46: dividing the side to move's pieces by
 // 1+N swung the term ~95 cp every ply). The side to move gets PLAN_TEMPO.
@@ -118,7 +120,11 @@ int plan_eval(const BB* const original, const WEIGHTS& W = WEIGHTS_OG);
 // Same sum, and each piece's best target written to out[0..*count-1] when out
 // is given (it must hold 32 entries).
 // q2_mode picks the Q2 selection (PLAN_Q2_*), for the probe to compare them.
-int plan_eval_detail(const BB* const original, const WEIGHTS& W, Plan_Target* out, int* count, bool reference = false, int q2_mode = PLAN_Q2_MODE);
+// with_nne (#67): db also counts the change of the net's correction
+// (nne::correction(), so a net must be loaded) on the board with the piece at
+// its target, so the dream squares are picked by static eval + net, the eval
+// the search's quiet leaves use with UseNNE. One net evaluation per target.
+int plan_eval_detail(const BB* const original, const WEIGHTS& W, Plan_Target* out, int* count, bool reference = false, int q2_mode = PLAN_Q2_MODE, bool with_nne = false);
 
 // One shortest path of the piece in `t` to its target, for the GUI's plan view:
 // squares[0] = t.from ... squares[t.n] = t.to, returns t.n+1 (0 when t.to == -1).

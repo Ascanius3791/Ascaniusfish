@@ -145,7 +145,10 @@ class Session
     bool eval_check_run = false;
     void run_eval_check()
     {
-        eval_check = eval_self_check(tree.position(), show_dreamer);
+        eval_check = eval_self_check(tree.position(), show_dreamer, net_in_eval());
+        if(nne_on && !gui_net().ok)
+        eval_check.messages.push_back("Net: " + gui_net().error + " (" + gui_net().path
+                                      + "), so the breakdown and the dreamer go without it");
         eval_check_run = true;
         if(!eval_check.ok())
         for(const std::string& m : eval_check.messages)
@@ -164,6 +167,9 @@ class Session
     // The eval-correction net (#53), on by default like the engine's own UseNNE.
     // It reaches every engine of the session as setoption, like the tables.
     bool nne_on = true;
+    // ...and whether the breakdown and the dreamer count it too (#67): the
+    // server's own copy of the net (gui_net()), loaded the first time it is asked.
+    bool net_in_eval() const { return nne_on && gui_net().ok; }
 
     // Narrowing alpha and beta on a stored bound (#65), off like the engine's
     // own defaults; only an engine built with it (engine_build()) is told.
@@ -1323,13 +1329,15 @@ class Session
     // owner's view), what it adds now (term, white's view), one shortest path
     // there and every square on some shortest path. A piece with nothing better
     // to reach is left out. The term is shown beside the eval, never in it.
+    // With the NNE switch on, db counts the net's correction too (#67).
     void write_plans(json::Out& o, const BB& pos) const
     {
         Plan_Target targets[32];
         int n = 0;
-        const int total = plan_eval_detail(&pos, WEIGHTS_OG, targets, &n);
+        const int total = plan_eval_detail(&pos, WEIGHTS_OG, targets, &n, false, PLAN_Q2_MODE, net_in_eval());
         o.obj();
         o.key("total").num(total);
+        o.key("net").boolean(net_in_eval());
         o.key("static").num(basic_eval(&pos, WEIGHTS_OG));
         o.key("pieces").arr();
         for(int k=0;k<n;k++)
@@ -1443,15 +1451,39 @@ class Session
         {
             Plan_Target targets[32];
             int n = 0;
-            const int total = plan_eval_detail(&pos, W, targets, &n);
+            const int total = plan_eval_detail(&pos, W, targets, &n, false, PLAN_Q2_MODE, net_in_eval());
             int plan[2] = {0, 0};
             for(int k=0;k<n;k++)
             plan[targets[k].piece < 6] += targets[k].term;
             o.obj();
             o.key("white").num(plan[1]).key("black").num(plan[0]).key("total").num(total);
-            o.key("info").str("each piece's best square, db/(2+N), one piece per square; the sides before the "
+            o.key("info").str(std::string(net_in_eval() ? "with the net's correction in db; " : "")
+                              + "each piece's best square, db/(2+N), one piece per square; the sides before the "
                               + std::to_string(PLAN_TEMPO) + " cp tempo for the side to move and the ×"
                               + std::to_string(PLAN_SCALE) + "/100 scale, which the total includes");
+            o.end_obj();
+        }
+        else
+        o.null();
+
+        // The net's row (#67), with the NNE switch on: its correction, beside
+        // the eval like the dreamer's, and what the search's quiet leaf makes
+        // of the two (nne::corrected_eval(), clamped below the tablebase band).
+        o.key("net");
+        if(nne_on)
+        {
+            const Gui_Net& net = gui_net();
+            o.obj();
+            o.key("ok").boolean(net.ok);
+            if(net.ok)
+            {
+                o.key("total").num(std::lround(net_correction_white(pos)));
+                o.key("corrected").num(nne::corrected_eval(&pos, b.basic));
+                o.key("info").str("the net's correction (" + net.path + "), white's view; with UseNNE the search's "
+                                  "quiet leaves score basic_eval + this, clamped below the tablebase band");
+            }
+            else
+            o.key("error").str(net.error + " (" + net.path + ")");
             o.end_obj();
         }
         else

@@ -753,7 +753,9 @@ button.pv-move { cursor: pointer; }
   margin-bottom: 6px;
 }
 
-#terms-total { white-space: nowrap; }
+.terms-head[hidden] { display: none; }
+#terms-total, #terms-net-total { white-space: nowrap; }
+#terms-net-total { font-size: 0.85em; }
 
 .terms-row {
   display: grid;

@@ -2,6 +2,7 @@
 #ifndef PLAN_EVAL_CPP
 #define PLAN_EVAL_CPP
 #include "../lib/plan_eval.hpp"
+#include <cmath>
 #include <cstring>
 #include <cstdio>
 
@@ -267,7 +268,16 @@ struct Plan_Ctx
     uint64_t sl_on[64];// bit r: slider role r belongs to the piece on the square
     uint64_t sl_seeing[64];// bit r: slider role r attacks the square
     int sl_lost[48][64];// plan_lost(), set where sl_att0[r] has the square and it is empty
+    BB* nne_board;// with the net (#67): a copy of the position, one piece moved at a time; nullptr without
+    double nne_base;// the net's correction of the position, white's view
 };
+
+// The net's correction (lib/nne.hpp, mover's view) in white's view.
+static inline double plan_nne_white(const BB& b)
+{
+    const double c = nne::correction(b);
+    return b.white_move ? c : -c;
+}
 
 // Reference for PLAN_OWN_ACT: the raw piece_activity_eval() terms (before its
 // /2, white's view) of the piece in Board[p] on sq, written from
@@ -575,6 +585,15 @@ static Plan_Target plan_piece(Plan_Ctx& c, int p, int from, BB* scratch, Plan_Ca
                 ps_to += count(own & pawn_to[to]);
                 db = sign*d + W.pawn_supporting_value*(ps_to - ps_from);
             }
+            // with the net (#67): what its correction gains, owner's view, on
+            // the board with just this piece moved (side to move unchanged)
+            if(c.nne_board)
+            {
+                const uint64_t move = from_bb | (1ULL << to);
+                c.nne_board->Board[p] ^= move;
+                db += (int)std::lround(sign * (plan_nne_white(*c.nne_board) - c.nne_base));
+                c.nne_board->Board[p] ^= move;
+            }
             // the highest db/divisor, if its db > 0 (Q2: then the lowest key,
             // otherwise the first found); branch-free
             const int term = db / divisor;
@@ -799,10 +818,13 @@ static int plan_all_pieces(Plan_Ctx& c, BB* scratch, Plan_Target* out, int* coun
     return score;
 }
 
-static int plan_eval_impl(const BB* const original, const WEIGHTS& W, Plan_Target* out, int* count_out, bool reference, int q2)
+static int plan_eval_impl(const BB* const original, const WEIGHTS& W, Plan_Target* out, int* count_out, bool reference, int q2, bool with_nne = false)
 {
     Plan_Ctx c;
     plan_setup(c, original, W);
+    BB nne_board = *original;
+    c.nne_board = with_nne ? &nne_board : nullptr;
+    c.nne_base = with_nne ? plan_nne_white(nne_board) : 0;
     const int tempo = original->white_move ? PLAN_TEMPO : -PLAN_TEMPO;
     int sum;
     if(!reference)
@@ -823,9 +845,9 @@ static int plan_eval_impl(const BB* const original, const WEIGHTS& W, Plan_Targe
     return term > PLAN_BOUND ? PLAN_BOUND : term < -PLAN_BOUND ? -PLAN_BOUND : term;
 }
 
-int plan_eval_detail(const BB* const original, const WEIGHTS& W, Plan_Target* out, int* count, bool reference, int q2_mode)
+int plan_eval_detail(const BB* const original, const WEIGHTS& W, Plan_Target* out, int* count, bool reference, int q2_mode, bool with_nne)
 {
-    return plan_eval_impl(original,W,out,count,reference,q2_mode);
+    return plan_eval_impl(original,W,out,count,reference,q2_mode,with_nne);
 }
 
 // The BFS of plan_eval_impl() for one piece, kept per level: level[k] holds

@@ -1344,7 +1344,8 @@ function renderPlans(s) {
   el('plans-total').textContent = `${signed(s.plans.total)} cp`;
   el('plans-note').textContent =
     `Plan term ${signed(s.plans.total)} cp beside the static eval ${signed(s.plans.static)} cp ` +
-    `(not part of it: the search never sees it). ${s.plans.pieces.length} pieces have a better square.`;
+    `(not part of it: the search never sees it). ${s.plans.pieces.length} pieces have a better square` +
+    (s.plans.net ? ', judged with the net\'s correction.' : '.');
 
   const list = el('plans-list');
   list.replaceChildren();
@@ -1445,6 +1446,9 @@ function renderTerms(s) {
   if (!t) return;
 
   el('terms-total').textContent = `${pawns(t.basic)} (${signed(t.basic)} cp)`;
+  el('terms-net-head').hidden = !(t.net && t.net.ok);
+  if (t.net && t.net.ok)
+    el('terms-net-total').textContent = `${pawns(t.net.corrected)} (${signed(t.net.corrected)} cp)`;
   // The self-check the server ran when the switch went on (gui/eval_split.hpp):
   // the rebuild against the real eval on the test positions.
   const sc = el('terms-selfcheck');
@@ -1528,6 +1532,17 @@ function renderTerms(s) {
            t.dream.total,
            `${t.dream.info}\nNot part of basic_eval and never used by the search; ` +
            `basic_eval with it would be ${signed(t.basic + t.dream.total)} cp.`,
+           'terms-extra');
+
+  // The net (lib/nne.hpp), when the NNE switch is on: its correction, which
+  // the search adds to basic_eval at its quiet leaves; outside the sum too.
+  if (t.net)
+    addRow(t.net.ok ? ['◆ Net correction (not summed)', '', '', signed(t.net.total)]
+                    : ['◆ Net (not loaded)', '', '', '—'],
+           t.net.ok ? t.net.total : 0,
+           t.net.ok ? `${t.net.info}.\nbasic_eval + net = ${signed(t.net.corrected)} cp, ` +
+                      'the score the search gives this position as a quiet leaf.'
+                    : `The server could not load the net: ${t.net.error}`,
            'terms-extra');
 
   const sum = el('terms-sum');

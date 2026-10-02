@@ -1131,6 +1131,9 @@ static Response handle_post_authed(const Request& req)
                 if(session.analysing())
                 abort_search(session);
                 session.forget_analysis();
+                // the breakdown and the dreamer count the net too (#67)
+                if(session.show_advanced || session.show_dreamer)
+                session.run_eval_check();
             }
         }
         // Narrowing on stored bounds (#65), only in an engine built with it.

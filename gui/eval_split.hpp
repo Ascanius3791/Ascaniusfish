@@ -24,8 +24,52 @@
 #include "../lib/plan_eval.hpp"
 #include <chrono>
 #include <cmath>
+#include <fstream>
 #include <string>
+#include <unistd.h>
 #include <vector>
+
+// The net (lib/nne.hpp) in this process (#67), for the breakdown's net row and
+// the dreamer: the engine's default file, nets/nne_d6.bin, looked for in the
+// working directory and then in the repo root above gui/ascaniusfish_gui.
+// Loaded once, on first use; the engines load their own copy.
+struct Gui_Net
+{
+    bool ok = false;
+    std::string path, error;
+};
+
+inline const Gui_Net& gui_net()
+{
+    static const Gui_Net net = []
+    {
+        Gui_Net n;
+        const std::string file = "nets/nne_d6.bin";
+        n.path = file;
+        char exe[4096];
+        const ssize_t len = readlink("/proc/self/exe", exe, sizeof(exe)-1);
+        if(!std::ifstream(file).good() && len>0)
+        {
+            const std::string dir(exe, std::string(exe, len).rfind('/')+1);
+            for(const std::string& candidate : { dir + "../" + file, dir + file })
+            if(std::ifstream(candidate).good())
+            {
+                n.path = candidate;
+                break;
+            }
+        }
+        n.ok = nne::load(n.path, n.error);
+        return n;
+    }();
+    return net;
+}
+
+// The net's correction of `pos`, in white's view (nne::correction() is the mover's).
+inline double net_correction_white(const BB& pos)
+{
+    const double c = nne::correction(pos);
+    return pos.white_move ? c : -c;
+}
 
 struct Eval_Part
 {
@@ -410,13 +454,16 @@ struct Eval_Check
 // The rebuild against the real eval on every EVAL_CHECK_FENS position and on
 // `current`: each term, then the sum. With `dreamer`, also the plan term's fast
 // db against the reference db (src/plan_eval.cpp keeps its own copy of the
-// activity terms). Well under 0.1 s.
-inline Eval_Check eval_self_check(const BB& current, bool dreamer, const WEIGHTS& W = WEIGHTS_OG)
+// activity terms). With `net` (#67; gui_net() must be loaded), the dreamer is
+// checked as the page shows it, with the net in db, and the net's
+// incremental first layer, which the dreamer leans on, against one summed
+// from scratch. Well under 0.1 s.
+inline Eval_Check eval_self_check(const BB& current, bool dreamer, bool net = false, const WEIGHTS& W = WEIGHTS_OG)
 {
     const auto start = std::chrono::steady_clock::now();
     Eval_Check c;
     struct Miss { int n = 0, worst = 0; std::string fen; };
-    Miss rows[EVAL_ROWS], sum, plan;
+    Miss rows[EVAL_ROWS], sum, plan, incremental;
     auto note = [](Miss& m, int diff, const std::string& fen)
     {
         if(diff==0)
@@ -432,7 +479,10 @@ inline Eval_Check eval_self_check(const BB& current, bool dreamer, const WEIGHTS
         note(rows[k], b.rows[k].rebuilt - b.rows[k].real, fen);
         note(sum, b.basic - b.real_sum, fen);
         if(dreamer)
-        note(plan, plan_eval_detail(&pos, W, nullptr, nullptr, false) - plan_eval_detail(&pos, W, nullptr, nullptr, true), fen);
+        note(plan, plan_eval_detail(&pos, W, nullptr, nullptr, false, PLAN_Q2_MODE, net)
+                 - plan_eval_detail(&pos, W, nullptr, nullptr, true, PLAN_Q2_MODE, net), fen);
+        if(net)// bit for bit: rounding to cp would hide a drifting accumulator
+        note(incremental, nne::correction(pos) != nne::correction_from_scratch(pos), fen);
         c.positions++;
     };
     check(current, "the position on the board");
@@ -459,6 +509,10 @@ inline Eval_Check eval_self_check(const BB& current, bool dreamer, const WEIGHTS
     if(plan.n)
     c.messages.push_back("Dreamer: the fast plan term differs from the reference" + where(plan)
                          + ": src/plan_eval.cpp's copy of the activity terms is out of date");
+    if(incremental.n)
+    c.messages.push_back("Net: nne::correction() differs from nne::correction_from_scratch() on "
+                         + std::to_string(incremental.n) + " position(s); first: " + incremental.fen
+                         + ": the kept first layer (src/nne.cpp) drifted");
     c.ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
     return c;
 }

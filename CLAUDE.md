@@ -192,6 +192,11 @@ When editing engine internals, `lib/*.hpp` is the declaration/interface layer an
   or dropped from `basic_eval()` when every term matches but the sum does not); it is also printed
   on the server's stderr. **Dreamer** (`dreamer`) shows the plan term: each piece's dream square
   and path on the board, a list, and a row of its own in the breakdown, outside the sum.
+  With the gear's NNE switch on (#67) the server loads `nets/nne_d6.bin` itself (`gui_net()`):
+  the breakdown gets a net-correction row (also outside the sum) and basic_eval + net, the
+  search's quiet-leaf score, under its header; the dreamer's db then counts the change of the
+  net's correction too (`plan_eval_detail(..., with_nne)`, one net evaluation per target), and
+  the self-check runs with it, plus the net's incremental first layer against a from-scratch one.
   The state carries them as `evalTerms` and `plans`; `Session::write_eval_terms()`/`write_plans()`.
 - `gui/json.hpp` — a JSON writer that inserts the commas, plus a flat-object parser for request bodies.
 - `gui/web/` — `index.html`/`app.js`/`style.css`/`sound.js` and the `logo.png`/`favicon.png` (scaled

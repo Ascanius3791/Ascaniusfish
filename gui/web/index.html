@@ -82,7 +82,8 @@
     </label>
     <p class="note">Corrects the engines' static eval at quiet leaves (+80 Elo
     at 5+0.05). Switching it restarts the analysis and forgets the evals kept
-    from the other setting.</p>
+    from the other setting. With Advanced debugging or the Dreamer on, the
+    breakdown shows the net's correction and the dreamer picks its squares with it.</p>
     <label class="switch">
       <input type="checkbox" id="set-narrow">
       <span>Narrow on stored bounds</span>
@@ -350,6 +351,10 @@
       <div class="terms-head">
         <span class="note">basic_eval, cp</span>
         <span id="terms-total" class="score"></span>
+      </div>
+      <div class="terms-head" id="terms-net-head" hidden>
+        <span class="note">with the net (the search's quiet leaf)</span>
+        <span id="terms-net-total" class="score"></span>
       </div>
       <label class="note terms-option"><input type="checkbox" id="terms-hide-zero">
         Hide parts worth 0 for both sides</label>
