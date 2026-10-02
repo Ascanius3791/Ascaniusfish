@@ -56,6 +56,14 @@ constexpr int TT_BUCKET_SIZE = 8;
 constexpr int PTT_EXPONENT_FOR_SIZE = 16;  //persistent transposition table: 524288 entries, ~92MB
 constexpr int PTT_BUCKET_SIZE = 8;
 
+//true (default): a stored bound only cuts, it never narrows alpha and beta (#64).
+//-DTT_BOUNDS_NEVER_NARROW=0 builds the variant whose UCI options TTNarrowing and
+//TTNarrowingDeeper switch the pre-#64 narrowing back on at runtime (#65).
+#ifndef TT_BOUNDS_NEVER_NARROW
+#define TT_BOUNDS_NEVER_NARROW 1
+#endif
+constexpr bool tt_bounds_never_narrow = TT_BOUNDS_NEVER_NARROW;
+
 //==================================================================================================================================
 //repetition/cycle detection (see minimax()'s path_history/ply parameters in
 //ascaniusfish_2.hpp). Bounds the fixed-size BB path array threaded through the

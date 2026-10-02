@@ -43,6 +43,12 @@ inline bool search_stop_requested()
 // Nodes visited by minimax() + minimax_tactical(); also the UCI node count.
 inline long long search_nodes = 0;
 
+// How far a stored bound may narrow alpha and beta (#65), only read in a build
+// with -DTT_BOUNDS_NEVER_NARROW=0: 0 = it only cuts (main), 1 = a bound of the
+// same depth narrows (the pre-#64 rule), 2 = a bound of a deeper search too.
+// Set by UCI setoption while no search runs.
+inline int tt_narrowing = 0;
+
 inline void poll_search_abort()
 {
     if((++search_nodes & 255)==0 && search_stop_requested())
