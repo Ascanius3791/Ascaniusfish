@@ -1234,18 +1234,21 @@ function renderLine(s, ev, clickable) {
 }
 
 // MultiPV (#69): one row per line, best first, its score (white's view) in
-// front and as many of its moves as the row holds. The box is as tall as the
-// lines asked for (up to MPV_ROWS, then it scrolls), not as the lines that have
-// come in, so nothing below it moves while the search fills it.
+// front and as many of its moves as the row holds. A row whose line is longer
+// gets the same arrow as the single line at its end, which opens that row alone
+// (fitLines()). The box is as tall as the lines asked for (up to MPV_ROWS, then
+// it scrolls) plus what the open rows add, not as the lines that have come in,
+// so nothing below it moves while the search fills it.
 const MPV_ROWS = 8;
+let linesWanted = 1;
+const openRows = new Set();   // rows opened by their arrow; by place, not by move
 
 function renderLines(s, lines, wanted, clickable) {
   const box = el('analysis-lines');
-  const height = `${Math.min(wanted, MPV_ROWS) * 1.8}em`;
-  if (box.style.height !== height) box.style.height = height;
+  linesWanted = wanted;
   const key = [clickable, s.fullmove, s.turn, s.orientation,
     ...lines.map(l => `${l.score ? scoreText(l.score) : ''}:${l.line.map(m => m.uci).join(',')}`)].join(' ');
-  if (key === shownLinesKey) return;
+  if (key === shownLinesKey) return fitLines();
   shownLinesKey = key;
   shownLines = lines.map(l => l.line);
   box.replaceChildren();
@@ -1258,9 +1261,14 @@ function renderLines(s, lines, wanted, clickable) {
     const moves = document.createElement('span');
     moves.className = 'mpv-moves';
     appendLineCells(moves, s, l.line, clickable, row);
-    div.append(score, moves);
+    const arrow = document.createElement('button');
+    arrow.type = 'button';
+    arrow.className = 'line-expand mpv-expand';
+    arrow.dataset.row = row;
+    div.append(score, moves, arrow);
     box.append(div);
   });
+  fitLines();
   if (preview.on && preview.row >= 0) showPreview(preview.ply, preview.row);
 }
 
@@ -1332,10 +1340,47 @@ function fitLine() {
   box.classList.toggle('open', open);
   const arrow = el('line-expand');
   arrow.hidden = !longer;
-  arrow.textContent = open ? '▴' : '▾';
   arrow.title = open ? 'Show one row of the line' : 'Show the whole line';
   arrow.setAttribute('aria-expanded', open);
 }
+
+// fitLine() for each MultiPV row: the arrow where the row's line does not fit,
+// and an open row as tall as its line, up to LINE_PLIES. Every row keeps the
+// arrow's slot, so no row's cells move when its arrow comes or goes.
+function fitLines() {
+  const box = el('analysis-lines');
+  let extra = 0;
+  for (const div of box.querySelectorAll('.mpv-row')) {
+    const moves = div.querySelector('.mpv-moves');
+    const arrow = div.querySelector('.mpv-expand');
+    const width = moves.clientWidth;
+    if (width <= 0) return;   // not shown: measured again when it is
+    const ch = parseFloat(getComputedStyle(moves).fontSize) * charRatio(box);
+    const perRow = Math.max(1, Math.floor(width / (17.5 * ch)));
+    const units = moves.querySelectorAll('.pv-unit').length;
+    const longer = units > perRow;
+    const open = openRows.has(Number(arrow.dataset.row)) && longer;
+    const rows = open ? Math.min(Math.ceil(units / perRow), Math.ceil((LINE_PLIES / 2 + 1) / perRow)) : 1;
+    const height = `${rows * 1.8}em`;
+    if (moves.style.height !== height) moves.style.height = height;
+    moves.classList.toggle('open', open);
+    arrow.classList.toggle('none', !longer);
+    arrow.title = open ? 'Show one row of this line' : 'Show the whole line';
+    arrow.setAttribute('aria-expanded', open);
+    extra += rows - 1;
+  }
+  const height = `${(Math.min(linesWanted, MPV_ROWS) + extra) * 1.8}em`;
+  if (box.style.height !== height) box.style.height = height;
+}
+
+el('analysis-lines').addEventListener('click', event => {
+  const arrow = event.target.closest('.mpv-expand');
+  if (!arrow) return;
+  const row = Number(arrow.dataset.row);
+  if (!openRows.delete(row)) openRows.add(row);
+  hidePreview();
+  fitLines();
+});
 
 el('line-expand').addEventListener('click', () => {
   lineOpen = !lineOpen;
@@ -1359,7 +1404,8 @@ function charRatio(box) {
 
 // A frame later: fitLine() changes the panel's height, which inside the
 // observer's own callback would be a resize loop.
-new ResizeObserver(() => requestAnimationFrame(fitLine)).observe(el('analysis-panel'));
+new ResizeObserver(() => requestAnimationFrame(() => { fitLine(); fitLines(); }))
+  .observe(el('analysis-panel'));
 
 // ------------------------------------------------------------------- preview
 

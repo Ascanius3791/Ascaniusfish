@@ -557,7 +557,8 @@ select:focus, input:focus { outline: none; border-color: var(--accent); }
 /* One row per line, its score first. The box holds the rows asked for, up to
    MPV_ROWS (app.js sets the height), and scrolls past that, so neither the
    lines arriving nor a large K moves anything below it. A row is one line of
-   cells; what does not fit in it is cut. */
+   cells, and like the single line it has an arrow at its end when its line
+   needs more; open, the row wraps and fitLines() sets its height. */
 .mpv-lines {
   margin: 8px 0 0;
   overflow-y: auto;
@@ -565,9 +566,20 @@ select:focus, input:focus { outline: none; border-color: var(--accent); }
   font-size: 12px;
 }
 
-.mpv-row { display: flex; height: 1.8em; align-items: center; }
-.mpv-score { flex: none; width: 7ch; font-weight: 600; font-variant-numeric: tabular-nums; }
-.mpv-moves { display: flex; flex-wrap: nowrap; overflow: hidden; min-width: 0; }
+.mpv-row { display: flex; align-items: flex-start; }
+.mpv-score { flex: none; width: 7ch; height: 1.8em; line-height: 1.8em; font-weight: 600; font-variant-numeric: tabular-nums; }
+.mpv-moves {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 1.8em;
+  display: flex;
+  flex-wrap: nowrap;
+  align-content: flex-start;
+  overflow: hidden;
+}
+.mpv-moves.open { flex-wrap: wrap; overflow-y: auto; }
+.line-expand.mpv-expand { position: static; flex: none; }
+.mpv-expand.none { visibility: hidden; }
 .mpv-moves .move-number { width: 3.5ch; color: var(--muted); }
 
 /* The line shows one row of cells; when it needs more, the arrow at that row's
@@ -577,7 +589,7 @@ select:focus, input:focus { outline: none; border-color: var(--accent); }
 
 .line {
   margin: 0;
-  padding-right: 24px;   /* the arrow's room */
+  padding-right: 30px;   /* the arrow's room */
   height: 1.8em;      /* one row of cells; open, fitLine() sets the rows */
   overflow: hidden;
   display: flex;
@@ -611,20 +623,34 @@ select:focus, input:focus { outline: none; border-color: var(--accent); }
 
 .line.open { overflow-y: auto; }
 
+/* A chevron drawn with two borders rather than a glyph, so its size is its own
+   and not the font's (a ▾ at any size is a speck); it points up when open
+   (aria-expanded). Its box is exactly one row of cells (12px × 1.8) high. */
 .line-expand {
   position: absolute;
   top: 0;
   right: 0;
-  width: 22px;
-  height: 1.8em;
+  width: 30px;
+  height: 21.6px;
   padding: 0;
-  font-size: 12px;
-  line-height: 1;
   color: var(--muted);
   background: none;
   border: none;
   cursor: pointer;
 }
+
+.line-expand::before {
+  content: "";
+  display: block;
+  width: 9px;
+  height: 9px;
+  margin: 3px auto 0;
+  border: solid currentColor;
+  border-width: 0 2.5px 2.5px 0;
+  transform: rotate(45deg);
+}
+
+.line-expand[aria-expanded="true"]::before { margin-top: 8px; transform: rotate(-135deg); }
 
 .line-expand:hover { color: var(--accent); }
 
