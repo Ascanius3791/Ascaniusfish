@@ -595,10 +595,25 @@ el('analysis-toggle').addEventListener('click', () => {
   if (state) command('/api/analyse', { on: !state.analysis.on });
 });
 
-el('analysis-line').addEventListener('click', event => {
-  const button = event.target.closest('button.pv-move');
-  if (button) command('/api/line', { moves: button.dataset.line });
+for (const id of ['analysis-line', 'analysis-lines'])
+  el(id).addEventListener('click', event => {
+    const button = event.target.closest('button.pv-move');
+    if (button) command('/api/line', { moves: button.dataset.line });
+  });
+
+// The analysis's number of lines (#69): one more or fewer, up to every legal
+// move, which "All" asks for in every position to come.
+const MPV_ALL = 256;   // the server's ANALYSIS_LINES_MAX
+function setLines(n) {
+  if (state && n !== state.analysis.lines) command('/api/settings', { lines: n });
+}
+el('mpv-less').addEventListener('click', () => {
+  if (state) setLines(Math.max(1, Math.min(state.analysis.lines, state.legalMoves.length) - 1));
 });
+el('mpv-more').addEventListener('click', () => {
+  if (state) setLines(Math.min(MPV_ALL, state.analysis.lines + 1));
+});
+el('mpv-all').addEventListener('click', () => setLines(MPV_ALL));
 
 el('settings-toggle').addEventListener('click', () => openSettings(el('settings').hidden));
 el('share-toggle').addEventListener('click', () => openShare(el('share').hidden));
@@ -1072,7 +1087,7 @@ function renderEngine(s) {
   const canToggle = analysing || (halted(s) && s.mode !== 'analyse');
   panel.hidden = !canToggle && !showLine;
   renderTbMoves(s);
-  if (panel.hidden) { hidePreview(); shownLineKey = null; return; }
+  if (panel.hidden) { hidePreview(); shownLineKey = shownLinesKey = null; return; }
 
   panel.classList.toggle('running', (a.running || s.play.thinking || s.watch.thinking) && !a.error);
   panel.classList.toggle('has-line', showLine && ((known && ev.source !== 'tb') || a.running));
@@ -1087,7 +1102,29 @@ function renderEngine(s) {
   el('analysis-stats').textContent = showLine ? engineStats(s) : '';
   el('analysis-stats').classList.toggle('bad', showLine && analysing && !!a.error);
 
-  renderLine(s, showLine ? ev : null, analysing);
+  // MultiPV (#69): the K control goes with the on/off switch, since K is what
+  // that switch's analysis runs with, in a paused or finished game too. Its
+  // rows replace the single line while an analysis with K>1 is what is shown;
+  // a Play or Watch search, a move's own line and the tables stay one line.
+  const legal = s.legalMoves.length;
+  const wanted = Math.min(a.lines, legal);
+  el('mpv').hidden = !canToggle;
+  el('mpv-count').textContent = a.lines >= legal && legal > 1 ? 'all' : String(wanted);
+  el('mpv-less').disabled = wanted <= 1;
+  el('mpv-more').disabled = a.lines >= legal;
+  el('mpv-all').disabled = a.lines >= legal;
+  const multi = showLine && canToggle && wanted > 1 && (ev.source === 'live' || ev.source === 'stored'
+    || (a.on && ev.source === 'none'));
+  panel.classList.toggle('multi', multi);
+  const rows = !multi ? [] : ev.lines.length ? ev.lines
+    : ev.line.length ? [{ score: ev.score, line: ev.line }] : [];
+  el('analysis-lines').hidden = !multi;
+  if (multi) renderLines(s, rows, wanted, analysing);
+  else {
+    shownLinesKey = null;
+    if (preview.on && preview.row >= 0) hidePreview();
+  }
+  renderLine(s, showLine && !multi ? ev : null, analysing);
 }
 
 function engineStats(s) {
@@ -1176,6 +1213,8 @@ function whiteShare(score) {
 // moves for the pointer to fall through (see the preview below).
 let shownLine = [];      // the line the cells were drawn from, ev.line's entries
 let shownLineKey = null;
+let shownLines = [];     // with several lines (#69): each row's line, ev.lines[i].line
+let shownLinesKey = null;
 
 function renderLine(s, ev, clickable) {
   const box = el('analysis-line');
@@ -1187,6 +1226,47 @@ function renderLine(s, ev, clickable) {
   shownLineKey = key;
   shownLine = line;
   box.replaceChildren();
+  appendLineCells(box, s, line, clickable, -1);
+  fitLine();
+  // The line changed under a hover: the move under the pointer is the same ply
+  // of the new line, since every cell is where it was.
+  if (preview.on && preview.row < 0) showPreview(preview.ply, -1);
+}
+
+// MultiPV (#69): one row per line, best first, its score (white's view) in
+// front and as many of its moves as the row holds. The box is as tall as the
+// lines asked for (up to MPV_ROWS, then it scrolls), not as the lines that have
+// come in, so nothing below it moves while the search fills it.
+const MPV_ROWS = 8;
+
+function renderLines(s, lines, wanted, clickable) {
+  const box = el('analysis-lines');
+  const height = `${Math.min(wanted, MPV_ROWS) * 1.8}em`;
+  if (box.style.height !== height) box.style.height = height;
+  const key = [clickable, s.fullmove, s.turn, s.orientation,
+    ...lines.map(l => `${l.score ? scoreText(l.score) : ''}:${l.line.map(m => m.uci).join(',')}`)].join(' ');
+  if (key === shownLinesKey) return;
+  shownLinesKey = key;
+  shownLines = lines.map(l => l.line);
+  box.replaceChildren();
+  lines.forEach((l, row) => {
+    const div = document.createElement('div');
+    div.className = 'mpv-row';
+    const score = document.createElement('span');
+    score.className = 'mpv-score';
+    score.textContent = l.score ? scoreText(l.score) : '';
+    const moves = document.createElement('span');
+    moves.className = 'mpv-moves';
+    appendLineCells(moves, s, l.line, clickable, row);
+    div.append(score, moves);
+    box.append(div);
+  });
+  if (preview.on && preview.row >= 0) showPreview(preview.ply, preview.row);
+}
+
+// A line's moves as score-sheet cells (see above) into `box`; `row` is the
+// line's row under MultiPV, -1 for the single line.
+function appendLineCells(box, s, line, clickable, row) {
   let fullmove = s.fullmove;
   let white = s.turn === 'white';
   let unit = null;
@@ -1203,6 +1283,7 @@ function renderLine(s, ev, clickable) {
     }
     chip.className = 'pv-move';
     chip.dataset.ply = ply;
+    chip.dataset.row = row;
     chip.title = move.uci;
     if (white || ply === 0) {
       const number = document.createElement('span');
@@ -1223,10 +1304,6 @@ function renderLine(s, ev, clickable) {
     if (!white) fullmove++;
     white = !white;
   });
-  fitLine();
-  // The line changed under a hover: the move under the pointer is the same ply
-  // of the new line, since every cell is where it was.
-  if (preview.on) showPreview(preview.ply);
 }
 
 // The line shows the one row its box holds (#68), so the move list below stays
@@ -1293,7 +1370,12 @@ new ResizeObserver(() => requestAnimationFrame(fitLine)).observe(el('analysis-pa
 // between two moves, only when the pointer leaves the line altogether. A gap
 // between cells (there should be none) keeps whatever is shown.
 const HOVER_DELAY_MS = 100;
-const preview = { on: false, ply: -1, timer: 0, board: null };
+const preview = { on: false, ply: -1, row: -1, timer: 0, board: null };   // row: see appendLineCells()
+
+// The box the hovered line is drawn in: the single line, or the MultiPV rows.
+function lineBox(row) {
+  return el(row < 0 ? 'analysis-line' : 'analysis-lines');
+}
 
 function previewBoard() {
   if (!preview.board)
@@ -1307,11 +1389,12 @@ function previewBoard() {
   return preview.board;
 }
 
-function showPreview(ply) {
-  const move = shownLine[ply];
+function showPreview(ply, row) {
+  const move = (row < 0 ? shownLine : shownLines[row] || [])[ply];
   if (!move || !move.fen) return hidePreview();
   preview.on = true;
   preview.ply = ply;
+  preview.row = row;
   const box = el('line-preview');
   placePreview(box);
   box.classList.add('shown');
@@ -1323,16 +1406,17 @@ function showPreview(ply) {
     lastMove: [move.uci.slice(0, 2), move.uci.slice(2, 4)],
     check: false,
   });
-  for (const chip of el('analysis-line').querySelectorAll('.pv-move'))
-    chip.classList.toggle('previewed', Number(chip.dataset.ply) === ply);
+  for (const chip of el('analysis-panel').querySelectorAll('.pv-move'))
+    chip.classList.toggle('previewed', Number(chip.dataset.ply) === ply && Number(chip.dataset.row) === row);
 }
 
 function hidePreview() {
   clearTimeout(preview.timer);
   preview.on = false;
   preview.ply = -1;
+  preview.row = -1;
   el('line-preview').classList.remove('shown');
-  for (const chip of el('analysis-line').querySelectorAll('.pv-move.previewed'))
+  for (const chip of el('analysis-panel').querySelectorAll('.pv-move.previewed'))
     chip.classList.remove('previewed');
 }
 
@@ -1353,8 +1437,8 @@ function placePreview(box) {
   }
   // Moved up as far as the window needs, over the open line box's empty rows,
   // but never over a move of the line that is shown.
-  const line = el('analysis-line').getBoundingClientRect();
-  const cells = el('analysis-line').querySelectorAll('.pv-move');
+  const line = lineBox(preview.row).getBoundingClientRect();
+  const cells = lineBox(preview.row).querySelectorAll('.pv-move');
   const lineEnd = cells.length ? Math.min(line.bottom, cells[cells.length - 1].getBoundingClientRect().bottom) : line.top;
   const top = Math.max(lineEnd + 8, Math.min(moves.top, window.innerHeight - size - 4));
   if (moves.top >= 4 && top + size <= window.innerHeight - 4) {
@@ -1368,17 +1452,20 @@ function placePreview(box) {
   box.style.left = `${Math.max(4, panel.right - size)}px`;
 }
 
-el('analysis-line').addEventListener('mouseover', event => {
-  const chip = event.target.closest('.pv-move');
-  if (!chip) return;
-  const ply = Number(chip.dataset.ply);
-  if (preview.on) return showPreview(ply);
-  clearTimeout(preview.timer);
-  preview.ply = ply;
-  preview.timer = setTimeout(() => showPreview(preview.ply), HOVER_DELAY_MS);
-});
-el('analysis-line').addEventListener('mouseleave', hidePreview);
-el('analysis-line').addEventListener('scroll', () => { if (preview.on) placePreview(el('line-preview')); });
+for (const id of ['analysis-line', 'analysis-lines']) {
+  el(id).addEventListener('mouseover', event => {
+    const chip = event.target.closest('.pv-move');
+    if (!chip) return;
+    const ply = Number(chip.dataset.ply), row = Number(chip.dataset.row);
+    if (preview.on) return showPreview(ply, row);
+    clearTimeout(preview.timer);
+    preview.ply = ply;
+    preview.row = row;
+    preview.timer = setTimeout(() => showPreview(preview.ply, preview.row), HOVER_DELAY_MS);
+  });
+  el(id).addEventListener('mouseleave', hidePreview);
+  el(id).addEventListener('scroll', () => { if (preview.on) placePreview(el('line-preview')); });
+}
 
 // ---------------------------------------------------------------------- plans
 

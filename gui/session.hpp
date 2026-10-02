@@ -93,6 +93,11 @@ inline bool coin_flip()
 // what makes the bar show nothing at all rather than 0.00.
 enum class Eval_From { NONE, LIVE, MOVE, STORED, TB };
 
+// The most analysis lines one can ask for (MultiPV, #69): more than any
+// position has legal moves, so it means "all of them", and it is the engine's
+// own maximum.
+constexpr int ANALYSIS_LINES_MAX = 256;
+
 inline const char* eval_from_name(Eval_From from)
 {
     return from==Eval_From::LIVE   ? "live"
@@ -116,6 +121,15 @@ struct Eval_View
     long long score_value = 0;  // kind "tb": white's WDL, -2 (black wins) .. 2 (white wins)
     int tb_dtz = 0;             // kind "tb": plies to the next capture or pawn move
     std::vector<std::string> uci, san;
+    // MultiPV (#69): lines 2..K of the analysis, each with its own score in
+    // white's view; the fields above are line 1.
+    struct Line
+    {
+        std::string score_kind;
+        long long score_value = 0;
+        std::vector<std::string> uci, san;
+    };
+    std::vector<Line> more;
 };
 
 class Session
@@ -208,6 +222,12 @@ class Session
     // else: every position change clears it before the page is told, so no
     // frame can ever carry the previous position's eval.
     bool analysis_on = false;
+    // How many lines the analysis shows (MultiPV, #69), chosen in the Engine
+    // panel. Play and Watch searches always run with one; the toggle in a
+    // paused or finished game is an analysis and uses this.
+    int analysis_lines = 1;   // 1..ANALYSIS_LINES_MAX, which is "every move" anywhere
+    // The lines the engine will bring in this position: K, or every legal move.
+    int analysis_lines_now() const { return std::max(1, std::min(analysis_lines, tree.n_legal_moves())); }
     bool analysis_valid = false;
     bool analysis_finished = false;   // the engine ended the search itself (it ran out of depth)
     Search_Info analysis;
@@ -473,7 +493,7 @@ class Session
     void set_analysis(const Search_Info& info)
     {
         analysis_live_depth = info.depth;
-        if(analysis_valid && analysis_stored && info.depth<analysis.depth)
+        if(analysis_valid && analysis_stored && info.depth<analysis.depth && Analysis_Store::covers(analysis, info))
         return;
         show_analysis(info);
         analysis_stored = false;
@@ -1023,6 +1043,7 @@ class Session
         o.key("on").boolean(analysis_on);
         o.key("running").boolean(analysing());
         o.key("error").str(engine_error);
+        o.key("lines").num(analysis_lines);
         o.end_obj();
 
         // The one score and line the page draws, in every mode, always for the
@@ -1273,6 +1294,16 @@ class Session
         v.score_value = white_view(std::atoll(analysis.score_value.c_str()));
         v.uci = analysis_uci;
         v.san = analysis_san;
+        // A kept result can have more lines than are wanted now: K went down.
+        for(size_t k=0; k<analysis.more.size() && (int)k+1<analysis_lines; k++)
+        {
+            const Search_Line& more = analysis.more[k];
+            Eval_View::Line line;
+            line.score_kind = more.score_kind;
+            line.score_value = white_view(std::atoll(more.score_value.c_str()));
+            line_from_here(more.pv, 0, line.uci, line.san);
+            v.more.push_back(line);
+        }
         return v;
     }
 
@@ -1532,13 +1563,40 @@ class Session
         // Each move also carries the position after it, which is what the page's
         // preview board shows while a move of the line is hovered (#58); the page
         // plays no chess itself, so it cannot work that out on its own.
+        o.key("line");
+        write_line(o, v.uci, v.san);
+        // MultiPV (#69): every line with its score, line 1 first, when there
+        // is more than one; empty otherwise, and the page draws `line` alone.
+        o.key("lines").arr();
+        if(!v.more.empty())
+        {
+            Eval_View::Line first;
+            first.score_kind = v.score_kind;
+            first.score_value = v.score_value;
+            first.uci = v.uci;
+            first.san = v.san;
+            for(size_t k=0; k<=v.more.size(); k++)
+            {
+                const Eval_View::Line& line = k==0 ? first : v.more[k-1];
+                o.obj();
+                o.key("score").obj().key("kind").str(line.score_kind).key("value").num(line.score_value).end_obj();
+                o.key("line");
+                write_line(o, line.uci, line.san);
+                o.end_obj();
+            }
+        }
+        o.end_arr();
+    }
+
+    void write_line(json::Out& o, const std::vector<std::string>& uci, const std::vector<std::string>& sans) const
+    {
         Game walk;
         walk.start(tree.position(), tree.halfmove_clock(), tree.fullmove());
-        o.key("line").arr();
-        for(size_t i=0;i<v.san.size();i++)
+        o.arr();
+        for(size_t i=0;i<sans.size();i++)
         {
-            walk.play(v.uci[i]);
-            o.obj().key("uci").str(v.uci[i]).key("san").str(v.san[i]).key("fen").str(walk.fen()).end_obj();
+            walk.play(uci[i]);
+            o.obj().key("uci").str(uci[i]).key("san").str(sans[i]).key("fen").str(walk.fen()).end_obj();
         }
         o.end_arr();
     }

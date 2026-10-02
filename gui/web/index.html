@@ -297,6 +297,14 @@
       <h2>Engine</h2>
       <div class="analysis-head">
         <button id="analysis-toggle" hidden></button>
+        <!-- How many lines the analysis shows (MultiPV, #69): 1 to every legal move. -->
+        <span id="mpv" class="mpv" hidden title="How many lines the analysis shows">
+          <span class="mpv-label">Lines</span>
+          <button id="mpv-less" type="button" aria-label="Fewer lines">−</button>
+          <span id="mpv-count" class="mpv-count"></span>
+          <button id="mpv-more" type="button" aria-label="More lines">+</button>
+          <button id="mpv-all" type="button" title="A line for every legal move">All</button>
+        </span>
         <span id="analysis-score" class="score"></span>
       </div>
       <p id="analysis-stats" class="note"></p>
@@ -305,6 +313,8 @@
         <p id="analysis-line" class="line"></p>
         <button id="line-expand" class="line-expand" type="button" hidden></button>
       </div>
+      <!-- With more than one line: a row per line, its score first (#69). -->
+      <div id="analysis-lines" class="mpv-lines" hidden></div>
       <div id="tb-moves" class="tb-moves" hidden></div>
     </section>
 

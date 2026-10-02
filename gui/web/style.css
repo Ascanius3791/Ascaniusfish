@@ -544,7 +544,31 @@ select:focus, input:focus { outline: none; border-color: var(--accent); }
    (app.js) makes it as tall as a 50-ply line needs at its width (#68), so a
    line is seen whole; only a longer one scrolls. It is only there when there
    is a line to put in it, so an idle panel isn't mostly empty. */
-#analysis-panel:not(.has-line) .line-wrap { display: none; }
+#analysis-panel:not(.has-line) .line-wrap,
+#analysis-panel.multi .line-wrap { display: none; }
+
+/* The number of lines (MultiPV, #69), between the switch and the score. */
+.mpv { display: inline-flex; align-items: center; gap: 2px; font-size: 12px; color: var(--muted); }
+.mpv[hidden] { display: none; }
+.mpv-label { margin-right: 4px; }
+.mpv button { min-width: 22px; padding: 1px 6px; font-size: 12px; }
+.mpv-count { min-width: 3ch; text-align: center; color: var(--text); font-variant-numeric: tabular-nums; }
+
+/* One row per line, its score first. The box holds the rows asked for, up to
+   MPV_ROWS (app.js sets the height), and scrolls past that, so neither the
+   lines arriving nor a large K moves anything below it. A row is one line of
+   cells; what does not fit in it is cut. */
+.mpv-lines {
+  margin: 8px 0 0;
+  overflow-y: auto;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+}
+
+.mpv-row { display: flex; height: 1.8em; align-items: center; }
+.mpv-score { flex: none; width: 7ch; font-weight: 600; font-variant-numeric: tabular-nums; }
+.mpv-moves { display: flex; flex-wrap: nowrap; overflow: hidden; min-width: 0; }
+.mpv-moves .move-number { width: 3.5ch; color: var(--muted); }
 
 /* The line shows one row of cells; when it needs more, the arrow at that row's
    right end opens the whole of it, as lichess does (#68). The row keeps the

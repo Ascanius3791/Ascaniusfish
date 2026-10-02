@@ -388,6 +388,11 @@ static bool maybe_start_search(Session& session)
     request.moves = session.moves();
     request.white_to_move = session.white_to_move();
     request.options = session.engine_options();
+    // MultiPV (#69) only for an analysis: a Play or Watch search, which ends in
+    // a move, is the plain one. Named every time, since Play and Analyse share
+    // a process.
+    request.options.push_back({"MultiPV", std::to_string(kind==Search_Kind::ANALYSIS ? session.analysis_lines : 1)});
+    request.lines = kind==Search_Kind::ANALYSIS ? session.analysis_lines_now() : 1;
     request.limits = kind==Search_Kind::ANALYSIS ? Go_Limits::analysis()
                     : session.clocked_now()       ? session.clock_go_limits(now_ms())
                     : kind==Search_Kind::PLAY     ? session.limits
@@ -1134,6 +1139,22 @@ static Response handle_post_authed(const Request& req)
             if(n<TB_LIMIT_MIN || n>TB_LIMIT_MAX)
             return Response::json(json::error("tbLimit must be 3, 4 or 5"), 400);
             session.tb_limit = n;
+        }
+        // The analysis's number of lines (MultiPV, #69), from the Engine panel.
+        // A running analysis starts again with it; what was kept stays, and
+        // shows as many of its lines as are wanted now.
+        auto lines = body.find("lines");
+        if(lines!=body.end())
+        {
+            int n = std::atoi(lines->second.c_str());
+            if(n<1 || n>ANALYSIS_LINES_MAX)
+            return Response::json(json::error("lines must be 1 to " + std::to_string(ANALYSIS_LINES_MAX)), 400);
+            if(n!=session.analysis_lines)
+            {
+                session.analysis_lines = n;
+                if(session.analysing())
+                abort_search(session);
+            }
         }
         // The eval-correction net (#53). A running analysis starts again under
         // the new eval, and what was kept from the old one is forgotten; a Play or

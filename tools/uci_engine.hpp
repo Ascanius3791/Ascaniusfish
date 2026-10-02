@@ -19,14 +19,25 @@
 
 constexpr long long READY_TIMEOUT_MS = 60000;
 
+// One more line of a MultiPV set (#69): its score and moves.
+struct Search_Line
+{
+    std::string score_kind, score_value;  // "cp"/"mate", mover's view
+    std::vector<std::string> pv;
+};
+
 // One "info depth ..." line of an engine: what the last completed iteration of
-// its search reached. The score is the mover's view, as UCI has it.
+// its search reached. The score is the mover's view, as UCI has it. Under
+// MultiPV this is line 1 and `more` holds lines 2..K of the same depth, best
+// first (gui/engine_link.hpp collects them).
 struct Search_Info
 {
     int depth = 0;
     long long nodes = 0, nps = 0, time_ms = 0;
     std::string score_kind, score_value;  // "cp"/"mate", mover's view
     std::vector<std::string> pv;
+    int multipv = 0;                      // the line's "multipv i", 0 when the engine gave none
+    std::vector<Search_Line> more;
 };
 
 inline bool parse_info(const std::string& line, Search_Info& info)
@@ -39,6 +50,7 @@ inline bool parse_info(const std::string& line, Search_Info& info)
     while(in >> tok)
     {
         if(tok=="depth") in >> s.depth;
+        else if(tok=="multipv") in >> s.multipv;
         else if(tok=="nodes") in >> s.nodes;
         else if(tok=="nps") in >> s.nps;
         else if(tok=="time") in >> s.time_ms;

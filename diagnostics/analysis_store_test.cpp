@@ -181,6 +181,37 @@ static void test_nothing_stale()
     check(!session.analysis_valid, "a position further on has nothing to show");
 }
 
+// MultiPV (#69): a kept result stands in for the live search only if it has as
+// many lines too, and one with more lines than are wanted now shows K of them.
+static void test_lines()
+{
+    std::printf("a kept result's lines: never fewer than asked for, never more shown\n");
+    Session session;
+    session.analysis_on = true;
+    session.set_analysis(iteration(12, 35, {"e2e4"}));   // deep, one line
+    play(session, "d2d4");
+    navigate(session, Nav::BACK);
+
+    session.analysis_lines = 3;
+    Search_Info three = iteration(4, 30, {"e2e4"});
+    three.more = { {"cp", "20", {"d2d4", "d7d5"}}, {"cp", "-15", {"g1f3"}} };
+    session.set_analysis(three);
+    check(!session.analysis_stored, "three shallow lines replace one deep line when three are wanted");
+    Eval_View v = session.eval_view();
+    check_eq((long long)v.more.size(), 2, "lines 2 and 3 are on show");
+    check(v.more.size()==2 && v.more[0].san.size()==2 && v.more[0].san[0]=="d4", "replayed in SAN from here");
+    check(v.more.size()==2 && v.more[1].score_value==-15, "each with its own score, white's view");
+
+    play(session, "d2d4");
+    navigate(session, Nav::BACK);
+    check(session.analysis_stored && session.analysis.more.size()==2, "the three lines are what is kept");
+
+    session.analysis_lines = 2;
+    check_eq((long long)session.eval_view().more.size(), 1, "with K lowered to 2, the kept three show two");
+    session.analysis_lines = 1;
+    check_eq((long long)session.eval_view().more.size(), 0, "and at K=1, one");
+}
+
 int main()
 {
     // Without these, sliding attacks are garbage and in_check() quietly misses
@@ -197,6 +228,7 @@ int main()
     test_positions_not_nodes();
     test_new_game_clears();
     test_nothing_stale();
+    test_lines();
 
     std::printf("\n%s\n", failures ? "FAIL" : "PASS");
     return failures ? 1 : 0;

@@ -42,19 +42,30 @@ class Analysis_Store
         slots[i].used = false;
     }
 
-    // Keeps this result for `key`. The deeper of the two survives for the same
-    // position; a different position simply takes the slot, since the one being
-    // looked at now is the one worth having.
+    // Keeps this result for `key`. For the same position the kept one survives
+    // only if it is at least as deep and has at least as many lines (MultiPV,
+    // #69) — see covers(); a different position simply takes the slot, since
+    // the one being looked at now is the one worth having.
     void put(const Position_Key& key, const Search_Info& info)
     {
         Analysis_Entry& slot = slots[index(key)];
-        if(slot.used && slot.key==key && slot.info.depth>=info.depth)
+        if(slot.used && slot.key==key && covers(slot.info, info))
         return;
         slot.key = key;
         slot.info = info;
         if(slot.info.pv.size()>ANALYSIS_STORE_PV)
         slot.info.pv.resize(ANALYSIS_STORE_PV);
+        for(Search_Line& more : slot.info.more)
+        if(more.pv.size()>ANALYSIS_STORE_PV)
+        more.pv.resize(ANALYSIS_STORE_PV);
         slot.used = true;
+    }
+
+    // Whether `kept` tells at least what `fresh` does: as deep, as many lines.
+    // A deep single line does not stand in for the K lines asked for now.
+    static bool covers(const Search_Info& kept, const Search_Info& fresh)
+    {
+        return kept.depth>=fresh.depth && kept.more.size()>=fresh.more.size();
     }
 
     // The best result kept for `key`, if it is still the one in its slot.

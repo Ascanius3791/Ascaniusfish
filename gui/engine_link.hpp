@@ -89,6 +89,10 @@ struct Search_Request
     // hold already are sent, so the same list every time costs nothing.
     std::vector<std::pair<std::string, std::string>> options;
     bool white_to_move = true;   // for a clocked search's own hang deadline
+    // MultiPV (#69): the lines a depth brings, min(K, legal moves). A depth
+    // counts as progress only once all of them are in, so the page never
+    // draws half a set.
+    int lines = 1;
 };
 
 struct Search_Result
@@ -255,7 +259,7 @@ class Engine_Link
                 if(abort_requested)   // aborted before the "go" was out: end it now
                 send_locked("stop");
                 lock.unlock();
-                read_bestmove(request.limits, request.white_to_move, my_token, answer);
+                read_bestmove(request.limits, request.white_to_move, request.lines, my_token, answer);
                 lock.lock();
             }
             result = answer;
@@ -272,15 +276,31 @@ class Engine_Link
     }
 
     // Reads until "bestmove", publishing every finished iteration as progress.
-    void read_bestmove(const Go_Limits& limits, bool white_to_move, long long my_token, Search_Result& answer)
+    // Under MultiPV an iteration is `lines` info lines, "multipv 1" to "multipv
+    // K", gathered into one Search_Info. A line without the token (K=1, or a
+    // tablebase root, which the engine searches without MultiPV) is a set alone.
+    void read_bestmove(const Go_Limits& limits, bool white_to_move, int lines, long long my_token, Search_Result& answer)
     {
         long long deadline = now_ms()+limits.deadline_ms(white_to_move);
         std::string line;
+        Search_Info set;   // the MultiPV set being gathered
         while(engine.read_line(line, deadline))
         {
             Search_Info info;
             if(parse_info(line, info))
             {
+                if(info.multipv>=1)
+                {
+                    if(info.multipv==1)
+                    set = info;
+                    else if(info.depth==set.depth && info.multipv==(int)set.more.size()+2)
+                    set.more.push_back({info.score_kind, info.score_value, info.pv});
+                    else
+                    continue;   // out of order: wait for the next set
+                    if((int)set.more.size()+1<lines)
+                    continue;
+                    info = set;
+                }
                 {
                     std::lock_guard<std::mutex> lock(m);
                     progress = info;
