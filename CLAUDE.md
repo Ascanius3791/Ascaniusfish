@@ -84,6 +84,8 @@ When editing engine internals, `lib/*.hpp` is the declaration/interface layer an
 ### Evaluation
 `eval()` (`lib/eval.hpp` / `src/eval.cpp`) composes `basic_eval` (material + piece-square tables) with king safety, pawn structure penalties, and mobility, all parameterized by a `WEIGHTS` instance so both sides can play with different weights (used in self-play tuning). `exception_eval()` detects checkmate/stalemate. Mate scores are encoded near `INT_MIN`/`INT_MAX` (see `interpret_eval()` in `ascaniusfish.hpp` for the encoding: distance-to-mate is `eval - INT_MIN` or `INT_MAX - eval`).
 
+**When you change the eval, change `gui/eval_split.hpp` with it.** `basic_eval()` stays one undivided function for the search; the GUI's "Advanced debugging" breakdown (#66) is a *copy* of its arithmetic, term by term and part by part, and `src/plan_eval.cpp` (the dreamer) keeps its own incremental copy of `piece_activity_eval()`'s role terms. `eval_self_check()` compares every rebuilt term with the function `basic_eval()` calls for it, and their sum with `basic_eval()`, on 30 positions (~1-2 ms). The page runs it whenever a switch goes on. Run it after an eval change with `diagnostics/eval_split_test.cpp` (exit code 1 on a mismatch, naming the term). The dreamer (`lib/plan_eval.hpp`, the #43-#47 plan term) is GUI-only on `main`: nothing in the engine includes it.
+
 ### Opening book
 `lib/opening_book.hpp` / `src/opening_book.cpp` supports loading positions into the `lookup_table` from either PGN (`load_opening_book_from_pgn`) or Lichess JSON-lines evaluation dumps (`load_opening_book_from_lichess_json`), plus a full-book dedup+binary-cache path (`load_and_save_full_opening_book`/`load_opening_book_from_binary`) for the multi-GB Lichess eval database. All toggles live as `const bool`/`const std::string` constants at the top of `ascaniusfish.cpp` (`USE_OPENING_BOOK`, `USE_LICHESS_JSON`, `LOAD_FULL_OPENING_BOOK`, paths under `books/`). See `OPENING_BOOK_README.md`, `LICHESS_JSON_SUPPORT.md`, and `FULL_BOOK_LOADING.md` for format details and setup steps — these are living docs for that subsystem, keep them in sync with `src/opening_book.cpp` if you change the loaders.
 
@@ -182,6 +184,15 @@ When editing engine internals, `lib/*.hpp` is the declaration/interface layer an
   first: `source` is `tb`, the score `{kind:"tb", value: white's WDL -2..2, dtz}`. In Analyse the state
   also carries `tbMoves` (every legal move, best first, result for the mover; clicking one plays it).
   `diagnostics/eval_view_test.cpp` covers it (needs `~/syzygy-nr` or argv[1]).
+- `gui/eval_split.hpp` — `basic_eval()` rebuilt for the gear's two debugging switches, both off
+  by default and per session (#66). **Advanced debugging** (`advanced`) puts the static eval of
+  the position on the board in a column of its own (≥1340px window), each term per side with its
+  parts (hover: which piece hit which square), and runs `eval_self_check()` when switched on: the
+  result sits at the top of the column, and a mismatch names the term (or says a term was added to
+  or dropped from `basic_eval()` when every term matches but the sum does not); it is also printed
+  on the server's stderr. **Dreamer** (`dreamer`) shows the plan term: each piece's dream square
+  and path on the board, a list, and a row of its own in the breakdown, outside the sum.
+  The state carries them as `evalTerms` and `plans`; `Session::write_eval_terms()`/`write_plans()`.
 - `gui/json.hpp` — a JSON writer that inserts the commas, plus a flat-object parser for request bodies.
 - `gui/web/` — `index.html`/`app.js`/`style.css`/`sound.js` and the `logo.png`/`favicon.png` (scaled
   down from the root's `Ascaniusfish.png`) are ours; `gui/web/vendor/` holds chessground

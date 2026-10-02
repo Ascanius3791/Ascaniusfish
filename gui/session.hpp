@@ -28,6 +28,7 @@
 #include "json.hpp"
 #include "move_tree.hpp"
 #include "tablebase_view.hpp"
+#include "eval_split.hpp"
 #include <algorithm>
 #include <map>
 #include <random>
@@ -131,6 +132,25 @@ class Session
     // switches. Nothing is written to disk: they last as long as this process.
     bool show_eval_bar = true;
     bool show_engine_line = true;
+    // "Advanced debugging" (#66): basic_eval() of the position on the board,
+    // term by term (gui/eval_split.hpp), in a column of its own. Off by default.
+    bool show_advanced = false;
+    // "Dreamer" (#66): the plan term (lib/plan_eval.hpp) as a term beside the
+    // eval, never in it: each piece's dream square on the board, and a row in
+    // the breakdown when that is on too. Off by default.
+    bool show_dreamer = false;
+    // The rebuild checked against the real eval (eval_self_check()), run each
+    // time one of the two switches above goes on; shown with the breakdown.
+    Eval_Check eval_check;
+    bool eval_check_run = false;
+    void run_eval_check()
+    {
+        eval_check = eval_self_check(tree.position(), show_dreamer);
+        eval_check_run = true;
+        if(!eval_check.ok())
+        for(const std::string& m : eval_check.messages)
+        std::fprintf(stderr, "eval self-check: %s\n", m.c_str());
+    }
 
     // The tablebase switch and piece limit (#40), next to them in the gear. The
     // tables are the server's (tablebase_setup()); these say whether this
@@ -910,6 +930,18 @@ class Session
          .end_obj();
         o.end_arr();
 
+        o.key("plans");
+        if(show_dreamer)
+        write_plans(o, pos);
+        else
+        o.null();
+
+        o.key("evalTerms");
+        if(show_advanced)
+        write_eval_terms(o, pos);
+        else
+        o.null();
+
         write_tree(o);
         o.key("pgn").str(pgn());
 
@@ -999,6 +1031,8 @@ class Session
         o.key("settings").obj();
         o.key("evalBar").boolean(show_eval_bar);
         o.key("engineLine").boolean(show_engine_line);
+        o.key("advanced").boolean(show_advanced);
+        o.key("dreamer").boolean(show_dreamer);
         o.key("tb").boolean(tb_on);
         o.key("tbLimit").num(tb_limit);
         o.key("tbAvailable").boolean(tablebase_setup().available());
@@ -1282,6 +1316,171 @@ class Session
     long long white_view(long long value) const
     {
         return tree.position().white_move ? value : -value;
+    }
+
+    // The dreamer's plan view (#44, #66): every piece's best target square from
+    // the plan term (lib/plan_eval.hpp), what moving there is worth (db, the
+    // owner's view), what it adds now (term, white's view), one shortest path
+    // there and every square on some shortest path. A piece with nothing better
+    // to reach is left out. The term is shown beside the eval, never in it.
+    void write_plans(json::Out& o, const BB& pos) const
+    {
+        Plan_Target targets[32];
+        int n = 0;
+        const int total = plan_eval_detail(&pos, WEIGHTS_OG, targets, &n);
+        o.obj();
+        o.key("total").num(total);
+        o.key("static").num(basic_eval(&pos, WEIGHTS_OG));
+        o.key("pieces").arr();
+        for(int k=0;k<n;k++)
+        {
+            const Plan_Target& t = targets[k];
+            if(t.to < 0)
+            continue;
+            const bool white = t.piece < 6;
+            int squares[64];
+            uint64_t via;
+            const int length = plan_path(&pos, t, squares, &via);
+            o.obj();
+            o.key("piece").str(std::string(1, "PRNBQK"[t.piece % 6]));
+            o.key("color").str(white ? "white" : "black");
+            o.key("from").str(square_name(t.from));
+            o.key("to").str(square_name(t.to));
+            o.key("n").num(t.n);
+            o.key("db").num(t.db);
+            o.key("term").num(white ? t.term : -t.term);
+            o.key("path").arr();
+            for(int i=0;i<length;i++)
+            o.str(square_name(squares[i]));
+            o.end_arr();
+            o.key("via").arr();
+            while(via)
+            o.str(square_name(find_and_delete_trailling_1(via)));
+            o.end_arr();
+            o.end_obj();
+        }
+        o.end_arr();
+        o.end_obj();
+    }
+
+    // The breakdown (#44, #66): basic_eval() rebuilt term by term by
+    // gui/eval_split.hpp, in its order. A row's "total" is the real term (the
+    // function basic_eval() calls for it) and "partsOk" whether the rebuild
+    // from the parts gives the same; "sum" (real terms) and "basic" are both
+    // sent so the page shows that they agree, or loudly that they don't.
+    // "white"/"black" are each side's own share where a term has sides
+    // (null for the tables and activity: their sides only exist as parts), and
+    // "split" whether white - black is the total (null where it is not meant
+    // to be: material's total is the difference scaled by what is left).
+    void write_eval_terms(json::Out& o, const BB& pos) const
+    {
+        const WEIGHTS& W = WEIGHTS_OG;
+        static const char* const info[EVAL_ROWS] = {
+            "piece values; the total is white − black scaled by the material left",
+            "opening and endgame tables blended by the phase below",
+            "attacks on each king's ring and its pawn shelter (src/king_safety.cpp)",
+            "doubled, tripled and isolated pawns, pawns supporting their own pieces",
+            "5 per square the side attacks (an inline line in basic_eval)",
+            "what each piece attacks and defends",
+        };
+        // Which rows have sides of their own, and whether white − black is the total.
+        static const bool sides[EVAL_ROWS]      = { true,  false, true, true, true, false };
+        static const bool difference[EVAL_ROWS] = { false, false, true, true, true, false };
+        const Eval_Breakdown b = eval_breakdown(&pos, W);
+        o.obj();
+        o.key("rows").arr();
+        for(int k=0;k<EVAL_ROWS;k++)
+        {
+            const Eval_Row& r = b.rows[k];
+            const Eval_Split& split = r.split;
+            int side[2] = {0, 0};
+            for(int j=0;j<split.n;j++)
+            for(int c=0;c<2;c++)
+            side[c] += split.parts[j].raw[c];
+            side[0] /= split.scale;
+            side[1] /= split.scale;
+            o.obj();
+            o.key("name").str(r.name);
+            o.key("white");
+            if(sides[k]) o.num(side[1]); else o.null();
+            o.key("black");
+            if(sides[k]) o.num(side[0]); else o.null();
+            o.key("total").num(r.real);
+            o.key("split");
+            if(difference[k]) o.boolean(side[1] - side[0] == r.real); else o.null();
+            o.key("info").str(info[k]);
+            // The parts: unscaled, each side's own view; the page divides by
+            // scale, and partsOk says the rebuild gives the real total.
+            o.key("scale").num(split.scale);
+            o.key("partsOk").boolean(r.rebuilt == r.real);
+            o.key("parts").arr();
+            for(int j=0;j<split.n;j++)
+            {
+                const Eval_Part& p = split.parts[j];
+                o.obj().key("name").str(p.name)
+                 .key("white").num(p.raw[1]).key("black").num(p.raw[0])
+                 .key("whiteCount").num(p.count[1]).key("blackCount").num(p.count[0])
+                 .key("info").str(p.info);
+                for(int c=1;c>=0;c--)
+                {
+                    o.key(c ? "whiteHits" : "blackHits").arr();
+                    for(int h=0;h<p.n_hits[c];h++)
+                    o.str(square_name(p.hits[c][h]/64) + "→" + square_name(p.hits[c][h]%64));
+                    o.end_arr();
+                }
+                o.end_obj();
+            }
+            o.end_arr();
+            o.end_obj();
+        }
+        o.end_arr();
+        o.key("sum").num(b.real_sum);
+        o.key("basic").num(b.basic);
+
+        // The dreamer's row, beside the eval and outside the sum.
+        o.key("dream");
+        if(show_dreamer)
+        {
+            Plan_Target targets[32];
+            int n = 0;
+            const int total = plan_eval_detail(&pos, W, targets, &n);
+            int plan[2] = {0, 0};
+            for(int k=0;k<n;k++)
+            plan[targets[k].piece < 6] += targets[k].term;
+            o.obj();
+            o.key("white").num(plan[1]).key("black").num(plan[0]).key("total").num(total);
+            o.key("info").str("each piece's best square, db/(2+N), one piece per square; the sides before the "
+                              + std::to_string(PLAN_TEMPO) + " cp tempo for the side to move and the ×"
+                              + std::to_string(PLAN_SCALE) + "/100 scale, which the total includes");
+            o.end_obj();
+        }
+        else
+        o.null();
+
+        o.key("check");
+        if(eval_check_run)
+        {
+            o.obj();
+            o.key("positions").num(eval_check.positions);
+            o.key("us").num((long long)(eval_check.ms*1000));
+            o.key("ok").boolean(eval_check.ok());
+            o.key("messages").arr();
+            for(const std::string& m : eval_check.messages)
+            o.str(m);
+            o.end_arr();
+            o.end_obj();
+        }
+        else
+        o.null();
+
+        // piecetable()'s phase: each side's tables are blended by the *enemy's*
+        // material left, in 39ths (39 = all of it: opening table only).
+        o.key("phase").obj();
+        o.key("white").num((int)std::lround(enemy_material_left_percent(&pos, true)*MATERIAL_MAX));
+        o.key("black").num((int)std::lround(enemy_material_left_percent(&pos, false)*MATERIAL_MAX));
+        o.key("max").num(MATERIAL_MAX);
+        o.end_obj();
+        o.end_obj();
     }
 
     void write_eval(json::Out& o) const

@@ -78,6 +78,15 @@ const HYPERBULLET_PRESETS = [
 // renderWatchPanel, via lastPlayClockOn/lastWatchClockOn), which is also what
 // resets it after a successful Apply.
 let adjudicateOpen = false;
+// The plan view: which side's plans are drawn, the piece (by its square) clicked
+// to stay picked, and the one the pointer is over in the list.
+let planSide = 'both', planPinned = null, planHover = null;
+// The eval terms whose parts are folded away (by row name); all open at first.
+const termsFolded = new Set();
+// Whether parts worth 0 for both sides are left out (the panel's checkbox).
+// Remembered in this browser only; a view preference, not the game's state.
+let termsHideZero = false;
+try { termsHideZero = localStorage.getItem('termsHideZero') === '1'; } catch (e) {}
 let playKindChoice = 'clock', watchKindChoice = 'clock';   // Clock is the default (#58)
 let playCustomOpen = false, watchCustomOpen = false;
 let lastPlayClockOn = null, lastWatchClockOn = null;
@@ -261,7 +270,18 @@ const board = Chessground(el('board'), {
   draggable: { showGhost: true },
   movable: { free: false, color: 'both', showDests: true, events: { after: onUserMove } },
   premovable: { enabled: true, showDests: true, events: { set: onPremoveSet } },
-  drawable: { enabled: true },
+  drawable: {
+    enabled: true,
+    // The plan view's arrows (renderPlans): a colour per side, and the one piece
+    // looked at in the accent colour over faint circles on its other routes.
+    brushes: {
+      planWhite: { key: 'plw', color: '#3f8fd8', opacity: 0.75, lineWidth: 8 },
+      planBlack: { key: 'plb', color: '#d8503f', opacity: 0.75, lineWidth: 8 },
+      planPick:  { key: 'plp', color: '#e68f00', opacity: 0.95, lineWidth: 10 },
+      planVia:   { key: 'plv', color: '#e68f00', opacity: 0.35, lineWidth: 6 },
+    },
+  },
+  events: { select: key => pickPlanAt(key) },
 });
 
 // A right-click always means "forget the queue", never "start drawing" — capture phase
@@ -587,6 +607,47 @@ el('set-evalbar').addEventListener('change', event =>
   command('/api/settings', { evalBar: event.target.checked }));
 el('set-engine-line').addEventListener('change', event =>
   command('/api/settings', { engineLine: event.target.checked }));
+el('set-plans').addEventListener('change', event =>
+  command('/api/settings', { dreamer: event.target.checked }));
+el('set-eval-terms').addEventListener('change', event =>
+  command('/api/settings', { advanced: event.target.checked }));
+el('plans-filter').addEventListener('click', event => {
+  const button = event.target.closest('button[data-side]');
+  if (!button) return;
+  planSide = button.dataset.side;
+  for (const b of el('plans-filter').children) b.classList.toggle('active', b === button);
+  if (state) renderPlans(state);
+});
+el('plans-list').addEventListener('click', event => {
+  const row = event.target.closest('.plans-row[data-from]');
+  if (!row) return;
+  planPinned = planPinned === row.dataset.from ? null : row.dataset.from;
+  if (state) renderPlans(state);
+});
+el('plans-list').addEventListener('pointerover', event => {
+  const row = event.target.closest('.plans-row[data-from]');
+  const from = row ? row.dataset.from : null;
+  if (from === planHover) return;
+  planHover = from;
+  if (state) drawPlanShapes(state);
+});
+el('plans-list').addEventListener('pointerleave', () => {
+  planHover = null;
+  if (state) drawPlanShapes(state);
+});
+el('terms-hide-zero').checked = termsHideZero;
+el('terms-hide-zero').addEventListener('change', event => {
+  termsHideZero = event.target.checked;
+  try { localStorage.setItem('termsHideZero', termsHideZero ? '1' : '0'); } catch (e) {}
+  if (state) renderTerms(state);
+});
+el('terms-list').addEventListener('click', event => {
+  const row = event.target.closest('.terms-parent[data-name]');
+  if (!row) return;
+  const name = row.dataset.name;
+  if (!termsFolded.delete(name)) termsFolded.add(name);
+  if (state) renderTerms(state);
+});
 el('set-tb').addEventListener('change', event =>
   command('/api/settings', { tb: event.target.checked }));
 el('set-tb-limit').addEventListener('change', event =>
@@ -774,6 +835,8 @@ function render(s) {
   renderPlayPanel(s);
   renderWatchPanel(s);
   renderEngine(s);
+  renderPlans(s);
+  renderTerms(s);
   renderSettings(s);
 
   // Leave a FEN or a PGN the user is in the middle of typing alone.
@@ -1248,6 +1311,247 @@ el('analysis-line').addEventListener('mouseover', event => {
 el('analysis-line').addEventListener('mouseleave', hidePreview);
 el('analysis-line').addEventListener('scroll', () => { if (preview.on) placePreview(el('line-preview')); });
 
+// ---------------------------------------------------------------------- plans
+
+// The plan term (lib/plan_eval.hpp), as the server computed it for the position
+// on the board: per piece its best square, db (what standing there is worth to
+// its owner, cp), N (moves needed) and term (what that adds to the eval now,
+// white's view, cp). The list is by size of term; the board shows every listed
+// piece's path, or only the picked one's with its other shortest routes.
+const PLAN_ROLE = { K: 'king', Q: 'queen', R: 'rook', B: 'bishop', N: 'knight', P: 'pawn' };
+
+function signed(v) {
+  return (v > 0 ? '+' : v < 0 ? '−' : '') + Math.abs(v);
+}
+
+function shownPlans(s) {
+  if (!s.plans) return [];
+  return s.plans.pieces
+    .filter(p => planSide === 'both' || p.color === planSide)
+    .sort((a, b) => Math.abs(b.term) - Math.abs(a.term) || b.db - a.db);
+}
+
+function renderPlans(s) {
+  const panel = el('plans-panel');
+  panel.hidden = !s.plans;
+  if (!s.plans) {
+    planPinned = planHover = null;
+    board.setAutoShapes([]);
+    return;
+  }
+  const plans = shownPlans(s);
+  if (planPinned && !plans.some(p => p.from === planPinned)) planPinned = null;
+  el('plans-total').textContent = `${signed(s.plans.total)} cp`;
+  el('plans-note').textContent =
+    `Plan term ${signed(s.plans.total)} cp beside the static eval ${signed(s.plans.static)} cp ` +
+    `(not part of it: the search never sees it). ${s.plans.pieces.length} pieces have a better square.`;
+
+  const list = el('plans-list');
+  list.replaceChildren();
+  for (const p of plans) {
+    const row = document.createElement('div');
+    row.className = `plans-row ${p.color}`;
+    row.classList.toggle('picked', p.from === planPinned);
+    row.dataset.from = p.from;
+    row.title = `${p.path.join(' → ')}` +
+      (p.via.length > p.path.length ? ` (${p.via.length - 2} squares on some shortest path)` : '');
+    const piece = document.createElement('piece');
+    piece.className = `${PLAN_ROLE[p.piece]} ${p.color}`;
+    row.append(piece);
+    const cells = [
+      `${p.from}→${p.to}`,
+      String(p.n),
+      signed(p.db),
+      signed(p.term),
+    ];
+    for (const text of cells) {
+      const cell = document.createElement('span');
+      cell.textContent = text;
+      row.append(cell);
+    }
+    list.append(row);
+  }
+  drawPlanShapes(s);
+}
+
+// Arrows along each path, one per move. All pieces: a width that grows with the
+// term. One piece (hovered or picked): its path in the accent colour, a label
+// with db on the target, and a faint ring on every other square of a shortest path.
+function drawPlanShapes(s) {
+  if (!s.plans) return;
+  const plans = shownPlans(s);
+  const focus = planHover || planPinned;
+  const picked = focus && plans.find(p => p.from === focus);
+  const shapes = [];
+  const arrows = (p, brush, lineWidth) => {
+    for (let i = 0; i + 1 < p.path.length; i++)
+      shapes.push({ orig: p.path[i], dest: p.path[i + 1], brush, modifiers: { lineWidth } });
+  };
+  if (picked) {
+    for (const sq of picked.via)
+      if (!picked.path.includes(sq)) shapes.push({ orig: sq, brush: 'planVia' });
+    arrows(picked, 'planPick', 10);
+    shapes.push({ orig: picked.to, brush: 'planPick', label: { text: signed(picked.db), fill: '#e68f00' } });
+  } else {
+    const top = Math.max(1, ...plans.map(p => Math.abs(p.term)));
+    for (const p of plans)
+      arrows(p, p.color === 'white' ? 'planWhite' : 'planBlack', 3 + Math.round(9 * Math.abs(p.term) / top));
+  }
+  board.setAutoShapes(shapes);
+}
+
+// A click on a piece picks its plan, when the plan view is on and it has one.
+function pickPlanAt(key) {
+  if (!state || !state.plans) return;
+  const p = shownPlans(state).find(q => q.from === key);
+  if (!p) return;
+  planPinned = key;
+  renderPlans(state);
+}
+
+// ---------------------------------------------------------------- eval terms
+
+// basic_eval() of the position on the board, as the server took it apart
+// (Session::write_eval_terms()): per row each side's own share where the engine
+// has one, and the total in white's view. The totals must add up to basic_eval;
+// when they don't, or a row's white - black is not its total, the panel says so
+// in red rather than quietly showing numbers that do not belong together.
+//
+// The panel has a column of its own right of the side column when the window
+// is wide enough for one beside a full-size board (main's padding and gaps, the
+// board column's 620px, the side column's 300px and the terms column's 320px
+// minimum), and sits in the side column under the plans otherwise.
+const roomy = window.matchMedia('(min-width: 1340px)');
+roomy.addEventListener('change', placeTerms);
+
+function placeTerms() {
+  const panel = el('terms-panel'), column = el('terms-column');
+  if (roomy.matches) {
+    if (panel.parentNode !== column) column.append(panel);
+  } else if (panel.parentNode === column) {
+    el('plans-panel').after(panel);
+  }
+  column.hidden = !roomy.matches || panel.hidden;
+}
+
+function pawns(cp) {
+  return (cp > 0 ? '+' : cp < 0 ? '−' : '') + (Math.abs(cp) / 100).toFixed(2);
+}
+
+function renderTerms(s) {
+  const t = s.evalTerms;
+  el('terms-panel').hidden = !t;
+  placeTerms();
+  if (!t) return;
+
+  el('terms-total').textContent = `${pawns(t.basic)} (${signed(t.basic)} cp)`;
+  // The self-check the server ran when the switch went on (gui/eval_split.hpp):
+  // the rebuild against the real eval on the test positions.
+  const sc = el('terms-selfcheck');
+  sc.replaceChildren();
+  sc.classList.toggle('bad', !!t.check && !t.check.ok);
+  if (t.check) {
+    const head = document.createElement('div');
+    head.textContent = t.check.ok
+      ? `✓ Self-check: the breakdown matches the real eval on ${t.check.positions} positions (${(t.check.us / 1000).toFixed(1)} ms).`
+      : `✗ Self-check failed on ${t.check.positions} positions (${(t.check.us / 1000).toFixed(1)} ms):`;
+    sc.append(head);
+    for (const m of t.check.messages) {
+      const line = document.createElement('div');
+      line.textContent = '• ' + m;
+      sc.append(line);
+    }
+  }
+  // The bars share one scale, the biggest total on the board (at least a pawn),
+  // drawn from the middle: right is good for white, left for black.
+  const top = Math.max(100, ...t.rows.map(r => Math.abs(r.total)));
+  const list = el('terms-list');
+  list.replaceChildren();
+  const addRow = (cells, total, title, classes) => {
+    const row = document.createElement('div');
+    row.className = 'terms-row ' + classes;
+    row.title = title;
+    for (const text of cells) {
+      const cell = document.createElement('span');
+      cell.textContent = text;
+      row.append(cell);
+    }
+    const bar = document.createElement('div');
+    bar.className = 'terms-bar';
+    const fill = document.createElement('i');
+    const width = 50 * Math.min(1, Math.abs(total) / top);
+    fill.className = total >= 0 ? 'white' : 'black';
+    fill.style.width = `${width}%`;
+    fill.style.left = total >= 0 ? '50%' : `${50 - width}%`;
+    bar.append(fill);
+    row.append(bar);
+    list.append(row);
+    return row;
+  };
+  for (const r of t.rows) {
+    let title = r.info + (r.split === false ? ' — white − black is not the total!' : '');
+    if (r.name === 'Material' && r.white !== r.black)
+      title += ` (×${(r.total / (r.white - r.black)).toFixed(3)})`;
+    const open = r.parts && !termsFolded.has(r.name);
+    const name = r.parts ? `${open ? '▾' : '▸'} ${r.name}` : r.name;
+    const cells = [
+      name,
+      r.white === null ? '·' : signed(r.white),
+      r.black === null ? '·' : signed(r.black),
+      signed(r.total),
+    ];
+    const bad = r.split === false || r.partsOk === false;
+    if (r.partsOk === false) title += ' — the parts below do not add up to this total (gui/eval_split.hpp is stale?)';
+    const row = addRow(cells, r.total, title, (bad ? 'bad ' : '') + (r.parts ? 'terms-parent' : ''));
+    if (!r.parts) continue;
+    row.dataset.name = r.name;
+    if (!open) continue;
+    // Each part unscaled in the owner's view; the engine divides only the sum by
+    // scale, so a part can be a fraction of a cp.
+    const cp = raw => {
+      const v = raw / r.scale;
+      return Number.isInteger(v) ? signed(v) : (v > 0 ? '+' : '−') + Math.abs(v).toFixed(1);
+    };
+    for (const p of r.parts) {
+      if (termsHideZero && p.white === 0 && p.black === 0) continue;
+      const hits = list => list.length ? ` (${list.join(', ')})` : '';
+      addRow([p.name, cp(p.white), cp(p.black), cp(p.white - p.black)], (p.white - p.black) / r.scale,
+             `${p.info}.\nWhite ${p.whiteCount}${hits(p.whiteHits)}\nBlack ${p.blackCount}${hits(p.blackHits)}`,
+             'terms-part');
+    }
+  }
+
+  // The dreamer (lib/plan_eval.hpp), when its switch is on: a term of its own
+  // beside the eval, not one of basic_eval's, so it stays out of the sum.
+  if (t.dream)
+    addRow(['☾ Dreamer (not summed)', signed(t.dream.white), signed(t.dream.black), signed(t.dream.total)],
+           t.dream.total,
+           `${t.dream.info}\nNot part of basic_eval and never used by the search; ` +
+           `basic_eval with it would be ${signed(t.basic + t.dream.total)} cp.`,
+           'terms-extra');
+
+  const sum = el('terms-sum');
+  sum.replaceChildren();
+  for (const text of ['Sum', '', '', signed(t.sum)]) {
+    const cell = document.createElement('span');
+    cell.textContent = text;
+    sum.append(cell);
+  }
+  const ok = t.sum === t.basic && t.rows.every(r => r.split !== false);
+  const check = el('terms-check');
+  check.classList.toggle('bad', !ok);
+  check.textContent = t.sum !== t.basic
+    ? `✗ The terms add up to ${signed(t.sum)} cp, but basic_eval is ${signed(t.basic)} cp (off by ${signed(t.basic - t.sum)}).`
+    : ok ? `✓ Adds up to basic_eval: ${signed(t.basic)} cp.`
+         : `✗ Adds up to basic_eval, but a row's white − black is not its total (red).`;
+
+  // piecetable()'s blend: each side's tables by the enemy's material left.
+  const share = n => `${Math.round(100 * n / t.phase.max)}% opening`;
+  el('terms-phase').textContent =
+    `Phase (piece tables): white's ${share(t.phase.white)} (black's material ${t.phase.white}/${t.phase.max}), ` +
+    `black's ${share(t.phase.black)} (${t.phase.black}/${t.phase.max}); the rest endgame.`;
+}
+
 // ------------------------------------------------------------------- settings
 
 // The gear's switches. The server holds them, so this only draws them; a second
@@ -1255,6 +1559,8 @@ el('analysis-line').addEventListener('scroll', () => { if (preview.on) placePrev
 function renderSettings(s) {
   el('set-evalbar').checked = s.settings.evalBar;
   el('set-engine-line').checked = s.settings.engineLine;
+  el('set-plans').checked = s.settings.dreamer;
+  el('set-eval-terms').checked = s.settings.advanced;
   // Without tables there is nothing to switch, and the note says why.
   const st = s.settings;
   el('set-tb').checked = st.tb && st.tbAvailable;

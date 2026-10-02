@@ -52,8 +52,16 @@
       <input type="checkbox" id="set-engine-line">
       <span>Engine line and search stats</span>
     </label>
-    <p class="note">Both apply in every mode. They last as long as the server
-    runs and are not saved to a file.</p>
+    <label class="switch">
+      <input type="checkbox" id="set-plans">
+      <span>Dreamer: each piece's dream square, and the plan term beside the eval (never in the search)</span>
+    </label>
+    <label class="switch">
+      <input type="checkbox" id="set-eval-terms">
+      <span>Advanced debugging: the static eval broken down, checked against the real one</span>
+    </label>
+    <p class="note">All four apply in every mode. They last as long as the
+    server runs and are not saved to a file.</p>
     <label class="switch">
       <input type="checkbox" id="set-tb">
       <span>Tablebases</span>
@@ -292,6 +300,25 @@
       <div id="tb-moves" class="tb-moves" hidden></div>
     </section>
 
+    <!-- The plan term (#44): per piece the square it would most like to be on
+         (db, what standing there is worth to its owner), the moves it needs (N)
+         and what that adds to the eval now (term, white's view). Hover a row or
+         click a piece to see its path; click the row again to let go. -->
+    <section class="panel" id="plans-panel" hidden>
+      <h2>Dreamer</h2>
+      <div class="plans-head">
+        <div id="plans-filter" class="controls">
+          <button data-side="both" class="active">Both</button>
+          <button data-side="white">White</button>
+          <button data-side="black">Black</button>
+        </div>
+        <span id="plans-total" class="score"></span>
+      </div>
+      <p id="plans-note" class="note"></p>
+      <div class="plans-row plans-legend"><span></span><span>to</span><span>N</span><span>db</span><span>term</span></div>
+      <div id="plans-list" class="plans-list cg-wrap"></div>
+    </section>
+
     <section class="panel">
       <h2>Moves</h2>
       <div id="nav" class="controls nav">
@@ -310,6 +337,31 @@
     </section>
 
   </aside>
+
+  <!-- The eval terms (#44), in a column of their own where the window has the
+       room for one (app.js's placeTerms() puts the panel in the side column
+       otherwise). basic_eval() of the position on the board, term by term:
+       each side's own share and the total in white's view, in centipawns. The
+       rows are fixed, so the panel's height does not change with the position. -->
+  <div id="terms-column" class="terms-column" hidden>
+    <section class="panel" id="terms-panel" hidden>
+      <h2>Static eval, term by term</h2>
+      <div id="terms-selfcheck" class="terms-check"></div>
+      <div class="terms-head">
+        <span class="note">basic_eval, cp</span>
+        <span id="terms-total" class="score"></span>
+      </div>
+      <label class="note terms-option"><input type="checkbox" id="terms-hide-zero">
+        Hide parts worth 0 for both sides</label>
+      <div class="terms-row terms-legend"><span>term</span><span>white</span><span>black</span><span>total</span></div>
+      <div id="terms-list" class="terms-list"></div>
+      <div id="terms-sum" class="terms-row terms-sum"></div>
+      <p id="terms-check" class="terms-check"></p>
+      <p id="terms-phase" class="note terms-phase"></p>
+      <p class="note">White and black: what that side gets, good for it when
+      positive. Total: white's view. Hover a row for what goes into it.</p>
+    </section>
+  </div>
 </main>
 
 <!-- The position after a move of the engine line, while that move is hovered

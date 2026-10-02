@@ -1079,7 +1079,11 @@ static Response handle_post_authed(const Request& req)
         {
             { "evalBar",    &Session::show_eval_bar    },
             { "engineLine", &Session::show_engine_line },
+            { "advanced",   &Session::show_advanced    },
+            { "dreamer",    &Session::show_dreamer     },
         };
+        const bool was_checked = session.show_advanced || session.show_dreamer;
+        const bool had_dreamer = session.show_dreamer;
         for(const auto& option : switches)
         {
             auto given = body.find(option.name);
@@ -1089,6 +1093,10 @@ static Response handle_post_authed(const Request& req)
             return Response::json(json::error(std::string(option.name) + " must be true or false"), 400);
             session.*option.field = given->second=="true";
         }
+        // Advanced debugging or the dreamer just went on: check the breakdown
+        // (and the dreamer's fast db) against the real eval (#66), ~1-2 ms.
+        if((session.show_advanced || session.show_dreamer) && (!was_checked || session.show_dreamer!=had_dreamer))
+        session.run_eval_check();
         // The tablebase switch and piece limit (#40). The tables are the server's,
         // so the switch cannot be turned on without them. An engine already
         // searching keeps the options it started with; the next search sends them.
