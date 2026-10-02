@@ -316,7 +316,7 @@ int lmr_reduction(int depth, int move_number)
     return std::min((int)table[std::min(depth,63)][std::min(move_number,63)], depth-1);
 }
 
-PV_Line minimax(const BB*const original ,BB* const wfh ,int depth = 0, const WEIGHTS& W= WEIGHTS_OG,int alpha = INT_MIN, int beta = INT_MAX,lookup_table* const table=NULL, BB* const path_history=nullptr, int ply=0, const CuckooCycleTable* const cycle_table=nullptr, int root_ply=INT_MIN, bool null_move_allowed=true)
+PV_Line minimax(const BB*const original ,BB* const wfh ,int depth = 0, const WEIGHTS& W= WEIGHTS_OG,int alpha = INT_MIN, int beta = INT_MAX,lookup_table* const table=NULL, BB* const path_history=nullptr, int ply=0, const CuckooCycleTable* const cycle_table=nullptr, int root_ply=INT_MIN, bool null_move_allowed=true, const Move* const excluded_root_moves=nullptr, int excluded_root_count=0)
 {
     if(DEBUG_MODE)
     saefty_checks(original);
@@ -328,6 +328,10 @@ PV_Line minimax(const BB*const original ,BB* const wfh ,int depth = 0, const WEI
     // automatically its own root; no call site other than the recursive one
     // below needs to change.
     int effective_root_ply = (root_ply==INT_MIN) ? ply : root_ply;
+    // MultiPV (#69): pass k searches the root without the first moves of lines
+    // 1..k-1. That is not the root's value, so such a root neither probes nor
+    // stores the TT (and takes no TT move); the null move is off at a root anyway.
+    const bool excluding = excluded_root_count>0 && ply==effective_root_ply;
 
     // Repetition/cycle bookkeeping - just records this node's board for
     // descendants to check against. This USED to also short-circuit the whole
@@ -374,7 +378,7 @@ PV_Line minimax(const BB*const original ,BB* const wfh ,int depth = 0, const WEI
 
     PV_Line tt_hint;
     bool is_tt_hint_found=0;
-    if(table)
+    if(table && !excluding)
         {
             TT_readout readout = table->is_retrivable_eval(original, depth);
 
@@ -535,7 +539,9 @@ PV_Line minimax(const BB*const original ,BB* const wfh ,int depth = 0, const WEI
     }
 
     Move_List moves;
-    const int number_of_new_moves = generate_legal_moves<GEN_ALL>(original, moves);
+    int number_of_new_moves = generate_legal_moves<GEN_ALL>(original, moves);
+    if(excluding)
+    number_of_new_moves = drop_excluded_moves(moves, number_of_new_moves, excluded_root_moves, excluded_root_count);
     // The TT move is searched before the other moves are ordered: if it cuts
     // off, the ordering is skipped. The rest come in stages, see lib/move_ordering.hpp.
     int tt_move_index = -1;
@@ -660,7 +666,7 @@ PV_Line minimax(const BB*const original ,BB* const wfh ,int depth = 0, const WEI
             pv_line.bound_type = -1;  // lower bound (fail-high)
         else
             pv_line.bound_type = 0;   // exact
-    if(table)
+    if(table && !excluding)
     {
         TT_entry entry;
         entry.zobrist_hash=original->zobrist_hash;

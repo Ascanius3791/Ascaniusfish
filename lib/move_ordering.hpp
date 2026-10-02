@@ -38,6 +38,22 @@ bool is_quiet_move(const BB* const parent, const Move& move);  // no capture, no
 // `indices` into moves): pure material - SEE (incl. promotion gain), then MVV-LVA.
 void order_tactical_moves(const BB* const parent, const Move* const moves, int* const indices, int n);
 
+// MultiPV (#69): drops the `excluded` moves from moves[0..num), keeping the
+// order of the rest; returns how many are left.
+inline int drop_excluded_moves(Move_List& moves, int num, const Move* const excluded, int excluded_count)
+{
+    int kept = 0;
+    for(int i=0;i<num;i++)
+    {
+        bool drop = false;
+        for(int j=0;j<excluded_count && !drop;j++)
+        drop = moves[i]==excluded[j];
+        if(!drop)
+        moves[kept++] = moves[i];
+    }
+    return kept;
+}
+
 class Staged_Move_Order;
 // A quiet move cut off at `depth`: it becomes a killer and gains history, the
 // quiet moves searched before it at this node lose history.
