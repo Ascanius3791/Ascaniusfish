@@ -68,7 +68,7 @@ it (or without the cookie it sets on the first correct one) gets a plain 401
 and never touches a session or an engine. Both the token and the tunnel's URL
 are new every run, so an old link stops working the moment you restart.
 
-**Who is on it**: the silver bar's counter left of `live` says how many pages
+**Who is on it**: the header's counter left of `live` says how many pages
 are open on the server (every tab, every session), e.g. `2 online · 1 remote`.
 A page counts as remote when it came through the tunnel (cloudflared forwards
 from localhost but adds a `Cf-Connecting-Ip` header) or from another machine

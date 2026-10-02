@@ -43,14 +43,23 @@ header {
   gap: 16px;
   flex-wrap: wrap;
   padding: 12px 20px;
-  /* The banner is silver (#68): brushed metal, lit from above. Only its own
-     text turns dark; the buttons stay the dark ones of the page below. */
-  background: linear-gradient(180deg, #eef0f3 0%, #c9cdd3 55%, #aeb3ba 100%);
-  border-bottom: 1px solid #7d828a;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+  /* The banner (#68) is the iron of the shield's frame: dark pewter, a step
+     lighter than the page, with the frame's worn-metal edge along its foot.
+     The shield itself is black, so a lit patch sits behind it — without it
+     the bat is black on dark and simply not there. */
+  background:
+    radial-gradient(circle at 46px 50%, rgba(214, 204, 186, 0.30) 0, rgba(214, 204, 186, 0.10) 34px, transparent 62px),
+    linear-gradient(180deg, #45413a 0%, #34312c 60%, #2b2925 100%);
+  border-bottom: 2px solid #8c8475;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 2px 8px rgba(0, 0, 0, 0.45);
 }
 
-header h1 { color: #1e2024; }
+header h1 {
+  font-size: 22px;
+  letter-spacing: 0.08em;
+  color: #d9d1c3;   /* the frame's metal, lit */
+  text-shadow: 0 1px 0 #000, 0 0 10px rgba(214, 204, 186, 0.25);
+}
 
 h1 {
   display: flex;
@@ -62,7 +71,15 @@ h1 {
 }
 
 /* The engine's sigil, in front of its name. */
-.logo { width: 34px; height: 34px; margin: -6px 0; }
+.logo {
+  width: 52px;
+  height: 52px;
+  margin: -10px 0;
+  /* At this size the grey bat on its black field turns to mud: lift the
+     metal, keep the field dark, and edge the shield with light. */
+  filter: brightness(1.9) contrast(1.25)
+          drop-shadow(0 0 3px rgba(230, 220, 200, 0.6)) drop-shadow(0 2px 3px rgba(0, 0, 0, 0.6));
+}
 
 h2 {
   margin: 0 0 8px;
@@ -95,11 +112,11 @@ nav button.active {
 
 #link, #audience {
   font-size: 12px;
-  color: #3d4148;   /* on the silver banner */
+  color: #b3ab9e;
 }
 
 #audience { margin-left: auto; font-variant-numeric: tabular-nums; }
-#audience.remote { color: #8a4f22; font-weight: 600; }
+#audience.remote { color: #e0a264; font-weight: 600; }
 #audience[hidden] + #link { margin-left: auto; }
 
 #link.live::before, #link.down::before {

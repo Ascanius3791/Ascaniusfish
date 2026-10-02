@@ -216,7 +216,7 @@ When editing engine internals, `lib/*.hpp` is the declaration/interface layer an
   the board's size it cuts the column down to the board, so the side column (300–800px) gets
   the rest (#68). Queued premoves are marked by
   chessground's `current-premove` square colour (`highlight.custom`), not by arrows. The header
-  is a silver bar; left of `live` it counts the pages open on the server, every session, and
+  is the shield's pewter, the shield lit behind; left of `live` it counts the pages open on the server, every session, and
   how many came through the tunnel or the LAN (`Http_Server::audience()`, an `audience` SSE
   event sent to every stream on a change, #68).
 
