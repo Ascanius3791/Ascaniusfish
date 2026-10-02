@@ -4,6 +4,7 @@
 #include "lib/search_control.hpp"
 #include "lib/tb_search.hpp"
 #include "lib/nne.hpp"
+#include "lib/pruning.hpp"
 #include "lib/move_ordering.hpp"
 #include <algorithm>
 #include <cstdlib>//for communication with python
@@ -213,9 +214,7 @@ PV_Line minimax_tactical(const BB* const original, BB* const wfh, const WEIGHTS&
             if(readout.is_found && readout.pv_line.bound_type==0)
             return readout.pv_line;
         }
-        int evaluation = eval(original, W, 0); // exception_state=0: number_of_new_moves>0 above already proves the game isn't over
-        if(nne::enabled)
-        evaluation = nne::corrected_eval(original, evaluation); // UseNNE (#52): + the net's correction, clamped below the TB band
+        int evaluation = static_eval(original, W); // number_of_new_moves>0 above already proves the game isn't over
         PV_Line leaf = PV_Line(evaluation);
         leaf.current_lenght = 0;
         leaf.bound_type = 0;
@@ -227,7 +226,7 @@ PV_Line minimax_tactical(const BB* const original, BB* const wfh, const WEIGHTS&
     // the static eval is already a bound - cut off if it alone beats beta/alpha.
     if(!original->get_in_check())
     {
-        int stand_pat = eval(original, W, 0); // number_of_new_moves>0 here, see above
+        int stand_pat = static_eval(original, W); // the quiet leaf's scale (#71); number_of_new_moves>0 here, see above
         pv_line = PV_Line(stand_pat);
         pv_line.current_lenght = 0;
         pv_line.bound_type = 0;
