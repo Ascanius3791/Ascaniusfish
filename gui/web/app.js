@@ -1187,7 +1187,6 @@ function renderLine(s, ev, clickable) {
   shownLineKey = key;
   shownLine = line;
   box.replaceChildren();
-  fitLine();
   let fullmove = s.fullmove;
   let white = s.turn === 'white';
   let unit = null;
@@ -1224,31 +1223,49 @@ function renderLine(s, ev, clickable) {
     if (!white) fullmove++;
     white = !white;
   });
+  fitLine();
   // The line changed under a hover: the move under the pointer is the same ply
   // of the new line, since every cell is where it was.
   if (preview.on) showPreview(preview.ply);
 }
 
-// The line's box is as tall as a line of LINE_PLIES needs at its width (#68),
-// so a line is never scrolled to be read whole, and its height still depends
-// on nothing but the width: the move list below does not walk on every
-// iteration. A full move is 17.5ch (.move-number and two .pv-san); a line that
-// starts with black's move takes one cell more.
+// The line shows the one row its box holds (#68), so the move list below stays
+// where it is however deep the search goes. A line longer than that gets an
+// arrow at the row's end, and opened the box is as tall as the line, up to
+// LINE_PLIES before it scrolls. Every .pv-unit is a full move of 17.5ch
+// (.move-number and two .pv-san), whichever side starts. Open or not is this
+// browser's own choice, like a folded section, not the session's.
 const LINE_PLIES = 50;
-let lineRows = 0;
+let lineOpen = false;
+try { lineOpen = localStorage.getItem('lineOpen') === '1'; } catch (e) {}
 
 function fitLine() {
   const box = el('analysis-line');
-  const width = box.clientWidth;
-  if (!width) return;   // not shown: measured again when it is
-  const ch = parseFloat(getComputedStyle(box).fontSize) * charRatio(box);
+  const style = getComputedStyle(box);
+  const width = box.clientWidth - parseFloat(style.paddingRight);
+  if (width <= 0) return;   // not shown: measured again when it is
+  const ch = parseFloat(style.fontSize) * charRatio(box);
   const perRow = Math.max(1, Math.floor(width / (17.5 * ch)));
-  const rows = Math.ceil((LINE_PLIES / 2 + 1) / perRow);
-  if (rows !== lineRows) {
-    lineRows = rows;
-    box.style.height = `${rows * 1.8}em`;
-  }
+  const units = box.querySelectorAll('.pv-unit').length;
+  const longer = units > perRow;
+  const open = lineOpen && longer;
+  const rows = open ? Math.min(Math.ceil(units / perRow), Math.ceil((LINE_PLIES / 2 + 1) / perRow)) : 1;
+  const height = `${rows * 1.8}em`;
+  if (box.style.height !== height) box.style.height = height;
+  box.classList.toggle('open', open);
+  const arrow = el('line-expand');
+  arrow.hidden = !longer;
+  arrow.textContent = open ? '▴' : '▾';
+  arrow.title = open ? 'Show one row of the line' : 'Show the whole line';
+  arrow.setAttribute('aria-expanded', open);
 }
+
+el('line-expand').addEventListener('click', () => {
+  lineOpen = !lineOpen;
+  try { localStorage.setItem('lineOpen', lineOpen ? '1' : '0'); } catch (e) {}
+  hidePreview();
+  fitLine();
+});
 
 // The width of the line font's `0` per pixel of font size: what one `ch` is.
 let charRatioCache = 0;
@@ -1263,7 +1280,9 @@ function charRatio(box) {
   return charRatioCache;
 }
 
-new ResizeObserver(fitLine).observe(el('analysis-panel'));
+// A frame later: fitLine() changes the panel's height, which inside the
+// observer's own callback would be a resize loop.
+new ResizeObserver(() => requestAnimationFrame(fitLine)).observe(el('analysis-panel'));
 
 // ------------------------------------------------------------------- preview
 
@@ -1332,11 +1351,11 @@ function placePreview(box) {
     box.style.width = box.style.height = `${size}px`;
     if (preview.board) preview.board.redrawAll();
   }
-  // Moved up as far as the window needs, over the line box's empty rows, but
-  // never over a move of the line itself.
+  // Moved up as far as the window needs, over the open line box's empty rows,
+  // but never over a move of the line that is shown.
   const line = el('analysis-line').getBoundingClientRect();
   const cells = el('analysis-line').querySelectorAll('.pv-move');
-  const lineEnd = cells.length ? cells[cells.length - 1].getBoundingClientRect().bottom : line.top;
+  const lineEnd = cells.length ? Math.min(line.bottom, cells[cells.length - 1].getBoundingClientRect().bottom) : line.top;
   const top = Math.max(lineEnd + 8, Math.min(moves.top, window.innerHeight - size - 4));
   if (moves.top >= 4 && top + size <= window.innerHeight - 4) {
     box.style.top = `${top}px`;

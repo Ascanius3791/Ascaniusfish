@@ -300,7 +300,11 @@
         <span id="analysis-score" class="score"></span>
       </div>
       <p id="analysis-stats" class="note"></p>
-      <p id="analysis-line" class="line"></p>
+      <!-- One row of the line; the arrow opens the rest of it (#68). -->
+      <div class="line-wrap">
+        <p id="analysis-line" class="line"></p>
+        <button id="line-expand" class="line-expand" type="button" hidden></button>
+      </div>
       <div id="tb-moves" class="tb-moves" hidden></div>
     </section>
 

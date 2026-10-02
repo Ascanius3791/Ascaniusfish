@@ -544,13 +544,18 @@ select:focus, input:focus { outline: none; border-color: var(--accent); }
    (app.js) makes it as tall as a 50-ply line needs at its width (#68), so a
    line is seen whole; only a longer one scrolls. It is only there when there
    is a line to put in it, so an idle panel isn't mostly empty. */
-#analysis-panel:not(.has-line) .line { display: none; }
+#analysis-panel:not(.has-line) .line-wrap { display: none; }
+
+/* The line shows one row of cells; when it needs more, the arrow at that row's
+   right end opens the whole of it, as lichess does (#68). The row keeps the
+   arrow's room free whether it is there or not, so no cell moves when it comes. */
+.line-wrap { position: relative; margin: 8px 0 0; font-size: 12px; }
 
 .line {
-  margin: 8px 0 0;
-  height: 7.2em;      /* rows of cells, each 1.8em tall; fitLine() sets the count */
-  overflow-y: auto;
-  overflow-x: hidden;
+  margin: 0;
+  padding-right: 24px;   /* the arrow's room */
+  height: 1.8em;      /* one row of cells; open, fitLine() sets the rows */
+  overflow: hidden;
   display: flex;
   flex-wrap: wrap;
   align-content: flex-start;
@@ -579,6 +584,25 @@ select:focus, input:focus { outline: none; border-color: var(--accent); }
   text-align: left;
   white-space: pre;
 }
+
+.line.open { overflow-y: auto; }
+
+.line-expand {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 22px;
+  height: 1.8em;
+  padding: 0;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--muted);
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.line-expand:hover { color: var(--accent); }
 
 .line .move-number { width: 3.5ch; color: var(--muted); }
 .pv-san { width: 7ch; padding-left: 0.3ch; }
