@@ -387,14 +387,16 @@ PV_Line minimax(const BB*const original ,BB* const wfh ,int depth = 0, const WEI
                 {
                     if(readout.pv_line.bound_type==0)//exact
                     return readout.pv_line;
-                    else if(depth==readout.pv_line.depth)//only on exact depth alpha and beta can be updated
+                    else if(depth==readout.pv_line.depth)//only on exact depth a bound can cut off
                     {
-                        //update alpha and beta based on the bound type
+                        //a bound only cuts, it never narrows alpha and beta (#64): a node searched in a
+                        //narrowed window returns bounds its parent reads as exact scores
+                        int tt_alpha = alpha, tt_beta = beta;
                         if(readout.pv_line.bound_type == -1) // lower bound
-                        alpha = max(alpha, readout.pv_line.eval);
+                        tt_alpha = max(alpha, readout.pv_line.eval);
                         else if(readout.pv_line.bound_type == 1) // upper bound
-                        beta = min(beta, readout.pv_line.eval);
-                        if(alpha >= beta)
+                        tt_beta = min(beta, readout.pv_line.eval);
+                        if(tt_alpha >= tt_beta)
                         {
                             // Prune the search
                             return readout.pv_line;
