@@ -351,13 +351,11 @@ The GUI asks its engine once at startup which build it is (`engine_build()`,
 
 #### Transposition table size: do not raise it
 `TT_EXPONENT` (default 15) and `TT_BUCKET_SIZE` (8) in `lib/Settings.hpp` give the
-regular TT `2^15 * 8 = 262144` entries; `PTT_EXPONENT_FOR_SIZE`/`PTT_BUCKET_SIZE`
-(16/8) give the PTT `524288`. The exponent is both the array dimension and the
+regular TT `2^15 * 8 = 262144` entries. The exponent is both the array dimension and the
 hash mask width (`lookup_table_base::get_hash`), so it can only be a power of two.
 
 **Do not increase these just because the memory budget allows it.** Since the
-`PV_CHUNK` layout shrank `TT_entry` to ~184 bytes, the TT is only ~46MB and the
-PTT ~92MB, so it is tempting to raise the exponent "for free" — don't. The small
+`PV_CHUNK` layout shrank `TT_entry` to ~184 bytes, the TT is only ~46MB, so it is tempting to raise the exponent "for free" — don't. The small
 footprint is deliberate: it is what lets several engine processes run at once,
 which is the thing being optimized for here. Debugging often means a binary and a
 probe/benchmark side by side, and two agents working in this repo simultaneously

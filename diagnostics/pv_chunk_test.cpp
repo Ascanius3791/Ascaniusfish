@@ -217,42 +217,6 @@ int main()
     }
     expect(in_use()==0, "(12) pool empty after scope");
 
-    // (13) the PTT file format: a TT_entry is no longer a flat blob, so a line
-    //      longer than one chunk has to survive save() -> load() move for move.
-    {
-        const int n = PV_CHUNK*2 + 5;
-        const std::string path = "/tmp/pv_chunk_ptt_test.bin";
-        {
-            PTT* table = new PTT();
-            TT_entry entry;
-            entry.initialized = true;
-            entry.zobrist_hash = 0x1234567890abcdefULL;
-            entry.pv_line = line_of(n);
-            entry.pv_line.depth = 11;
-            entry.pv_line.eval = -4242;
-            entry.pv_line.bound_type = 0;
-            table->insert(entry);
-            expect(table->save(path), "(13) save a long-PV entry");
-            delete table;
-        }
-        {
-            PTT* table = new PTT();
-            expect(table->load(path), "(13) load it back");
-            BB key;
-            key.zobrist_hash = 0x1234567890abcdefULL;
-            TT_readout readout = table->is_retrivable_eval(&key, 0);
-            expect(readout.is_found, "(13) entry found after reload");
-            expect(holds(readout.pv_line, n),
-                   "(13) all " + std::to_string(n) + " moves survived the round trip, got length "
-                   + std::to_string(readout.pv_line.current_lenght));
-            expect(readout.pv_line.depth==11 && readout.pv_line.eval==-4242
-                   && readout.pv_line.bound_type==0, "(13) scalars survived");
-            delete table;
-        }
-        std::remove(path.c_str());
-    }
-    expect(in_use()==0, "(13) pool empty after scope");
-
     std::cout << "\npool high water: " << pv_extension_pool().high_water()
               << " / " << pv_extension_pool().capacity() << "\n";
     if(failures)

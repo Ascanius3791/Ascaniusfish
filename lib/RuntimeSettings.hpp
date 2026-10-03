@@ -12,8 +12,8 @@ struct RuntimeSettings
     int depth = 6;
     bool use_opening_book = false;
     bool use_lookup_table = true;
-    // Not yet wired into the standard engine flow - reserved for the persistent
-    // transposition table (PTT) once it's hooked up to Play/main().
+    // Unused: the old in-memory PTT they were meant for is gone (#79). Still
+    // parsed so runtime_settings.txt's keys stay valid.
     bool load_ptt = false;
     bool save_ptt = false;
     // Time management: when true, the engine picks its search depth via
