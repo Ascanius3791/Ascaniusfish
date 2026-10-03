@@ -33,10 +33,10 @@ GUI_BIND ?=
 GUI_TUNNEL ?=
 SYZYGY_PATH ?= $(HOME)/syzygy-nr
 SYZYGY_RANDOM ?=
-TOOL_TARGETS := tools/perft tools/bench tools/speed_compare tools/match tools/make_openings tools/make_endgames tools/gui_match tools/tt_stats tools/syzygy_reference tools/tb_suite tools/tb_trade_suite tools/nne_data tools/wdl_fit tools/tempo_swing tools/gaviota_reference
+TOOL_TARGETS := tools/perft tools/bench tools/speed_compare tools/match tools/make_openings tools/make_endgames tools/gui_match tools/tt_stats tools/syzygy_reference tools/tb_suite tools/tb_trade_suite tools/nne_data tools/wdl_fit tools/tempo_swing tools/gaviota_reference tools/mate_suite
 PROFILE_CXXFLAGS ?= -O2 -mpopcnt -g -pg -Wall -Wno-unknown-pragmas -Wno-parentheses -Wno-unused-variable
 
-.PHONY: all run play asm tests debug profile-startpos perft bench speed-compare match gui-match gui tt-stats tempo-swing syzygy-test gaviota-test nne-test nne-retrain tb-suite tb-trade-suite clean rebuild
+.PHONY: all run play asm tests debug profile-startpos perft bench speed-compare match gui-match gui tt-stats tempo-swing syzygy-test gaviota-test nne-test nne-retrain tb-suite tb-trade-suite mate-suite clean rebuild
 
 all: $(TARGET) $(UCI_TARGET)
 
@@ -155,6 +155,16 @@ GAVIOTA ?= $(wildcard $(GAVIOTA_PATH))
 TB_SUITE_ARGS ?=
 tb-suite: $(UCI_TARGET) tools/tb_suite
 	./tools/tb_suite run $(SYZYGY_PATH) movetime=$(TB_MOVETIME) $(if $(filter-out none,$(GAVIOTA)),gaviota=$(GAVIOTA)) $(TB_SUITE_ARGS)
+
+tools/mate_suite: tools/mate_suite.cpp tools/game_rules.hpp tools/uci_engine.hpp $(HEADERS) $(SOURCES)
+	$(CXX) $(CXXFLAGS) -pthread -o $@ tools/mate_suite.cpp
+
+# Forced mates (issue #78): Lichess mate puzzles, one `go movetime` each; the
+# hit rate per N, where a hit is `mate N` with N the shortest mate.
+MATE_MOVETIME ?= 1000
+MATE_SUITE_ARGS ?=
+mate-suite: $(UCI_TARGET) tools/mate_suite
+	./tools/mate_suite run movetime=$(MATE_MOVETIME) $(MATE_SUITE_ARGS)
 
 tools/tb_trade_suite: tools/tb_trade_suite.cpp tools/syzygy_positions.hpp tools/uci_engine.hpp $(HEADERS) $(SOURCES)
 	$(CXX) $(CXXFLAGS) -pthread -o $@ tools/tb_trade_suite.cpp

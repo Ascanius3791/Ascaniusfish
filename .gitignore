@@ -60,3 +60,5 @@ tools/tb_trade_suite
 data/
 nets/*.prev.*
 nets/*.log.*
+tools/mate_suite
+mate_suite.log
