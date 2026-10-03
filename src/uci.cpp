@@ -641,6 +641,72 @@ void UCI_Engine::search_tb_root(const BB& root, const std::vector<Move>& moves, 
     send("bestmove " + best);
 }
 
+int UCI_Engine::verify_mate(const BB& root, PV_Line& pv, long long budget, bool may_change_line)
+{
+    const bool white_mates = pv.eval > 0;
+    const int claimed = white_mates ? INT_MAX - pv.eval : pv.eval - INT_MIN;
+    const bool mater_to_move = root.white_move == white_mates;
+    int verdict = 0, found = -1;
+    bool quickest = false;
+    std::vector<Move> line;
+    long long nodes = 0;
+    try
+    {
+        // Checks first: cheap, and most mates are a run of checks. A shorter
+        // mate than the one they find needs a quiet move: full width below it.
+        Mate_Result c = find_mate(root, wfh, white_mates, claimed, Mate_Mode::CHECKS_ONLY, budget);
+        nodes += c.nodes;
+        Mate_Result f;
+        if(c.status==Mate_Result::FOUND)
+        {
+            verdict = 1;
+            found = c.plies;
+            line = c.line;
+            f = find_mate(root, wfh, white_mates, found-2, Mate_Mode::FULL_WIDTH, std::max(0LL, budget-nodes));
+            quickest = f.status!=Mate_Result::UNKNOWN;
+        }
+        else
+        {
+            f = find_mate(root, wfh, white_mates, claimed, Mate_Mode::FULL_WIDTH, std::max(0LL, budget-nodes));
+            verdict = f.status==Mate_Result::FOUND ? 1 : f.status==Mate_Result::NONE ? -1 : 0;
+        }
+        nodes += f.nodes;
+        if(f.status==Mate_Result::FOUND)
+        {
+            found = f.plies;
+            line = f.line;
+            quickest = true;
+        }
+    }
+    catch(const search_aborted&)
+    {
+        verdict = 0;  // out of time: the claim stands unchecked
+    }
+    std::string info = "info string mate claim " + std::to_string(claimed) + " plies ";
+    if(verdict==1)
+    {
+        info += "confirmed: " + std::to_string(found) + " plies" + (quickest ? ", the quickest" : ", checks");
+        // The side that mates plays the mate found; the side mated keeps its
+        // own defence and only gets the score.
+        const bool same_move = !line.empty() && pv.current_lenght>0 && line[0]==pv.at(0);
+        if(mater_to_move && !line.empty() && (may_change_line || same_move))
+        {
+            PV_Line mate_pv(0);
+            for(const Move& m : line)
+            mate_pv.append(m, 0);
+            mate_pv.depth = pv.depth;
+            mate_pv.bound_type = 0;
+            pv = std::move(mate_pv);
+        }
+        if(!mater_to_move || may_change_line || same_move)
+        pv.eval = white_mates ? INT_MAX - found : INT_MIN + found;
+    }
+    else
+    info += verdict<0 ? "refuted" : "unchecked";
+    send(info + " nodes " + std::to_string(nodes));
+    return verdict;
+}
+
 std::vector<PV_Line> multipv_search(const BB& root, BB* wfh, int depth, lookup_table* table, BB* path_history, int ply,
                                     const CuckooCycleTable* cycle_table, int lines_wanted)
 {
@@ -725,7 +791,14 @@ void UCI_Engine::search(UCI_Limits limits, long long start_ns)
         {
             break;
         }
-        const PV_Line& pv = lines[0];
+        PV_Line& pv = lines[0];
+
+        // A mate the search claims is checked by the mate search before it is
+        // reported as such or ends the deepening (#78); a table score is not a mate.
+        const bool mate_claimed = (pv.eval <= INT_MIN + max_mating_seq || pv.eval >= INT_MAX - max_mating_seq) && !is_tb_score(pv.eval);
+        int mate_check = 0;
+        if(mate_claimed)
+        mate_check = verify_mate(root, pv, std::max(MATE_VERIFY_MIN_NODES, search_nodes-nodes_before), lines_wanted==1);
 
         long long elapsed_ms = (steady_now_ns()-start_ns)/1000000;
         long long nodes = search_nodes-nodes_before;
@@ -747,8 +820,7 @@ void UCI_Engine::search(UCI_Limits limits, long long start_ns)
             send(info);
         }
 
-        bool proven_mate = pv.eval <= INT_MIN + max_mating_seq || pv.eval >= INT_MAX - max_mating_seq;
-        if(proven_mate && !limits.infinite)
+        if((is_tb_score(pv.eval) || mate_check==1) && !limits.infinite)
         break;
         // On a clock, λ is updated with every new PV; the next iteration
         // starts only if it is expected to finish within the soft limit.
@@ -812,6 +884,7 @@ int UCI_Engine::loop()
             stop_search();
             if(table)
             table->reset();
+            mate_tt_clear();
             lambda_history.reset();
             BB start;
             uci_parse_fen(UCI_STARTPOS, start);

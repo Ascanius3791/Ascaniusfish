@@ -10,6 +10,7 @@
 #include "gaviota.hpp"
 #include "tb_search.hpp"
 #include "nne.hpp"
+#include "mate_search.hpp"
 #include <string>
 #include <vector>
 #include <mutex>
@@ -33,6 +34,10 @@ struct UCI_Limits
 
 constexpr int UCI_MAX_DEPTH = 64;
 constexpr int UCI_WFH_SIZE = 1 << 16;  // BB scratch for the whole search tree
+
+// The least node budget the mate search gets to check a claimed mate (#78);
+// otherwise as many nodes as the deepening has spent so far.
+constexpr long long MATE_VERIFY_MIN_NODES = 100000;
 
 // Parses a FEN (4-6 fields; missing clocks default to "0 1"). Returns false
 // and leaves `out` untouched if the placement/side/castling/ep fields are malformed.
@@ -84,6 +89,11 @@ class UCI_Engine
     bool tb_classes(const BB& root, const std::vector<BB>& children, std::vector<int>& cls, std::vector<int>& key);
     bool tb_root_filter(const BB& root, const std::vector<BB>& children, std::vector<int>& keep, int& tb_class);
     bool dtm_root(const BB& root, const std::vector<BB>& children, const UCI_Limits& limits, long long start_ns);
+    // Checks the mate `pv` claims with the mate search (#78): 1 confirmed (pv
+    // then holds the mate found: the quickest if full width ruled out every
+    // shorter one; its line too if the root side mates and may_change_line or
+    // the line starts with pv's move), -1 refuted, 0 out of budget or time.
+    int verify_mate(const BB& root, PV_Line& pv, long long budget, bool may_change_line);
     void search_tb_root(const BB& root, const std::vector<Move>& moves, const std::vector<BB>& children, const std::vector<int>& keep, int tb_class, int ply, const UCI_Limits& limits, long long start_ns);
     std::string syzygy_dir;
     std::string gaviota_dir;                   // GaviotaTbPath (#77)
