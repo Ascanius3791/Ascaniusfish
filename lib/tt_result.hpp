@@ -1,6 +1,6 @@
 // OWNERSHIP=Claude
-#ifndef TT_LINE_HPP
-#define TT_LINE_HPP
+#ifndef TT_RESULT_HPP
+#define TT_RESULT_HPP
 #include "move_generation.hpp"
 #include <cstdint>
 
@@ -10,7 +10,7 @@
 // same; only a line that ends at an exact TT hit gets shorter. The PTT
 // (gui/ptt.hpp) keeps whole lines.
 //
-// The members are PV_Line's names, and a TT_Line is assigned from and converts to
+// The members are PV_Line's names, and a TT_Result is assigned from and converts to
 // a PV_Line, so every place that writes `entry.pv_line = ...` or reads
 // `readout.pv_line` stays as it is. -DTT_FULL_PV=1 stores a whole PV_Line again
 // (the entry is ~184 bytes instead of 32), to compare against.
@@ -19,9 +19,9 @@
 #endif
 
 #if TT_FULL_PV
-using TT_Line = PV_Line;
+using TT_Result = PV_Line;
 #else
-struct TT_Line
+struct TT_Result
 {
     int eval = 0;
     int depth = 0;
@@ -29,9 +29,9 @@ struct TT_Line
     int8_t current_lenght = 0; // 1 with a best move, 0 without (null-move cutoff, mate, stalemate, book eval)
     uint32_t move = 0;         // packed, see pack()
 
-    TT_Line() = default;
-    TT_Line(const PV_Line& line) { *this = line; }
-    TT_Line& operator=(const PV_Line& line)
+    TT_Result() = default;
+    TT_Result(const PV_Line& line) { *this = line; }
+    TT_Result& operator=(const PV_Line& line)
     {
         eval = line.eval;
         depth = line.depth;
@@ -62,4 +62,4 @@ struct TT_Line
 };
 #endif
 
-#endif // TT_LINE_HPP
+#endif // TT_RESULT_HPP

@@ -3,7 +3,7 @@
 // Runs "go depth D" on the 130 positions (bench + tools/openings.epd) with three
 // engines side by side, one thread each:
 //   today        full=<binary>     (a TT entry keeps the whole line)
-//   move only    compact=<binary>  (a build with lib/tt_line.hpp's TT_Line)
+//   move only    compact=<binary>  (a build with lib/tt_result.hpp's TT_Result)
 //   move + walk  the compact binary with TTWalk on
 // and compares each iteration's PV at the depths asked for against today's.
 // The search is the same in all three, so nodes, score and first move must

@@ -194,7 +194,7 @@ int main()
         expect(holds(moved.pv_line, PV_CHUNK*2+1), "(11) TT_entry move contents");
     }
 #else
-    // A TT_Line (#82) keeps the first move, eval, depth and bound type, every
+    // A TT_Result (#82) keeps the first move, eval, depth and bound type, every
     // field of the move included, and no extension chunk.
     {
         PV_Line line = line_of(PV_CHUNK*2+1);
@@ -202,14 +202,14 @@ int main()
         TT_entry entry;
         entry.pv_line = line;
         PV_Line back = entry.pv_line;
-        expect(back.current_lenght==1 && back.at(0)==marker(0), "(11) TT_Line keeps the first move only");
-        expect(back.eval==-1234 && back.depth==7 && back.bound_type==-1, "(11) TT_Line eval, depth, bound type");
+        expect(back.current_lenght==1 && back.at(0)==marker(0), "(11) TT_Result keeps the first move only");
+        expect(back.eval==-1234 && back.depth==7 && back.bound_type==-1, "(11) TT_Result eval, depth, bound type");
         const Move odd[3] = {Move(63, 0, 5, false, false), Move(4, 6, -1, true, false), Move(36, 43, -1, false, true)};
         for(const Move& m : odd)
         {
             entry.pv_line = PV_Line(m, 1);
             const Move got = PV_Line(entry.pv_line).at(0);
-            expect(got==m && got.is_castling==m.is_castling && got.is_en_passant==m.is_en_passant, "(11) TT_Line move fields");
+            expect(got==m && got.is_castling==m.is_castling && got.is_en_passant==m.is_en_passant, "(11) TT_Result move fields");
         }
         entry.pv_line = PV_Line(55);
         expect(PV_Line(entry.pv_line).current_lenght==0, "(11) a line without a move stays without one");

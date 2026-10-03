@@ -2,7 +2,7 @@
 # Root PV length with best-move-only TT entries (#82)
 
 Commit: issue/82 on top of a42fd1b. "today" is that tree's `ascaniusfish_uci`;
-"move only" is the same tree with `lib/tt_line.hpp` in `TT_entry` (the proposed
+"move only" is the same tree with `lib/tt_result.hpp` in `TT_entry` (the proposed
 `lib/lookup_table.hpp` patch, applied in a scratch copy only), and "move + walk" is
 that binary with `setoption name TTWalk value true` (`UCI_Engine::extend_pv_from_tt()`).
 Command: `diagnostics/root_pv_length full=<today> compact=<move only> depths=8,9,10`,
@@ -10,7 +10,7 @@ the 130 positions (30 bench + 100 `tools/openings.epd`), `go depth 10` after
 `ucinewgame`, engine defaults (net on), the PV of each `info depth 8/9/10` line.
 81 s in all. 2–3 positions end before depth 8 (mate, or no legal move).
 
-Entry size: `sizeof(TT_entry)` 184 B today → 32 B (`TT_Line` 16 B: packed move,
+Entry size: `sizeof(TT_entry)` 184 B today → 32 B (`TT_Result` 16 B: packed move,
 eval, depth, bound type, has-move; `initialized` moved next to the other flag).
 
 Nodes, score and first move agree in all three on every line (0 mismatches),
