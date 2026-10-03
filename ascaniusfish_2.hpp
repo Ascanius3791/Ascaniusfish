@@ -255,12 +255,16 @@ PV_Line minimax_tactical(const BB* const original, BB* const wfh, const WEIGHTS&
     }
     order_tactical_moves(original, moves.moves, tactical_order, number_of_tactical_moves);
     bool searched_a_move = false;
+    bool skipped_a_move = false;
     for(int k=0; k<number_of_tactical_moves; k++)
     {
         const int idx = tactical_order[k];
         make_move(original, moves[idx], wfh);//the child is built only now that it is searched
         if(in_check && forced_moves_left==0 && wfh->get_in_check() && is_quiet_move(original, moves[idx]))
-        continue;//see above: out of budget, a quiet evasion must not check back
+        {
+            skipped_a_move = true;
+            continue;//see above: out of budget, a quiet evasion must not check back
+        }
         searched_a_move = true;
         PV_Line candidate;
         int tb_score;
@@ -296,10 +300,12 @@ PV_Line minimax_tactical(const BB* const original, BB* const wfh, const WEIGHTS&
         if(beta<=alpha)
         break;
     }
-    if(!searched_a_move)
+    const bool mated = original->white_move ? pv_line.eval <= INT_MIN + max_mating_seq : pv_line.eval >= INT_MAX - max_mating_seq;
+    if(!searched_a_move || (skipped_a_move && mated))
     {
-        // Every evasion was skipped: each one checks back, so the line is a
-        // run of checks neither side gets out of - scored as the perpetual it is.
+        // Every evasion was skipped, or every one searched got mated while a
+        // skipped one checks back: scored as the perpetual it most likely is,
+        // never as a mate nobody proved (#78).
         PV_Line perpetual = PV_Line(0);
         perpetual.current_lenght = 0;
         perpetual.bound_type = 0;
