@@ -386,7 +386,7 @@ PV_Line minimax(const BB*const original ,BB* const wfh ,int depth = 0, const WEI
                 bool is_proven_mate = readout.pv_line.bound_type==0
                     && (readout.pv_line.eval <= INT_MIN + max_mating_seq
                         || readout.pv_line.eval >= INT_MAX - max_mating_seq);
-                if((depth<=readout.pv_line.depth || is_proven_mate) && readout.pv_line.current_lenght>0)
+                if((depth<=readout.pv_line.depth || is_proven_mate) && (readout.pv_line.current_lenght>0 || ply!=effective_root_ply))//a move-less entry (null-move cutoff, mate/stalemate) cuts too, except at the root, which has to name a move (#76)
                 {
                     if(readout.pv_line.bound_type==0)//exact
                     return readout.pv_line;
