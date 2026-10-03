@@ -262,7 +262,16 @@ PV_Line minimax_tactical(const BB* const original, BB* const wfh, const WEIGHTS&
         if(in_check && forced_moves_left==0 && wfh->get_in_check() && is_quiet_move(original, moves[idx]))
         continue;//see above: out of budget, a quiet evasion must not check back
         searched_a_move = true;
-        PV_Line candidate = minimax_tactical(wfh, wfh+1, W, alpha, beta, table, forced_moves_left - spends_forced_move);
+        PV_Line candidate;
+        int tb_score;
+        if(tb_probe_score(wfh, tb_score))//a capture into the tables: their result, as in minimax()
+        {
+            candidate = PV_Line(tb_score);
+            candidate.current_lenght = 0;
+            candidate.bound_type = 0;
+        }
+        else
+        candidate = minimax_tactical(wfh, wfh+1, W, alpha, beta, table, forced_moves_left - spends_forced_move);
         int child_eval = candidate.eval;
         if(child_eval<INT_MIN+max_mating_seq)
         child_eval++;
