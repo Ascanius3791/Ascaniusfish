@@ -57,7 +57,8 @@ Answers "is B faster than A, beyond noise?"
 - The verdict comes from the per-round ratio B/A (paired), mean ± 95%
   t-interval. "Significant" means the interval excludes 0.
 - If the node signatures differ, the search itself changed. nps then compares
-  cost per node, not time to depth.
+  cost per node, not time to depth, so a second verdict follows: the paired
+  ratio of time to depth (each run's nodes/nps), which is the one that counts.
 
 Keep the machine otherwise idle while it runs. The runs are single-threaded
 and sequential.

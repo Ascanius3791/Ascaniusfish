@@ -8,7 +8,9 @@
 // in a git worktree under /tmp (the working tree is left untouched) and built
 // with *this* tree's tools/bench.cpp, so both sides run the same workload.
 // Runs alternate AB, BA, AB, ... to cancel load/thermal drift; the verdict
-// uses the paired per-round nps ratio B/A with a 95% t-interval.
+// uses the paired per-round nps ratio B/A with a 95% t-interval. When the
+// node counts differ the search itself changed, so it also gives the paired
+// ratio of time to depth (nodes/nps per run), which is then what counts.
 #include "git_build.hpp"
 #include <algorithm>
 #include <cmath>
@@ -50,7 +52,7 @@ struct Side : Checkout
 {
     std::string binary;
     long long nodes = -1;
-    std::vector<double> nps;
+    std::vector<double> nps, secs;// secs: time to depth, nodes/nps
 };
 
 static void prepare(Side& s, const std::string& root, const std::string& tag)
@@ -80,6 +82,7 @@ static void run_once(Side& s, const std::string& depth_arg)
     std::printf("  warning: %s gave %lld nodes, earlier %lld (search not deterministic?)\n", s.label.c_str(), nodes, s.nodes);
     s.nodes = nodes;
     s.nps.push_back((double)nps);
+    s.secs.push_back((double)nodes/nps);
 }
 
 static void cleanup(Side& s, const std::string& root)
@@ -131,7 +134,18 @@ int main(int argc, char** argv)
                 std::fabs(pct)<=half ? "no significant difference"
                                      : pct>0 ? "B is significantly faster" : "B is significantly slower");
     if(a.nodes!=b.nodes)
-    std::printf("note: node signatures differ, so the search itself changed; nps compares cost per node, not time to depth.\n");
+    {
+        std::vector<double> time_ratio;
+        for(int r=0; r<rounds; r++)
+        time_ratio.push_back(b.secs[r]/a.secs[r]);
+        Mean_CI ta = mean_ci(a.secs), tb = mean_ci(b.secs), mt = mean_ci(time_ratio);
+        double tpct = (mt.mean-1)*100, thalf = mt.half*100;
+        std::printf("note: node signatures differ, so the search itself changed; nps compares cost per node, not time to depth.\n");
+        std::printf("time to depth: A %.3f ± %.3f s   B %.3f ± %.3f s\n", ta.mean, ta.half, tb.mean, tb.half);
+        std::printf("B vs A: %+.2f%% ± %.2f%% time to depth (95%% CI, paired) -> %s\n", tpct, thalf,
+                    std::fabs(tpct)<=thalf ? "no significant difference"
+                                           : tpct<0 ? "B reaches the depth significantly sooner" : "B reaches the depth significantly later");
+    }
 
     cleanup(a, root);
     cleanup(b, root);
