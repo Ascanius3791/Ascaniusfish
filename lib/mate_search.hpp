@@ -69,15 +69,19 @@ struct Mate_Result
 Mate_Result find_mate(const BB& pos, BB* const wfh, bool attacker_white, int max_plies, Mate_Mode mode,
                       long long node_budget, int full_proven = -1);
 
-// Nodes the quiescence search's mate check may spend (minimax_tactical()).
+// Nodes the quiescence search's mate check may spend (minimax_tactical()),
+// and how many plies past the claim it looks.
 constexpr long long QUIESCENCE_MATE_BUDGET = 20000;
+constexpr int QUIESCENCE_MATE_EXTRA_PLIES = 10;
 
 // Does the mate `eval` (white's view, plies from pos, as the search scores
-// it) hold? A CHECKS_ONLY search for it within those plies and `budget`
-// nodes; false if it finds none or runs out. Throws search_aborted only. For
-// minimax_tactical(), out of check budget, where a skipped evasion may yet
-// escape (#78).
-bool mate_confirmed(const BB* const pos, BB* const wfh, int eval, long long budget = QUIESCENCE_MATE_BUDGET);
+// it) hold against every defence? A CHECKS_ONLY search deepened from the
+// claimed plies up to QUIESCENCE_MATE_EXTRA_PLIES more, within `budget` nodes;
+// on success `eval` becomes the mate it proved (it can be longer than the
+// claim: a defence the claim skipped may hold out longer), false if it finds
+// none or runs out. Throws search_aborted only. For minimax_tactical(), out of
+// check budget, where a skipped evasion may yet escape or last longer (#78).
+bool mate_confirmed(const BB* const pos, BB* const wfh, int& eval, long long budget = QUIESCENCE_MATE_BUDGET);
 
 // mate_confirmed() calls since the process started, and how many held.
 inline long long mate_checks = 0, mate_checks_confirmed = 0;

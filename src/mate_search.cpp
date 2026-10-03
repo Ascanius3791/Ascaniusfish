@@ -434,7 +434,7 @@ Mate_Result find_mate(const BB& pos, BB* const wfh, bool attacker_white, int max
     return res;
 }
 
-bool mate_confirmed(const BB* const pos, BB* const wfh, int eval, long long budget)
+bool mate_confirmed(const BB* const pos, BB* const wfh, int& eval, long long budget)
 {
     const bool white_mates = eval >= INT_MAX - max_mating_seq;
     if(!white_mates && eval > INT_MIN + max_mating_seq)
@@ -446,16 +446,25 @@ bool mate_confirmed(const BB* const pos, BB* const wfh, int eval, long long budg
     ctx.mode = Mate_Mode::CHECKS_ONLY;
     ctx.budget = budget;
     mate_checks++;
+    const int claim = white_mates ? INT_MAX - eval : eval - INT_MIN;
     try
     {
-        const bool found = minimax_checkmate_only(pos, wfh, white_mates ? INT_MAX - eval : eval - INT_MIN, ctx) >= 0;
-        mate_checks_confirmed += found;
-        return found;
+        // A defence the claim never saw may last longer, so the plies go up
+        // from the claim; the TT keeps each failed depth cheap for the next.
+        for(int plies = claim; plies <= std::min(claim + QUIESCENCE_MATE_EXTRA_PLIES, MATE_MAX_PLIES); plies += 2)
+        {
+            const int found = minimax_checkmate_only(pos, wfh, plies, ctx);
+            if(found < 0)
+            continue;
+            eval = white_mates ? INT_MAX - found : INT_MIN + found;
+            mate_checks_confirmed++;
+            return true;
+        }
     }
     catch(const mate_budget_exhausted&)
     {
-        return false;
     }
+    return false;
 }
 
 // The plies to mate that are known of `pos` without a search: 0 when it is
