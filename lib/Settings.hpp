@@ -47,7 +47,7 @@ constexpr int MAX_PV_Lenght = 128; //maximum principlad variation lenght(cheap)
 //agents working in this repo who may each want to play a game. That parallelism is
 //worth more here than the marginal search gain from a bigger table, so raising
 //these is Ascanius' call and not a free win. Going SMALLER is fine and already
-//supported: -DTT_EXPONENT=n (tools/match builds its engines with tt=11).
+//supported: -DTT_EXPONENT=n (tools/match builds its engines with tt=14).
 #ifndef TT_EXPONENT
 #define TT_EXPONENT 15
 #endif
