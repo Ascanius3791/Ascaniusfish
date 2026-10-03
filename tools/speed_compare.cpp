@@ -6,7 +6,7 @@
 // A ref is anything git understands (main, HEAD~3, a hash); "." is the
 // current working tree including uncommitted changes. Each ref is checked out
 // in a git worktree under /tmp (the working tree is left untouched) and built
-// with *this* tree's tools/bench.cpp, so both sides run the same workload.
+// with *this* tree's tools/bench.cpp (and bench_positions.hpp), so both sides run the same workload.
 // Runs alternate AB, BA, AB, ... to cancel load/thermal drift; the verdict
 // uses the paired per-round nps ratio B/A with a 95% t-interval. When the
 // node counts differ the search itself changed, so it also gives the paired
@@ -60,8 +60,8 @@ static void prepare(Side& s, const std::string& root, const std::string& tag)
     std::string error = checkout(s, root, "/tmp/ascaniusfish_speed_" + tag);
     if(!error.empty())
     die(error);
-    if(s.worktree && sh("mkdir -p '" + s.dir + "/tools' && cp '" + root + "/tools/bench.cpp' '" + s.dir + "/tools/bench.cpp'")!=0)
-    die("could not copy tools/bench.cpp into " + s.dir);
+    if(s.worktree && sh("mkdir -p '" + s.dir + "/tools' && cp '" + root + "/tools/bench.cpp' '" + root + "/tools/bench_positions.hpp' '" + s.dir + "/tools/'")!=0)
+    die("could not copy tools/bench.cpp and bench_positions.hpp into " + s.dir);
     s.binary = "/tmp/ascaniusfish_speed_bench_" + tag;
     std::printf("building %s ...\n", s.label.c_str());
     std::fflush(stdout);
