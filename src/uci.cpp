@@ -349,6 +349,49 @@ std::vector<std::string> UCI_Engine::pv_to_uci(const BB& root, const PV_Line& pv
     return out;
 }
 
+void UCI_Engine::extend_pv_from_tt(const BB& root, PV_Line& pv, int ply)
+{
+    // Stops at a position without a TT move, an illegal move, a position
+    // already on the line or in the game (path_history[0..ply]), or MAX_PV_Lenght.
+    std::vector<uint64_t> seen;
+    for(int i=0;i<=ply;i++)
+    seen.push_back(path_history[i].zobrist_hash);
+    BB cur = root;
+    for(int k=0; ; k++)
+    {
+        Move next;
+        if(k<pv.current_lenght)
+        next = pv.at(k);
+        else
+        {
+            if(k>=MAX_PV_Lenght)
+            return;
+            TT_readout readout = table->is_retrivable_eval(&cur, 0);
+            if(!readout.is_found || readout.pv_line.current_lenght==0)
+            return;
+            next = readout.pv_line.moves[0];
+        }
+        auto result = all_moves(&cur, pv_buf);
+        const int n = std::get<0>(result);
+        const std::vector<Move>& moves = std::get<1>(result);
+        int found = -1;
+        for(int i=0;i<n;i++)
+        if(moves[i]==next) { found=i; break; }
+        if(found<0)
+        return;
+        if(k>=pv.current_lenght)
+        {
+            if(std::find(seen.begin(), seen.end(), pv_buf[found].zobrist_hash)!=seen.end())
+            return;
+            if(!pv.set_move(k, moves[found]))
+            return;
+            pv.current_lenght = k+1;
+        }
+        cur = pv_buf[found];
+        seen.push_back(cur.zobrist_hash);
+    }
+}
+
 long long perft(const BB* pos, int depth, BB* buf)
 {
     int n = std::get<0>(all_moves(pos, buf));
@@ -871,6 +914,9 @@ void UCI_Engine::search(UCI_Limits limits, long long start_ns)
         {
             break;
         }
+        if(tt_walk)
+        for(PV_Line& line : lines)
+        extend_pv_from_tt(root, line, ply);
         PV_Line& pv = lines[0];
 
         // A mate the search claims is checked by the mate search before it is
@@ -946,6 +992,7 @@ int UCI_Engine::loop()
             send("option name NNEFile type string default nets/nne_d6.bin");
             send("option name UseNNE type check default true");
             send("option name MultiPV type spin default 1 min 1 max " + std::to_string(MAX_ORDERED_MOVES));
+            send("option name TTWalk type check default false");
             if(!tt_bounds_never_narrow)//only a -DTT_BOUNDS_NEVER_NARROW=0 build can narrow (#65)
             {
                 send("option name TTNarrowing type check default false");
@@ -1063,6 +1110,11 @@ int UCI_Engine::loop()
             {
                 stop_search();
                 multipv = std::max(1, std::min(MAX_ORDERED_MOVES, std::atoi(value.c_str())));
+            }
+            else if(name=="TTWalk")
+            {
+                stop_search();
+                tt_walk = value=="true";
             }
             else if(name=="UseNNE")
             {
