@@ -7,6 +7,7 @@
 #include"../src/Settings.cpp"
 #include"../src/move_generation.cpp"
 #include"../src/zobrist.cpp"
+#include"tt_result.hpp"
 
 #include<climits>
 #include<map>
@@ -14,9 +15,9 @@
 
 struct TT_entry
 {
-    bool initialized=0;
     uint64_t zobrist_hash;
-    PV_Line pv_line;
+    TT_Result pv_line;
+    bool initialized=0;
     bool is_from_opening_book=0;
     int search_id=0;// which search (lookup_table_base::new_search) last wrote or refreshed this entry
 };
