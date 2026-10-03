@@ -198,7 +198,7 @@ tb-trade-suite: $(UCI_TARGET) tools/tb_trade_suite
 # Browser GUI server (issues #14-#17). Plain g++, no Node: gui/web/vendor holds
 # a prebuilt chessground bundle, and the HTTP/SSE server is gui/http_server.hpp.
 GUI_TARGET := gui/ascaniusfish_gui
-GUI_HEADERS := gui/http_server.hpp gui/session.hpp gui/move_tree.hpp gui/json.hpp gui/engine_link.hpp gui/analysis_store.hpp gui/tablebase_view.hpp
+GUI_HEADERS := gui/http_server.hpp gui/session.hpp gui/move_tree.hpp gui/json.hpp gui/engine_link.hpp gui/analysis_store.hpp gui/tablebase_view.hpp gui/ptt.hpp
 
 $(GUI_TARGET): gui/gui_server.cpp $(GUI_HEADERS) tools/game_rules.hpp tools/uci_engine.hpp $(HEADERS) $(SOURCES) $(GTB_LIB)
 	$(CXX) $(CXXFLAGS) -pthread -o $@ gui/gui_server.cpp $(WITH_GTB)

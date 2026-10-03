@@ -93,6 +93,9 @@ struct Search_Request
     // counts as progress only once all of them are in, so the page never
     // draws half a set.
     int lines = 1;
+    // A stored line for this position (#79, gui/ptt.hpp), as the engine's
+    // "hint depth D pv ..." command; empty = search cold.
+    std::string hint;
 };
 
 struct Search_Result
@@ -254,6 +257,8 @@ class Engine_Link
                 for(const std::string& move : request.moves)
                 position += " " + move;
                 send_locked(position);
+                if(!request.hint.empty())
+                send_locked(request.hint);
                 send_locked(request.limits.go_command());
                 go_sent = true;
                 if(abort_requested)   // aborted before the "go" was out: end it now
@@ -284,11 +289,15 @@ class Engine_Link
         long long deadline = now_ms()+limits.deadline_ms(white_to_move);
         std::string line;
         Search_Info set;   // the MultiPV set being gathered
+        Search_Provenance prov;   // the search's, from the line before its first iteration
         while(engine.read_line(line, deadline))
         {
             Search_Info info;
+            if(parse_provenance(line, prov))
+            continue;
             if(parse_info(line, info))
             {
+                info.prov = prov;
                 if(info.multipv>=1)
                 {
                     if(info.multipv==1)
@@ -329,17 +338,35 @@ class Engine_Link
 // What the engine binary was built with (#65), asked once at startup: only a
 // build with -DTT_BOUNDS_NEVER_NARROW=0 names TTNarrowing/TTNarrowingDeeper.
 // In the default build a stored bound only cuts, and the gear says so.
+// Also which eval it scores with (#79): its EVAL_VERSION and commit from the
+// answer to "uci", and the hash of the net it loads by default, which is what
+// decides whether a PTT entry is current.
 struct Engine_Build
 {
     bool known = false;       // the engine answered "uci"
     bool narrowing = false;   // its options can narrow alpha and beta on a stored bound
+    int eval_version = 0;     // 0 = it did not say
+    std::string commit;
+    std::string net_hash;     // "" = no net loaded
 
     void probe(const std::string& path)
     {
         Engine engine;
         engine.path = path;
+        engine.options.push_back({"UseNNE", "true"});
         known = engine.start();
         narrowing = known && engine.has_option("TTNarrowing") && engine.has_option("TTNarrowingDeeper");
+        for(const std::string& text : engine.info_strings)
+        {
+            std::istringstream in(text);
+            std::string word;
+            in >> word;
+            if(word=="evalversion")
+            in >> eval_version >> word >> commit;   // "evalversion N commit C"
+            const size_t hash = text.rfind(", hash ");
+            if(text.compare(0, 7, "nne on,")==0 && hash!=std::string::npos)
+            net_hash = text.substr(hash+7);
+        }
         engine.stop();
     }
 };

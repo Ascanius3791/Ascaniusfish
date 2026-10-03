@@ -18,6 +18,8 @@
 //                     result, and the engines are given the path (issue #40)
 //   gaviota=<dir>     Gaviota DTM tables, on top of syzygy=: the mate in N and
 //                     the mating line, also given to the engines (issue #77)
+//   ptt=<file>        where long searches are kept (issue #79; default
+//                     ~/.ascaniusfish/ptt.txt, shared by every worktree), none = off
 //   tunnel=cloudflared  also launch `cloudflared tunnel --url` at this port and
 //                     print the combined shareable link once it comes up
 //
@@ -367,6 +369,31 @@ static void abort_search(Session& session)
     session.clear_analysis();
 }
 
+// Plays the move a Play or Watch search ended in (or a PTT entry stood in for,
+// #79), credits the increment and notes what the search found with the move.
+static void play_engine_move(Session& session, Search_Kind kind, const std::string& bestmove, const Search_Info& info)
+{
+    bool mover_was_white = session.white_to_move();
+    std::string error;
+    if(!session.play(bestmove, error))
+    {
+        session.engine_error = "the engine answered " + bestmove + " — " + error;
+        session.watch_pause();
+        return;
+    }
+    session.clock_credit_increment(mover_was_white);
+    session.annotate_last(info, mover_was_white);
+    if(kind==Search_Kind::WATCH)
+    {
+        // One step is one move: whatever it found, the game pauses here. A game
+        // that just ended pauses too, so the button reads "Start" again.
+        session.watch_step = false;
+        std::string reason;
+        if(session.result(reason)!=Outcome::ONGOING)
+        session.watch_running = false;
+    }
+}
+
 // Asks an engine for whatever this session now wants thought about: its move in
 // Play mode, the side to move's in Watch mode, the position on the board in
 // Analyse mode. Returns at once; the answer arrives through on_tick. False when
@@ -385,6 +412,20 @@ static bool maybe_start_search(Session& session)
     return false;
     int slot = kind!=Search_Kind::WATCH ? SLOT_SOLO
              : session.white_to_move()  ? SLOT_WHITE : SLOT_BLACK;
+    Go_Limits limits = kind==Search_Kind::ANALYSIS ? Go_Limits::analysis()
+                     : session.clocked_now()       ? session.clock_go_limits(now_ms())
+                     : kind==Search_Kind::PLAY     ? session.limits
+                                                    : session.watch_limits_now();
+    // A current PTT entry deep enough for this move is the move (#79): played
+    // at once, with the clock as it stands. The wake brings the next tick,
+    // which asks for the move after it.
+    Search_Info stored;
+    if(kind!=Search_Kind::ANALYSIS && session.ptt_move_now(limits, stored))
+    {
+        play_engine_move(session, kind, stored.pv[0], stored);
+        server.wake();
+        return true;
+    }
     Search_Request request;
     request.start_fen = session.root_fen();
     request.moves = session.moves();
@@ -395,10 +436,10 @@ static bool maybe_start_search(Session& session)
     // a process.
     request.options.push_back({"MultiPV", std::to_string(kind==Search_Kind::ANALYSIS ? session.analysis_lines : 1)});
     request.lines = kind==Search_Kind::ANALYSIS ? session.analysis_lines_now() : 1;
-    request.limits = kind==Search_Kind::ANALYSIS ? Go_Limits::analysis()
-                    : session.clocked_now()       ? session.clock_go_limits(now_ms())
-                    : kind==Search_Kind::PLAY     ? session.limits
-                                                   : session.watch_limits_now();
+    request.limits = limits;
+    // Any other current entry seeds the search with its line (PTT_SEED).
+    if(kind==Search_Kind::ANALYSIS ? session.analysis_lines_now()==1 : true)
+    request.hint = session.ptt_hint();
     // A "ucinewgame" only when this engine has not seen this game before: in
     // Watch mode each side's process meets the game once, and in Analyse mode
     // moving around a game is not a reason to throw its table away.
@@ -476,26 +517,8 @@ static void collect_search(Session& session)
         broadcast(session);
         return;
     }
-    bool mover_was_white = session.white_to_move();
-    std::string error;
-    if(!session.play(result.bestmove, error))
-    {
-        session.engine_error = "the engine answered " + result.bestmove + " — " + error;
-        session.watch_pause();
-        broadcast(session);
-        return;
-    }
-    session.clock_credit_increment(mover_was_white);
-    session.annotate_last(result.info, mover_was_white);
-    if(kind==Search_Kind::WATCH)
-    {
-        // One step is one move: whatever it found, the game pauses here. A game
-        // that just ended pauses too, so the button reads "Start" again.
-        session.watch_step = false;
-        std::string reason;
-        if(session.result(reason)!=Outcome::ONGOING)
-        session.watch_running = false;
-    }
+    session.ptt_offer(result.info);   // about the position it was played in: before the move
+    play_engine_move(session, kind, result.bestmove, result.info);
     broadcast(session);
 }
 
@@ -1297,6 +1320,8 @@ int main(int argc, char** argv)
 
     int port = DEFAULT_PORT;
     std::string root_option, start_fen, engine_option, bind_option = "127.0.0.1", tunnel_option, syzygy_option, gaviota_option;
+    const char* home = std::getenv("HOME");
+    std::string ptt_option = home ? std::string(home) + "/.ascaniusfish/ptt.txt" : "";
     for(int i=1;i<argc;i++)
     {
         std::string arg = argv[i];
@@ -1314,6 +1339,7 @@ int main(int argc, char** argv)
         else if(key=="engine") engine_option = value;
         else if(key=="syzygy") syzygy_option = value;
         else if(key=="gaviota") gaviota_option = value;
+        else if(key=="ptt")     ptt_option = value=="none" ? "" : value;
         else if(key=="tunnel") tunnel_option = value;
         else
         {
@@ -1347,6 +1373,16 @@ int main(int argc, char** argv)
     engine_build().probe(engine_path);
     std::printf("Engine: %s, %s\n", engine_path.c_str(), !engine_build().known ? "did not answer uci"
                 : engine_build().narrowing ? "narrowing build (TTNarrowing/TTNarrowingDeeper)" : "stored bounds only cut");
+    {
+        std::string error;
+        if(!persistent_tt().open(ptt_option, error))
+        std::fprintf(stderr, "gui: ptt: %s (searches are not kept)\n", error.c_str());
+        else if(persistent_tt().on())
+        std::printf("PTT: %zu positions in %s (eval version %d%s)\n", persistent_tt().size(), ptt_option.c_str(),
+                    engine_build().eval_version, engine_build().net_hash.empty() ? ", no net" : "");
+        else
+        std::printf("PTT: off\n");
+    }
     web_root = find_web_root(root_option);
     if(!std::ifstream(web_root + "/index.html").good())
     {

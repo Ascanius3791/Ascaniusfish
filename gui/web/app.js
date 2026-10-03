@@ -594,6 +594,11 @@ el('watch-step').addEventListener('click', () => command('/api/watch', { action:
 el('analysis-toggle').addEventListener('click', () => {
   if (state) command('/api/analyse', { on: !state.analysis.on });
 });
+// "+" beside a kept line (#79): the engine searches on from it, seeded with
+// that line when it is current; the kept result stays up until passed.
+el('line-deeper').addEventListener('click', () => {
+  if (state && !state.analysis.on) command('/api/analyse', { on: true });
+});
 
 for (const id of ['analysis-line', 'analysis-lines'])
   el(id).addEventListener('click', event => {
@@ -1105,6 +1110,17 @@ function renderEngine(s) {
   el('analysis-stats').hidden = !showLine;
   el('analysis-stats').textContent = showLine ? engineStats(s) : '';
   el('analysis-stats').classList.toggle('bad', showLine && analysing && !!a.error);
+  el('analysis-stats').classList.toggle('older', showLine && ev.source === 'stored' && ev.older);
+  el('analysis-stats').title = showLine && ev.source === 'stored' && ev.ptt ? provenanceText(ev) : '';
+
+  // "+" (#79): on a kept result where the analysis can be switched on. It
+  // keeps its place, disabled, while the search it started catches up.
+  const deeper = showLine && canToggle && ev.source === 'stored';
+  el('line-deeper').hidden = !deeper;
+  el('line-deeper').disabled = a.on;
+  el('line-deeper').title = ev.older ? 'Search this position again (the kept result is from another eval)'
+    : 'Search deeper, starting from the kept line';
+  el('line-deeper').parentElement.classList.toggle('deeper', deeper);
 
   // MultiPV (#69): the K control goes with the on/off switch, since K is what
   // that switch's analysis runs with, in a paused or finished game too. Its
@@ -1148,13 +1164,31 @@ function engineStats(s) {
   // is on. A kept result deeper than the search running behind it says how far
   // that one has got, and the marker goes when it catches up.
   const behind = ev.source === 'stored' && a.running && ev.liveDepth < ev.depth;
+  // A result out of the PTT (#79) was kept on disk by an earlier search, and
+  // one an older eval found is shown for what it is, never as the current one.
+  const saved = ev.ptt ? (ev.older ? 'kept, older eval' : 'kept') : 'saved';
   const depth = ev.source === 'stored'
-    ? `depth ${ev.depth} saved` + (behind ? `, search at ${ev.liveDepth}` : '')
+    ? `depth ${ev.depth} ${saved}` + (behind ? `, search at ${ev.liveDepth}` : '')
     : ev.source === 'move' ? `depth ${ev.depth} for this move`
     : `depth ${ev.depth}`;
   const nps = ev.nps ? `${Math.round(ev.nps / 1000).toLocaleString()} knps` : '';
   return [depth, `${ev.nodes.toLocaleString()} nodes`, nps]
     .filter(Boolean).join(' \u00b7 ');
+}
+
+// How a kept result was found (#79), for the stats line's tooltip.
+function provenanceText(ev) {
+  const p = ev.provenance;
+  if (!p) return '';
+  const when = p.storedAt ? new Date(p.storedAt * 1000).toLocaleString() : 'unknown';
+  const tables = [p.syzygy ? `Syzygy ${p.syzygy}` : '', p.gaviota ? `Gaviota ${p.gaviota}` : ''].filter(Boolean).join(', ');
+  return [
+    `Kept from a search of ${(ev.time / 1000).toFixed(1)} s on ${when}`,
+    `eval version ${p.evalVersion}` + (ev.older ? ' (not the current eval: never seeds a search or a move)' : ''),
+    `net: ${p.nne === 'off' ? 'off' : p.nne}`,
+    `tablebases: ${tables || 'none'}`,
+    `engine commit ${p.commit || 'unknown'}`,
+  ].join('\n');
 }
 
 // What the tables say, in words. The value is white's view; a cursed win or a

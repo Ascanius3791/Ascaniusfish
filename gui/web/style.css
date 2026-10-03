@@ -626,6 +626,22 @@ select:focus, input:focus { outline: none; border-color: var(--accent); }
 /* A chevron drawn with two borders rather than a glyph, so its size is its own
    and not the font's (a ▾ at any size is a speck); it points up when open
    (aria-expanded). Its box is exactly one row of cells (12px × 1.8) high. */
+/* The "+" before a kept line (#79). Its room stays while the search it started
+   catches up, so the cells do not move when it is disabled. */
+.line-wrap.deeper .line { padding-left: 26px; }
+.line-deeper {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 22px;
+  height: 21.6px;
+  padding: 0;
+  font-size: 15px;
+  line-height: 1;
+}
+.line-deeper[hidden] { display: none; }
+#analysis-stats.older { color: var(--muted); font-style: italic; }
+
 .line-expand {
   position: absolute;
   top: 0;

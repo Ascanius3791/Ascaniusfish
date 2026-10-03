@@ -24,6 +24,8 @@
 #ifndef GUI_SESSION_HPP
 #define GUI_SESSION_HPP
 #include "analysis_store.hpp"
+#include "ptt.hpp"
+#include "../lib/time_manager.hpp"
 #include "engine_link.hpp"
 #include "json.hpp"
 #include "move_tree.hpp"
@@ -122,6 +124,11 @@ struct Eval_View
     int tb_dtz = 0;             // kind "tb": plies to the next capture or pawn move
     int tb_mate = 0;            // kind "tb": white's mate in moves from the DTM tables (#77), 0 = none
     std::vector<std::string> uci, san;
+    // A result out of the PTT (#79): kept on disk from an earlier search, and
+    // `older` when another eval found it, so it is shown but never trusted.
+    bool ptt = false, older = false;
+    Search_Provenance prov;
+    long long stored_at = 0;
     // MultiPV (#69): lines 2..K of the analysis, each with its own score in
     // white's view; the fields above are line 1.
     struct Line
@@ -245,6 +252,11 @@ class Session
     Position_Key analysis_key{};
     bool analysis_stored = false;
     int analysis_live_depth = 0;
+    // The result on show came out of the PTT (#79, gui/ptt.hpp) rather than
+    // this game's store, and `analysis_older` if another eval found it.
+    bool analysis_ptt = false;
+    bool analysis_older = false;
+    long long analysis_stored_at = 0;
 
     // Watch mode. Ascaniusfish against itself, one engine process per side so
     // the two have their own transposition tables. `running` plays the game on
@@ -495,10 +507,120 @@ class Session
     void set_analysis(const Search_Info& info)
     {
         analysis_live_depth = info.depth;
-        if(analysis_valid && analysis_stored && info.depth<analysis.depth && Analysis_Store::covers(analysis, info))
+        if(info.more.empty())
+        ptt_offer(info);
+        if(analysis_valid && analysis_stored && !analysis_older && info.depth<analysis.depth && Analysis_Store::covers(analysis, info))
         return;
         show_analysis(info);
         analysis_stored = false;
+        analysis_ptt = analysis_older = false;
+    }
+
+    // ------------------------------------------------------------ PTT (#79)
+
+    // The eval this session's engines search with now: what decides whether a
+    // PTT entry is current.
+    PTT_Eval ptt_eval() const
+    {
+        PTT_Eval e;
+        e.eval_version = engine_build().eval_version;
+        e.nne = nne_on && !engine_build().net_hash.empty() ? engine_build().net_hash : "off";
+        return e;
+    }
+
+    // The PTT's entry for the position on the board, if it is current, and
+    // its first move is legal here.
+    const PTT_Entry* ptt_current() const
+    {
+        const PTT_Entry* e = persistent_tt().get(tree.current().key);
+        if(!e || !ptt_eval().matches(e->info.prov))
+        return nullptr;
+        std::vector<std::string> uci, san;
+        line_from_here(e->info.pv, 0, uci, san);
+        return uci.empty() ? nullptr : e;
+    }
+
+    // The engine's "hint" for the next search here, from a current entry; ""
+    // when there is none or seeding is off (PTT_SEED).
+    std::string ptt_hint() const
+    {
+        const PTT_Entry* e = PTT_SEED ? ptt_current() : nullptr;
+        if(!e)
+        return "";
+        std::string hint = "hint depth " + std::to_string(e->info.depth) + " pv";
+        for(const std::string& m : e->info.pv)
+        hint += " " + m;
+        return hint;
+    }
+
+    // A current entry deep enough to play its move at once in Play or Watch:
+    // as deep as a fixed depth asks for, or, on a clock, found in at least the
+    // time the engine would give this move (its soft limit at lambda 1: the
+    // increment plus the remaining time over the moves expected to be left).
+    bool ptt_move_now(const Go_Limits& limits, Search_Info& out) const
+    {
+        const PTT_Entry* e = ptt_current();
+        if(!e)
+        return false;
+        if(limits.clocked())
+        {
+            const bool white = white_to_move();
+            const long long left = white ? limits.wtime_ms : limits.btime_ms;
+            const long long inc = white ? limits.winc_ms : limits.binc_ms;
+            const long long soft = inc + left/std::max(1, expected_moves_left(tree.position()));
+            if(e->info.time_ms<soft)
+            return false;
+        }
+        else if(e->info.depth<std::max(1, limits.depth))
+        return false;
+        out = e->info;
+        return true;
+    }
+
+    // Offers what a search of the position on the board found to the PTT:
+    // kept only from a search of PTT_MIN_MS or more at MultiPV 1 by an engine
+    // that said what it scores with, and not when the game's history may be in
+    // the score — near the 50-move rule, or a draw the line reaches through a
+    // position played earlier in the game (a repetition the next visit may not
+    // have). The board kept is the real one, clocks included.
+    void ptt_offer(const Search_Info& info)
+    {
+        if(!persistent_tt().on() || info.time_ms<PTT_MIN_MS || !info.more.empty() || info.multipv>1
+           || info.score_kind.empty() || info.pv.empty() || info.prov.eval_version<=0)
+        return;
+        if(tree.halfmove_clock()+info.depth>=100 || draw_through_history(info))
+        return;
+        PTT_Entry entry;
+        entry.fen = tree.fen();
+        entry.info = info;
+        persistent_tt().put(tree.current().key, entry);
+    }
+
+    // A draw score whose line runs into a position this game has already had
+    // since its last capture or pawn move, or that stands on one.
+    bool draw_through_history(const Search_Info& info) const
+    {
+        if(info.score_kind!="cp" || std::atoll(info.score_value.c_str())!=0)
+        return false;
+        const Tree_Node& here = tree.current();
+        std::set<Position_Key> earlier;
+        int back = 1;
+        for(int id=here.parent; id>=0 && back<=here.halfmove_clock; id=tree.node(id).parent, back++)
+        earlier.insert(tree.node(id).key);
+        if(earlier.empty())
+        return false;
+        if(earlier.count(here.key))
+        return true;
+        Game walk;
+        walk.start(tree.position(), tree.halfmove_clock(), tree.fullmove());
+        for(const std::string& m : info.pv)
+        {
+            if(!walk.play(m) || walk.halfmove_clock==0)
+            break;   // past a capture or pawn move nothing earlier can come back
+            if(earlier.count(walk.keys.back()))
+            return true;
+        }
+        return false;
     }
 
     // Steps the board along a line of UCI moves, which is what clicking a move
@@ -813,6 +935,7 @@ class Session
         live_valid = false;
         watch_pause();
         forget_analysis();
+        recall_analysis();
         reseed_clock(0);
         reseed_clock(1);
         clock_mover_since_ms = 0;
@@ -1272,6 +1395,8 @@ class Session
         analysis_finished = false;
         analysis_stored = false;
         analysis_live_depth = 0;
+        analysis_ptt = analysis_older = false;
+        analysis_stored_at = 0;
         analysis_uci.clear();
         analysis_san.clear();
     }
@@ -1287,10 +1412,24 @@ class Session
     }
 
     // The kept result for the position now on the board, if there is one.
+    // This game's store first; the PTT's entry when it has none, or a deeper
+    // current one. An older entry (another eval) only when nothing else is.
     void recall_analysis()
     {
         Search_Info found;
-        if(!analysis_store.get(tree.current().key, found))
+        const bool in_store = analysis_store.get(tree.current().key, found);
+        const PTT_Entry* kept = persistent_tt().get(tree.current().key);
+        const bool current = kept && ptt_eval().matches(kept->info.prov);
+        if(kept && (in_store ? current && kept->info.depth>found.depth : true))
+        {
+            show_analysis(kept->info);
+            analysis_stored = true;
+            analysis_ptt = true;
+            analysis_older = !current;
+            analysis_stored_at = kept->stored_at;
+            return;
+        }
+        if(!in_store)
         return;
         show_analysis(found);
         analysis_stored = true;
@@ -1335,6 +1474,10 @@ class Session
     {
         Eval_View v;
         v.from = analysis_stored ? Eval_From::STORED : Eval_From::LIVE;
+        v.ptt = analysis_stored && analysis_ptt;
+        v.older = v.ptt && analysis_older;
+        v.prov = analysis.prov;
+        v.stored_at = analysis_stored_at;
         v.depth = analysis.depth;
         v.live_depth = analysis_live_depth;
         v.nodes = analysis.nodes;
@@ -1601,6 +1744,21 @@ class Session
     {
         Eval_View v = eval_view();
         o.key("source").str(eval_from_name(v.from));
+        // A PTT result (#79): on disk from an earlier search, `older` when
+        // another eval found it, and how it was found.
+        o.key("ptt").boolean(v.ptt);
+        o.key("older").boolean(v.older);
+        if(v.ptt)
+        {
+            o.key("provenance").obj();
+            o.key("evalVersion").num(v.prov.eval_version);
+            o.key("nne").str(v.prov.nne);
+            o.key("syzygy").num(v.prov.syzygy);
+            o.key("gaviota").num(v.prov.gaviota);
+            o.key("commit").str(v.prov.commit);
+            o.key("storedAt").num(v.stored_at);
+            o.end_obj();
+        }
         o.key("depth").num(v.depth);
         o.key("liveDepth").num(v.live_depth);
         o.key("nodes").num(v.nodes);
@@ -1669,6 +1827,7 @@ class Session
         forget_analysis();
         tree.start(start_pos, start_halfmove, start_fullmove);
         start_fen = tree.fen();
+        recall_analysis();   // the PTT may know the new start position (#79)
         // Re-seeds the live clock from whichever mode's setting is current
         // (mode is already set by the time start_play()/start_watch() get
         // here). Left unarmed (clock_mover_since_ms stays 0) — the very next
