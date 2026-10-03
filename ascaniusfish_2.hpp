@@ -562,6 +562,7 @@ PV_Line minimax(const BB*const original ,BB* const wfh ,int depth = 0, const WEI
     pv_line.depth=depth;
     const int ply_from_root = ply-effective_root_ply;
     const bool in_check = original->get_in_check();
+    bool lmp_pruned = false;
     // Searches one child and applies the mate-distance fixup, so every
     // (re-)search below compares like the full-window one always did.
     auto search_child = [&](BB* child, int child_depth, int a, int b)
@@ -602,6 +603,14 @@ PV_Line minimax(const BB*const original ,BB* const wfh ,int depth = 0, const WEI
             }
             if(!forced_draw && cycle_move_found && move==cycle_avoiding_move)
             forced_draw = true;
+        }
+
+        // Late move pruning (#73, lib/pruning.hpp)
+        if(ENABLE_LMP && !forced_draw && i>=lmp_move_count(depth) && depth<=LMP_MAX_DEPTH
+           && !in_check && lmp_window_ok(alpha,beta) && is_quiet_move(original,move) && !child->get_in_check())
+        {
+            lmp_pruned = true;
+            continue;
         }
 
         PV_Line candidate_pv_line;
@@ -661,6 +670,8 @@ PV_Line minimax(const BB*const original ,BB* const wfh ,int depth = 0, const WEI
             break;
         }        
     }
+    if(lmp_pruned)
+    pv_line.eval = lmp_clamp(original->white_move, pv_line.eval, alpha_0, beta_0);
     //now correct for fail low
         if(pv_line.eval <= alpha_0)
             pv_line.bound_type = 1;   // upper bound (fail-low)
