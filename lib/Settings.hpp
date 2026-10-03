@@ -37,9 +37,9 @@ constexpr int MAX_PV_Lenght = 128; //maximum principlad variation lenght(cheap)
 
 //==================================================================================================================================
 //lookup table sizes (see lib/lookup_table.hpp) - exponent_for_size is log2(number
-//of buckets), bucket_size is entries per bucket. TT_entry is ~184 bytes (PV_Line
-//keeps PV_CHUNK moves inline instead of a flat Move[MAX_PV_Lenght]), so total size
-//is roughly (1<<exponent_for_size) * bucket_size * 184B.
+//of buckets), bucket_size is entries per bucket. TT_entry is 32 bytes (it keeps
+//only the best move, TT_Result in lib/tt_result.hpp, #82), so total size
+//is (1<<exponent_for_size) * bucket_size * 32B.
 //
 //DO NOT RAISE THE EXPONENT just because there is memory to spare. The table is
 //deliberately small: a small footprint is what lets several engine processes
@@ -47,11 +47,12 @@ constexpr int MAX_PV_Lenght = 128; //maximum principlad variation lenght(cheap)
 //agents working in this repo who may each want to play a game. That parallelism is
 //worth more here than the marginal search gain from a bigger table, so raising
 //it is Ascanius' call and not a free win. Going SMALLER is fine and already
-//supported: -DTT_EXPONENT=n (tools/match builds its engines with tt=14).
+//supported: -DTT_EXPONENT=n (tools/match builds its engines with tt=17).
+//The exponent went 15 -> 18 when entries shrank 184 -> 32 bytes (#82): ~46MB -> 64MB.
 #ifndef TT_EXPONENT
-#define TT_EXPONENT 15
+#define TT_EXPONENT 18
 #endif
-constexpr int TT_EXPONENT_FOR_SIZE = TT_EXPONENT;   //regular per-game transposition table: 262144 entries, ~46MB (-DTT_EXPONENT=n overrides it downwards, e.g. for parallel match engines)
+constexpr int TT_EXPONENT_FOR_SIZE = TT_EXPONENT;   //regular per-game transposition table: 2097152 entries, 64MB (-DTT_EXPONENT=n overrides it downwards, e.g. for parallel match engines)
 constexpr int TT_BUCKET_SIZE = 8;
 
 //true (default): a stored bound only cuts, it never narrows alpha and beta (#64).
