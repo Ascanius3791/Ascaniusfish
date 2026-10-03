@@ -1200,6 +1200,19 @@ static Response handle_post_authed(const Request& req)
                 session.run_eval_check();
             }
         }
+        // Whether the session reads the PTT (#79), from the Engine panel. Storing
+        // goes on either way; a kept result on show goes or comes back at once.
+        auto ptt_use = body.find("pttUse");
+        if(ptt_use!=body.end())
+        {
+            if(ptt_use->second!="true" && ptt_use->second!="false")
+            return Response::json(json::error("pttUse must be true or false"), 400);
+            if(session.ptt_use!=(ptt_use->second=="true"))
+            {
+                session.ptt_use = ptt_use->second=="true";
+                session.recall_kept();
+            }
+        }
         // Narrowing on stored bounds (#65), only in an engine built with it.
         // Deeper is a step on top of narrow: it cannot be on alone, and turning
         // narrow off takes it along. Like the net, a change restarts the analysis.

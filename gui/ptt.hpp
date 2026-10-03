@@ -14,11 +14,14 @@
 // Lines are only appended, under flock, so a second GUI can share the file; a
 // later line for the same position replaces an earlier one when it is better
 // (better()), and the file is rewritten without the replaced lines when they
-// outnumber the live ones. Keyed like the analysis store, by the whole
-// position (Position_Key, from the FEN), never by a hash.
+// outnumber the live ones. Keyed by the whole position (Position_Key, from
+// the FEN, never a hash) *and* its halfmove clock (PTT_Key): an entry only
+// counts at the clock it was found at, so the 50-move rule stands where it
+// stood in the search.
 //
 // Only the server writes it, and only from searches of >=PTT_MIN_MS at
-// MultiPV 1 of positions on the board (Session::ptt_offer()).
+// MultiPV 1 of positions on the board (Session::ptt_offer()), never where the
+// game's history since its last capture or pawn move could be in the score.
 #ifndef GUI_PTT_HPP
 #define GUI_PTT_HPP
 #include "../tools/game_rules.hpp"
@@ -38,6 +41,9 @@ constexpr int PTT_PV = 64;               // moves of a line worth keeping
 // searches the position again (the "+" in Analyse, a Play or Watch move).
 // Measured with tools/ptt_seed (docs/measurements/ptt_seed_2026-10-03.md).
 constexpr bool PTT_SEED = true;
+
+// The position and its halfmove clock: what an entry is kept and found under.
+using PTT_Key = std::pair<Position_Key, int>;
 
 struct PTT_Entry
 {
@@ -94,7 +100,7 @@ class PTT
     size_t size() const { return entries.size(); }
 
     // The entry for `key`, after reading whatever another GUI appended since.
-    const PTT_Entry* get(const Position_Key& key)
+    const PTT_Entry* get(const PTT_Key& key)
     {
         if(!on())
         return nullptr;
@@ -105,7 +111,7 @@ class PTT
 
     // Keeps `entry` for `key` if it beats what is there, and appends it to the
     // file. True if it was kept.
-    bool put(const Position_Key& key, PTT_Entry entry)
+    bool put(const PTT_Key& key, PTT_Entry entry)
     {
         if(!on())
         return false;
@@ -164,7 +170,7 @@ class PTT
 
     // One line back into an entry and its key. False for a line that is not
     // one (a torn write, a hand edit): it is skipped.
-    static bool parse(const std::string& line, PTT_Entry& e, Position_Key& key)
+    static bool parse(const std::string& line, PTT_Entry& e, PTT_Key& key)
     {
         std::istringstream in(line);
         std::string field;
@@ -203,20 +209,22 @@ class PTT
         return key_of(e.fen, key);
     }
 
-    // The position a FEN describes, as the repetition rule compares it.
-    static bool key_of(const std::string& fen, Position_Key& key)
+    // The position a FEN describes, as the repetition rule compares it, and
+    // its halfmove clock.
+    static bool key_of(const std::string& fen, PTT_Key& key)
     {
         BB pos;
         if(!uci_parse_fen(fen, pos))
         return false;
         BB children[MAX_LEGAL_MOVES];
         const int n = std::get<0>(all_moves(&pos, children));
-        key = position_key(pos, effective_en_passant(pos, children, n));
+        key.first = position_key(pos, effective_en_passant(pos, children, n));
+        key.second = pos.halfmoves_since_last_capture_or_pawn_move;
         return true;
     }
 
     private:
-    std::map<Position_Key, PTT_Entry> entries;
+    std::map<PTT_Key, PTT_Entry> entries;
     off_t read_offset = 0;        // how far the file has been read
     ino_t read_inode = 0;         // ...and which file that was
     long long superseded = 0;     // lines read or written that a later one replaced
@@ -244,7 +252,7 @@ class PTT
             break;            // a line without its newline is still being written
             consumed += line.size()+1;
             PTT_Entry e;
-            Position_Key key;
+            PTT_Key key;
             if(!parse(line, e, key))
             continue;
             auto it = entries.find(key);

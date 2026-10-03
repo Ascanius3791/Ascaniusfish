@@ -199,6 +199,11 @@ class Session
     bool narrow_on = false;
     bool narrow_deeper = false;
 
+    // Whether this session reads the PTT (#79): plays a stored move, seeds a
+    // search with a stored line, shows a stored result. Off leaves storing on,
+    // so the engine can be watched finding everything itself.
+    bool ptt_use = true;
+
     // The UCI options this session's engines should have. With the tables off
     // the path is the engine's own "empty" default, which is how it lets go.
     std::vector<std::pair<std::string, std::string>> engine_options() const
@@ -494,6 +499,16 @@ class Session
         recall_analysis();
     }
 
+    // Looks the kept result up again when no live one is on show: what the
+    // PTT switch (ptt_use) just changed.
+    void recall_kept()
+    {
+        if(analysis_valid && !analysis_stored)
+        return;
+        drop_analysis();
+        recall_analysis();
+    }
+
     // A new game: what its analyses found goes with it, store included.
     void forget_analysis()
     {
@@ -528,11 +543,33 @@ class Session
         return e;
     }
 
-    // The PTT's entry for the position on the board, if it is current, and
-    // its first move is legal here.
+    // What the PTT keeps the position on the board under: with its halfmove
+    // clock, so the 50-move rule stands where it stood in the stored search.
+    PTT_Key ptt_key() const
+    {
+        return { tree.current().key, tree.halfmove_clock() };
+    }
+
+    // The PTT's entry for the position on the board, of any eval, if this
+    // session may read it: the switch is on, and nothing this game had since
+    // its last capture or pawn move can make a repetition of the stored line
+    // here. A position seen twice already, or a line that runs back into one
+    // of them, is left to a real search, which knows the history.
+    const PTT_Entry* ptt_entry() const
+    {
+        if(!ptt_use)
+        return nullptr;
+        const PTT_Entry* e = persistent_tt().get(ptt_key());
+        if(!e || repetition_since_reset() || line_meets_history(e->info.pv))
+        return nullptr;
+        return e;
+    }
+
+    // The PTT's entry for the position on the board if it is usable here
+    // (ptt_entry()), current, and its first move is legal here.
     const PTT_Entry* ptt_current() const
     {
-        const PTT_Entry* e = persistent_tt().get(tree.current().key);
+        const PTT_Entry* e = ptt_entry();
         if(!e || !ptt_eval().matches(e->info.prov))
         return nullptr;
         std::vector<std::string> uci, san;
@@ -580,44 +617,59 @@ class Session
     // Offers what a search of the position on the board found to the PTT:
     // kept only from a search of PTT_MIN_MS or more at MultiPV 1 by an engine
     // that said what it scores with, and not when the game's history may be in
-    // the score — near the 50-move rule, or a draw the line reaches through a
-    // position played earlier in the game (a repetition the next visit may not
-    // have). The board kept is the real one, clocks included.
+    // the score — near the 50-move rule, a position repeated since the last
+    // capture or pawn move, or a line that runs back into one this game had
+    // (the engine scores that as a draw; the next visit may not have it). The
+    // board kept is the real one, clocks included, and so is its key.
     void ptt_offer(const Search_Info& info)
     {
         if(!persistent_tt().on() || info.time_ms<PTT_MIN_MS || !info.more.empty() || info.multipv>1
            || info.score_kind.empty() || info.pv.empty() || info.prov.eval_version<=0)
         return;
-        if(tree.halfmove_clock()+info.depth>=100 || draw_through_history(info))
+        if(tree.halfmove_clock()+info.depth>=100 || repetition_since_reset() || line_meets_history(info.pv))
         return;
         PTT_Entry entry;
         entry.fen = tree.fen();
         entry.info = info;
-        persistent_tt().put(tree.current().key, entry);
+        persistent_tt().put(ptt_key(), entry);
     }
 
-    // A draw score whose line runs into a position this game has already had
-    // since its last capture or pawn move, or that stands on one.
-    bool draw_through_history(const Search_Info& info) const
+    // The positions this game had since its last capture or pawn move, the one
+    // on the board not among them. Only these can come back.
+    std::vector<Position_Key> earlier_since_reset() const
     {
-        if(info.score_kind!="cp" || std::atoll(info.score_value.c_str())!=0)
-        return false;
         const Tree_Node& here = tree.current();
-        std::set<Position_Key> earlier;
+        std::vector<Position_Key> earlier;
         int back = 1;
         for(int id=here.parent; id>=0 && back<=here.halfmove_clock; id=tree.node(id).parent, back++)
-        earlier.insert(tree.node(id).key);
-        if(earlier.empty())
-        return false;
-        if(earlier.count(here.key))
-        return true;
+        earlier.push_back(tree.node(id).key);
+        return earlier;
+    }
+
+    // Whether any position since the last capture or pawn move, the one on the
+    // board included, has been on the board more than once.
+    bool repetition_since_reset() const
+    {
+        std::vector<Position_Key> seen = earlier_since_reset();
+        seen.push_back(tree.current().key);
+        std::sort(seen.begin(), seen.end());
+        return std::adjacent_find(seen.begin(), seen.end())!=seen.end();
+    }
+
+    // Whether a line of UCI moves from the position on the board comes back to
+    // it, or to a position this game had since its last capture or pawn move,
+    // before a capture or pawn move of its own.
+    bool line_meets_history(const std::vector<std::string>& pv) const
+    {
+        std::vector<Position_Key> earlier = earlier_since_reset();
+        earlier.push_back(tree.current().key);
         Game walk;
         walk.start(tree.position(), tree.halfmove_clock(), tree.fullmove());
-        for(const std::string& m : info.pv)
+        for(const std::string& m : pv)
         {
             if(!walk.play(m) || walk.halfmove_clock==0)
             break;   // past a capture or pawn move nothing earlier can come back
-            if(earlier.count(walk.keys.back()))
+            if(std::find(earlier.begin(), earlier.end(), walk.keys.back())!=earlier.end())
             return true;
         }
         return false;
@@ -1243,6 +1295,8 @@ class Session
         o.key("narrowAvailable").boolean(engine_build().narrowing);
         o.key("narrow").boolean(narrow_on);
         o.key("narrowDeeper").boolean(narrow_deeper);
+        o.key("pttAvailable").boolean(persistent_tt().on());
+        o.key("pttUse").boolean(ptt_use);
         o.end_obj();
 
         o.end_obj();
@@ -1418,7 +1472,7 @@ class Session
     {
         Search_Info found;
         const bool in_store = analysis_store.get(tree.current().key, found);
-        const PTT_Entry* kept = persistent_tt().get(tree.current().key);
+        const PTT_Entry* kept = ptt_entry();
         const bool current = kept && ptt_eval().matches(kept->info.prov);
         if(kept && (in_store ? current && kept->info.depth>found.depth : true))
         {

@@ -4,9 +4,10 @@
 //
 // What can go quietly wrong: an entry that does not survive the file round trip,
 // a shallower or older-eval result overwriting a better one, a second GUI's
-// appends lost to a compaction, an older eval's score trusted as current, or a
-// draw that came from the game's history kept as the position's own score.
-// None of it crashes, so it is checked here.
+// appends lost to a compaction, an older eval's score trusted as current, a
+// score that came from the game's history kept as the position's own, or a
+// stored move played where this game's history (a repetition, the 50-move
+// clock) makes it something else. None of it crashes, so it is checked here.
 //
 //   g++ -O3 -mpopcnt -Wall -Wno-unknown-pragmas -Wno-parentheses -Wno-unused-variable
 //       -DNDEBUG -o diagnostics/ptt_test diagnostics/ptt_test.cpp
@@ -59,9 +60,9 @@ static PTT_Entry entry(const std::string& fen, const Search_Info& info)
     return e;
 }
 
-static Position_Key key(const std::string& fen)
+static PTT_Key key(const std::string& fen)
 {
-    Position_Key k{};
+    PTT_Key k{};
     PTT::key_of(fen, k);
     return k;
 }
@@ -115,7 +116,7 @@ static void test_better(const std::string& path)
     PTT ptt;
     std::string error;
     ptt.open(path, error);
-    const Position_Key k = key(START);
+    const PTT_Key k = key(START);
     ptt.put(k, entry(START, iteration(20, 31, {"e2e4"})));
     check(!ptt.put(k, entry(START, iteration(18, 10, {"d2d4"}))), "a shallower search is not kept");
     check(!ptt.put(k, entry(START, iteration(20, 10, {"d2d4"}))), "nor an equal one");
@@ -230,7 +231,7 @@ static void test_session(const std::string& path)
 
 static void test_history(const std::string& path)
 {
-    std::printf("a draw that comes from the game's history is not kept\n");
+    std::printf("a score the game's history may be in is not kept\n");
     std::remove(path.c_str());
     std::string error;
     persistent_tt().open(path, error);
@@ -242,8 +243,13 @@ static void test_history(const std::string& path)
     s.set_analysis(iteration(16, 0, {"g1f3", "g8f6"}));
     check(persistent_tt().get(key(s.fen()))==nullptr, "a draw on a position seen before is not kept");
     s.set_analysis(iteration(17, 20, {"e2e4"}));
-    check(persistent_tt().get(key(s.fen()))!=nullptr, "a non-zero score there is");
-
+    check(persistent_tt().get(key(s.fen()))==nullptr, "nor any score there");
+    play(s, "b1c3");   // the start position is still in the history, twice
+    s.set_analysis(iteration(16, 20, {"e7e5"}));
+    check(persistent_tt().get(key(s.fen()))==nullptr, "nor one move on, with the repetition behind");
+    play(s, "e7e5");   // a pawn move: the history is gone
+    s.set_analysis(iteration(16, 20, {"g1f3"}));
+    check(persistent_tt().get(key(s.fen()))!=nullptr, "after a pawn move it is kept again");
 
     Session t;   // 1.Nc3 Nc6 2.Nb1: the line's Nb8 puts the start position back
     play(t, "b1c3");
@@ -251,11 +257,79 @@ static void test_history(const std::string& path)
     play(t, "c3b1");
     t.set_analysis(iteration(16, 0, {"c6b8", "b1c3"}));
     check(persistent_tt().get(key(t.fen()))==nullptr, "a draw whose line runs into an earlier position is not");
+    t.set_analysis(iteration(16, 30, {"c6b8", "b1c3"}));
+    check(persistent_tt().get(key(t.fen()))==nullptr, "nor any score whose line does");
 
     Session u;   // 1.Nc3: Nf6 and Nf3 meet nothing this game has had
     play(u, "b1c3");
     u.set_analysis(iteration(16, 0, {"g8f6", "g1f3"}));
     check(persistent_tt().get(key(u.fen()))!=nullptr, "a draw whose line meets no earlier position is kept");
+}
+
+static void test_use(const std::string& path)
+{
+    std::printf("a kept move is only played where this game's history agrees\n");
+    std::remove(path.c_str());
+    std::string error;
+    persistent_tt().open(path, error);
+    engine_build().eval_version = 1;
+    engine_build().net_hash = "abc";
+    Go_Limits depth8;
+    depth8.depth = 8;
+    Search_Info out;
+
+    // Y: both sides' knights out on f3/c3 and f6/c6, white to move, clock 4.
+    const char* const Y = "r1bqkb1r/pppppppp/2n2n2/8/8/2N2N2/PPPPPPPP/R1BQKB1R w KQkq - 4 3";
+    const char* const Y0 = "r1bqkb1r/pppppppp/2n2n2/8/8/2N2N2/PPPPPPPP/R1BQKB1R w KQkq - 0 3";
+    {
+        Session g1;   // 1.Nf3 Nf6 2.Nc3 Nc6: Ng1 Ng8 meets nothing of this game
+        for(const char* m : {"g1f3", "g8f6", "b1c3", "b8c6"})
+        play(g1, m);
+        check(g1.fen()==Y, "the moves reach Y", g1.fen());
+        g1.set_analysis(iteration(16, 30, {"f3g1", "f6g8"}));
+        check(persistent_tt().get(key(Y))!=nullptr, "a line that meets nothing of its game is kept");
+        check(persistent_tt().get(key(Y0))==nullptr, "under its own halfmove clock only");
+    }
+    {
+        Session fresh;   // Y at clock 4 with no history before it
+        fresh.set_fen(Y, error);
+        check(fresh.ptt_move_now(depth8, out) && out.pv[0]=="f3g1", "the same position and clock: played");
+    }
+    {
+        Session zero;    // Y at clock 0: the 50-move rule stands elsewhere
+        zero.set_fen(Y0, error);
+        check(!zero.ptt_move_now(depth8, out), "another halfmove clock: not played");
+        check(!zero.analysis_valid, "nor shown");
+    }
+    {
+        Session g2;   // 1.Nc3 Nc6 2.Nf3 Nf6: Ng1 Ng8 puts 1.Nc3 Nc6 back
+        for(const char* m : {"b1c3", "b8c6", "g1f3", "g8f6"})
+        play(g2, m);
+        check(g2.fen()==Y, "the other move order reaches Y too", g2.fen());
+        check(!g2.ptt_move_now(depth8, out), "a line that runs into this game's history: not played");
+        check(g2.ptt_hint().empty(), "nor seeded");
+    }
+    {
+        Session rep;   // Y at clock 0, then Ng1 Ng8 Nf3 Nf6: Y again at clock 4
+        rep.set_fen(Y0, error);
+        for(const char* m : {"f3g1", "f6g8", "g1f3", "g8f6"})
+        play(rep, m);
+        check(key(rep.fen())==key(Y), "the knights' round trip reaches Y at clock 4", rep.fen());
+        check(!rep.ptt_move_now(depth8, out), "a position repeated in this game: not played");
+    }
+    {
+        Session off;   // the Engine panel's switch
+        off.set_fen(Y, error);
+        off.ptt_use = false;
+        off.recall_kept();
+        check(!off.ptt_move_now(depth8, out) && off.ptt_hint().empty(), "PTT off: nothing played or seeded");
+        check(!off.analysis_valid, "nor shown");
+        off.set_analysis(iteration(20, 25, {"e2e4"}));
+        check(persistent_tt().get(key(Y))->info.depth==20, "but long searches are still stored");
+        off.ptt_use = true;
+        off.recall_kept();
+        check(off.analysis_valid, "on again: shown at once");
+    }
 }
 
 int main()
@@ -271,6 +345,7 @@ int main()
     test_two_guis(path);
     test_session(path);
     test_history(path);
+    test_use(path);
     std::remove(path.c_str());
     std::remove((path+".tmp").c_str());
     std::printf(failures ? "\n%d FAILED\n" : "\nall ok\n", failures);

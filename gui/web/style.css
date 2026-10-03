@@ -552,6 +552,9 @@ select:focus, input:focus { outline: none; border-color: var(--accent); }
 .mpv[hidden] { display: none; }
 .mpv-label { margin-right: 4px; }
 .mpv button { min-width: 22px; padding: 1px 6px; font-size: 12px; }
+.ptt-use { display: inline-flex; align-items: center; gap: 3px; font-size: 12px; color: var(--muted); cursor: pointer; }
+.ptt-use[hidden] { display: none; }
+.ptt-use input { margin: 0; accent-color: var(--accent); }
 .mpv-count { min-width: 3ch; text-align: center; color: var(--text); font-variant-numeric: tabular-nums; }
 
 /* One row per line, its score first. The box holds the rows asked for, up to

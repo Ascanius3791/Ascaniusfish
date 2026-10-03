@@ -305,6 +305,11 @@
           <button id="mpv-more" type="button" aria-label="More lines">+</button>
           <button id="mpv-all" type="button" title="A line for every legal move">All</button>
         </span>
+        <!-- Whether this game reads the PTT (#79); long searches are stored either way. -->
+        <label id="ptt-use" class="ptt-use" hidden
+               title="Use kept searches (PTT): play a stored move at once, seed searches with a stored line, show stored evals. Off: the engine finds everything itself; long searches are still stored.">
+          <input type="checkbox" id="ptt-use-box"><span>PTT</span>
+        </label>
         <span id="analysis-score" class="score"></span>
       </div>
       <p id="analysis-stats" class="note"></p>

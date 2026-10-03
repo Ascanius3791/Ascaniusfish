@@ -169,16 +169,21 @@ When editing engine internals, `lib/*.hpp` is the declaration/interface layer an
   (`ptt=<file>`, `ptt=none` off; outside the repo so every worktree's GUI shares it): the FEN with
   clocks, depth, score, nodes, time, line, and the provenance the engine reports before each
   search (`info string provenance evalversion N nne <net hash|off> syzygy N gaviota N commit C`).
-  Append-only under `flock`, re-read when another GUI appends, compacted on open. Per position
-  a newer eval version beats an older one and deeper wins within one. "Current" = the engine's
-  `EVAL_VERSION` (`lib/engine_version.hpp`, read at startup by `engine_build()`) and the session's
-  net; anything else is shown with `older` and never seeds or plays. Not kept: a draw whose line
-  meets a position this game had since its last zeroing move, or a search within reach of the
-  50-move rule. In Analyse a kept entry shows at once (`recall_analysis()`, also at a new game's
-  start), with a `+` that turns the analysis on; Play and Watch play a current entry found in at
-  least the move's soft time (or as deep as a fixed depth) at once, and every other current entry
-  seeds the search as UCI `hint depth D pv …` (`PTT_SEED`, measured by `tools/ptt_seed`).
-  `diagnostics/ptt_test.cpp` covers it.
+  Append-only under `flock`, re-read when another GUI appends, compacted on open. Keyed by the
+  position **and its halfmove clock** (`PTT_Key`): an entry counts only at the clock it was found
+  at. Per key a newer eval version beats an older one and deeper wins within one. "Current" = the
+  engine's `EVAL_VERSION` (`lib/engine_version.hpp`, read at startup by `engine_build()`) and the
+  session's net; anything else is shown with `older` and never seeds or plays. Since the engine
+  scores a return to any earlier game position as a draw, the history since the last zeroing move
+  is cut out brutally, both ways: nothing is kept, and no entry is read (`Session::ptt_entry()`),
+  where a position since then has been on the board twice or the line runs back into one of them;
+  nor is a search within reach of the 50-move rule kept. In Analyse a kept entry shows at once
+  (`recall_analysis()`, also at a new game's start), with a `+` that turns the analysis on; Play
+  and Watch play a current entry found in at least the move's soft time (or as deep as a fixed
+  depth) at once, and every other current entry seeds the search as UCI `hint depth D pv …`
+  (`PTT_SEED`, measured by `tools/ptt_seed`). The Engine panel's `PTT` checkbox
+  (`Session::ptt_use`, `pttUse` in `/api/settings`) turns all reading off for the session;
+  storing goes on. `diagnostics/ptt_test.cpp` covers it.
 - `gui/engine_link.hpp` — the UCI client of Play, Watch and Analyse mode: a `Go_Limits` (depth,
   movetime, or `Go_Limits::analysis()` = `go infinite` for Analyse;
   `wtime`/`btime`/`winc`/`binc` fields already there for M4), a `Search_Request`, and an
