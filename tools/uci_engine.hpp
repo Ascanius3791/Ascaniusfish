@@ -26,6 +26,36 @@ struct Search_Line
     std::vector<std::string> pv;
 };
 
+// How a search's scores were found (#79), from the engine's "info string
+// provenance ..." line before its first iteration (src/uci.cpp). eval_version
+// 0 = the engine sent none, so nothing it found is kept as current.
+struct Search_Provenance
+{
+    int eval_version = 0;
+    std::string nne = "off";   // the net's file hash, or "off"
+    int syzygy = 0, gaviota = 0;   // pieces each tablebase answered for, 0 = none
+    std::string commit;
+};
+
+inline bool parse_provenance(const std::string& line, Search_Provenance& out)
+{
+    if(line.compare(0, 23, "info string provenance ")!=0)
+    return false;
+    std::istringstream in(line.substr(23));
+    Search_Provenance p;
+    std::string key;
+    while(in >> key)
+    {
+        if(key=="evalversion") in >> p.eval_version;
+        else if(key=="nne") in >> p.nne;
+        else if(key=="syzygy") in >> p.syzygy;
+        else if(key=="gaviota") in >> p.gaviota;
+        else if(key=="commit") in >> p.commit;
+    }
+    out = p;
+    return true;
+}
+
 // One "info depth ..." line of an engine: what the last completed iteration of
 // its search reached. The score is the mover's view, as UCI has it. Under
 // MultiPV this is line 1 and `more` holds lines 2..K of the same depth, best
@@ -38,6 +68,7 @@ struct Search_Info
     std::vector<std::string> pv;
     int multipv = 0;                      // the line's "multipv i", 0 when the engine gave none
     std::vector<Search_Line> more;
+    Search_Provenance prov;               // the search's, set by whoever reads its lines
 };
 
 inline bool parse_info(const std::string& line, Search_Info& info)
@@ -107,12 +138,16 @@ class Engine
         out = from_child[0];
         buffer.clear();
         advertised.clear();
+        info_strings.clear();
+        collecting = true;
         send("uci");
         if(!wait_for("uciok", 10000))
         return false;
         for(const auto& [name, value] : options)
         send("setoption name " + name + " value " + value);
-        return ready();
+        const bool ok = ready();
+        collecting = false;
+        return ok;
     }
 
     bool ready()
@@ -166,6 +201,8 @@ class Engine
                 return true;
             }
             last_info = line.compare(0, 5, "info ")==0 && line.find(" score ")!=std::string::npos ? line : last_info;
+            if(collecting && line.compare(0, 12, "info string ")==0)
+            info_strings.push_back(line.substr(12));
             size_t type = line.find(" type ");
             if(line.compare(0, 12, "option name ")==0 && type!=std::string::npos)
             advertised.push_back(line.substr(12, type-12));
@@ -215,6 +252,8 @@ class Engine
 
     std::string last_info;  // last "info ... score ..." line of the current search
     std::vector<std::string> advertised;  // option names from the answer to "uci"
+    std::vector<std::string> info_strings;  // "info string" texts of the last start(): versions, the net
+    bool collecting = false;
 
     private:
     int in = -1, out = -1;

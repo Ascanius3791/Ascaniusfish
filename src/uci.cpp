@@ -175,6 +175,27 @@ static std::string nne_resolve(const std::string& file)
     return std::ifstream(dir+file).good() ? dir+file : file;
 }
 
+// FNV-1a of a file's bytes, as 16 hex digits; "" if it cannot be read. Names
+// the net a stored score was found with (#79).
+static std::string file_hash(const std::string& path)
+{
+    std::ifstream in(path, std::ios::binary);
+    if(!in)
+    return "";
+    uint64_t h = 0xcbf29ce484222325ULL;
+    char buf[65536];
+    while(in.read(buf, sizeof buf) || in.gcount()>0)
+    {
+        for(std::streamsize i=0;i<in.gcount();i++)
+        h = (h ^ (unsigned char)buf[i]) * 0x100000001b3ULL;
+        if(!in)
+        break;
+    }
+    char hex[17];
+    std::snprintf(hex, sizeof hex, "%016llx", (unsigned long long)h);
+    return hex;
+}
+
 // UseNNE / NNEFile (#52): loads the net when it is switched on or its file
 // changes. Clears the TT whenever the eval changes, since its quiet leaves
 // were scored with the other one.
@@ -191,7 +212,9 @@ void UCI_Engine::apply_nne()
         if(nne::loaded_path==path || nne::load(path, error))
         {
             nne::enabled = true;
-            send("info string nne on, " + path);
+            if(nne_hash.empty() || nne::loaded_path!=was_loaded)
+            nne_hash = file_hash(path);
+            send("info string nne on, " + path + ", hash " + nne_hash);
         }
         else
         send("info string nne off: " + error);
@@ -209,6 +232,8 @@ void UCI_Engine::stop_search()
 
 void UCI_Engine::handle_position(const std::vector<std::string>& tokens)
 {
+    hint_depth = 0;   // a hint belongs to the position it was given for
+    hint_pv.clear();
     size_t i = 1;
     BB root;
     if(i<tokens.size() && tokens[i]=="startpos")
@@ -248,6 +273,58 @@ void UCI_Engine::handle_position(const std::vector<std::string>& tokens)
         }
     }
     game = positions;
+}
+
+// What the scores of the coming search are found with (#79), sent as
+// "info string provenance ..." before its first "info depth": the eval version,
+// the net (its file hash, or off), how many pieces each tablebase answers for
+// (0 = not loaded) and the commit the binary was built from.
+std::string UCI_Engine::provenance() const
+{
+    const int syzygy_pieces = std::min(tb_probe_limit, syzygy::max_pieces());
+    const int gaviota_pieces = std::min(tb_probe_limit, gaviota::max_pieces());
+    return "provenance evalversion " + std::to_string(EVAL_VERSION)
+         + " nne " + (nne::enabled ? nne_hash : std::string("off"))
+         + " syzygy " + std::to_string(std::max(0, syzygy_pieces))
+         + " gaviota " + std::to_string(std::max(0, gaviota_pieces))
+         + " commit " + ENGINE_COMMIT;
+}
+
+// Seeds the TT with a line found earlier for `root` (#79): the position i plies
+// down the line gets its move at depth D-i as a vacuous lower bound (eval
+// INT_MIN, bound_type -1). minimax() reads such an entry as the TT move only —
+// a lower bound of INT_MIN never cuts and never narrows — and insert() keeps
+// it until the search stores something at least as deep there, so it orders
+// the moves through iteration D and gives way to the engine's own entries at
+// D+1. A wrong or stale line can cost time, never change a score. Called after
+// new_search(), so the entries are this search's and do not age. Returns the
+// plies seeded; the line ends at its first illegal move.
+int UCI_Engine::seed_hint(const BB& root)
+{
+    if(!table || hint_depth<=0)
+    return 0;
+    BB pos = root;
+    int seeded = 0;
+    for(size_t i=0; i<hint_pv.size() && hint_depth-(int)i>=1; i++)
+    {
+        auto result = all_moves(&pos, pv_buf);
+        const int n = std::get<0>(result);
+        int found = -1;
+        for(int k=0;k<n;k++)
+        if(get_UCI(&pos, pv_buf+k)==hint_pv[i]) { found = k; break; }
+        if(found<0)
+        break;
+        TT_entry entry;
+        entry.initialized = true;
+        entry.zobrist_hash = pos.zobrist_hash;
+        entry.pv_line = PV_Line(std::get<1>(result)[found], hint_depth-(int)i);
+        entry.pv_line.eval = INT_MIN;
+        entry.pv_line.bound_type = -1;
+        table->insert(entry);
+        pos = pv_buf[found];
+        seeded++;
+    }
+    return seeded;
 }
 
 std::vector<std::string> UCI_Engine::pv_to_uci(const BB& root, const PV_Line& pv)
@@ -735,6 +812,7 @@ void UCI_Engine::search(UCI_Limits limits, long long start_ns)
 {
     if(table) table->new_search();
     const BB root = game.back();
+    send("info string " + provenance());
     auto result = all_moves(&root, wfh);
     int n = std::get<0>(result);
     if(n==0)
@@ -761,6 +839,8 @@ void UCI_Engine::search(UCI_Limits limits, long long start_ns)
             return;
         }
     }
+    if(hint_depth>0)
+    send("info string hint seeded " + std::to_string(seed_hint(root)) + " plies at depth " + std::to_string(hint_depth));
     // Fallback if even depth 1 gets aborted: the move ordering's favourite.
     std::vector<int> order = sorting_moves(wfh, std::get<1>(result), n, root.white_move, nullptr, 0, WEIGHTS_OG);
     std::string best = get_UCI(&root, wfh+order[0]);
@@ -855,6 +935,7 @@ int UCI_Engine::loop()
         {
             send("id name Ascaniusfish");
             send("id author Ascanius");
+            send("info string evalversion " + std::to_string(EVAL_VERSION) + " commit " + ENGINE_COMMIT);
             send("option name SyzygyPath type string default <empty>");
             send("option name SyzygyProbeLimit type spin default 5 min 0 max 5");
             if(gaviota::compiled_in())
@@ -900,6 +981,25 @@ int UCI_Engine::loop()
             if(!nne_applied)
             apply_nne();//see isready
             handle_go(tokens);
+        }
+        else if(cmd=="hint")
+        {
+            // hint depth D pv <moves>: after "position", before "go" (#79)
+            stop_search();
+            hint_depth = 0;
+            hint_pv.clear();
+            for(size_t k=1;k<tokens.size();k++)
+            {
+                if(tokens[k]=="depth" && k+1<tokens.size() && all_digits(tokens[k+1]))
+                hint_depth = std::min(UCI_MAX_DEPTH, std::atoi(tokens[++k].c_str()));
+                else if(tokens[k]=="pv")
+                {
+                    hint_pv.assign(tokens.begin()+k+1, tokens.end());
+                    break;
+                }
+            }
+            if(hint_pv.empty())
+            hint_depth = 0;
         }
         else if(cmd=="stop")
         stop_search();

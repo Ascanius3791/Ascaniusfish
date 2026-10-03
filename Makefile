@@ -52,6 +52,9 @@ GTB_OBJECTS := $(patsubst $(GTB_DIR)/%.c,$(GTB_DIR)/obj/%.o,$(GTB_SOURCES))
 GTB_CFLAGS := -O2 -DNDEBUG -DZ_PREFIX -w $(addprefix -I$(GTB_DIR)/,sysport compression compression/liblzf compression/zlib compression/lzma compression/huffman)
 GTB_LIB := $(GTB_DIR)/libgtb.a
 WITH_GTB := -DWITH_GAVIOTA $(GTB_LIB)
+# The commit the UCI engines report as provenance (#79, lib/engine_version.hpp).
+ENGINE_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null)$(shell git diff --quiet HEAD 2>/dev/null || echo -dirty)
+WITH_COMMIT := -DENGINE_COMMIT='"$(ENGINE_COMMIT)"'
 
 $(GTB_DIR)/obj/%.o: $(GTB_DIR)/%.c
 	@mkdir -p $(@D)
@@ -62,13 +65,13 @@ $(GTB_LIB): $(GTB_OBJECTS)
 
 # UCI engine (stdin/stdout protocol), separate binary so GUIs can launch it without arguments
 $(UCI_TARGET): ascaniusfish_uci.cpp $(HEADERS) $(SOURCES) $(GTB_LIB)
-	$(CXX) $(CXXFLAGS) -pthread -o $@ ascaniusfish_uci.cpp $(WITH_GTB)
+	$(CXX) $(CXXFLAGS) -pthread -o $@ ascaniusfish_uci.cpp $(WITH_COMMIT) $(WITH_GTB)
 
 # The same engine with -DTT_BOUNDS_NEVER_NARROW=0 (#65): UCI TTNarrowing/TTNarrowingDeeper
 # switch narrowing on stored bounds back on. make gui NARROW=1 drives it.
 UCI_NARROW_TARGET := ascaniusfish_uci_narrow
 $(UCI_NARROW_TARGET): ascaniusfish_uci.cpp $(HEADERS) $(SOURCES) $(GTB_LIB)
-	$(CXX) $(CXXFLAGS) -DTT_BOUNDS_NEVER_NARROW=0 -pthread -o $@ ascaniusfish_uci.cpp $(WITH_GTB)
+	$(CXX) $(CXXFLAGS) -DTT_BOUNDS_NEVER_NARROW=0 -pthread -o $@ ascaniusfish_uci.cpp $(WITH_COMMIT) $(WITH_GTB)
 
 a.out: $(MAIN) $(HEADERS) $(SOURCES)
 	$(CXX) $(CXXFLAGS) -o $@ $(MAIN)

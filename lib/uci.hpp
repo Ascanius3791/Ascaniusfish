@@ -11,6 +11,7 @@
 #include "tb_search.hpp"
 #include "nne.hpp"
 #include "mate_search.hpp"
+#include "engine_version.hpp"
 #include <string>
 #include <vector>
 #include <mutex>
@@ -18,7 +19,9 @@
 
 // UCI front end. Implements uci, isready, ucinewgame, position, go, stop,
 // quit (setoption handles SyzygyPath, SyzygyProbeLimit, GaviotaTbPath, GaviotaTbCache, NNEFile, UseNNE and MultiPV, debug/register/ponderhit are accepted and ignored), plus
-// the non-standard "go perft N" for checking move generation from any FEN.
+// the non-standard "go perft N" for checking move generation from any FEN, and
+// the non-standard "hint depth D pv <moves>" (#79): a line found earlier for
+// the position just set, seeded into the TT before the next "go" (see seed_hint()).
 // The search runs on its own thread so "stop"/"isready" are answered while
 // it thinks; see lib/search_control.hpp for how a search is aborted.
 
@@ -105,6 +108,13 @@ class UCI_Engine
     bool narrow = false, narrow_deeper = false; // TTNarrowing, TTNarrowingDeeper (#65); the second only counts with the first
     void apply_nne();
     std::vector<std::string> pv_to_uci(const BB& root, const PV_Line& pv);
+    std::string nne_hash;                      // the loaded net's file hash, for the provenance line
+    // "hint" (#79): the line and the depth it was searched to, for the position
+    // of the last "position" command, which drops it again.
+    int hint_depth = 0;
+    std::vector<std::string> hint_pv;
+    int seed_hint(const BB& root);
+    std::string provenance() const;
 };
 
 int uci_loop();
