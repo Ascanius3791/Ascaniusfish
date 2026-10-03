@@ -120,6 +120,7 @@ struct Eval_View
     std::string score_kind;     // "cp"/"mate", empty when there is no score
     long long score_value = 0;  // kind "tb": white's WDL, -2 (black wins) .. 2 (white wins)
     int tb_dtz = 0;             // kind "tb": plies to the next capture or pawn move
+    int tb_mate = 0;            // kind "tb": white's mate in moves from the DTM tables (#77), 0 = none
     std::vector<std::string> uci, san;
     // MultiPV (#69): lines 2..K of the analysis, each with its own score in
     // white's view; the fields above are line 1.
@@ -198,6 +199,7 @@ class Session
         std::vector<std::pair<std::string, std::string>> options;
         options.push_back({"SyzygyPath", tb_active() ? tablebase_setup().dir : "<empty>"});
         options.push_back({"SyzygyProbeLimit", std::to_string(tb_limit)});
+        options.push_back({"GaviotaTbPath", tb_active() && tablebase_setup().dtm_pieces>0 ? tablebase_setup().dtm_dir : "<empty>"});
         options.push_back({"UseNNE", nne_on ? "true" : "false"});
         if(engine_build().narrowing)
         {
@@ -831,8 +833,38 @@ class Session
         v.score_kind = "tb";
         v.score_value = tree.position().white_move ? r.wdl : -r.wdl;
         v.tb_dtz = std::abs(r.dtz);
+        // The Gaviota tables add the mate distance and the mating line (#77).
+        const Dtm_View& d = dtm();
+        if(d.valid && d.mate!=0)
+        {
+            v.tb_mate = mate_moves(tree.position().white_move ? d.mate : -d.mate);
+            v.uci = d.uci;
+            v.san = d.san;
+        }
         return v;
     }
+
+    // dtm_view() of the position on the board, worked out once per position:
+    // the line alone is a couple of thousand probes, and the state is written
+    // on every push of a running search.
+    const Dtm_View& dtm() const
+    {
+        const BB& pos = tree.position();
+        const Position_Key key = position_key(pos, pos.en_passant);
+        if(!dtm_cached || key!=dtm_key || tb_limit!=dtm_limit)
+        {
+            dtm_cache = dtm_view(pos, tb_limit);
+            dtm_key = key;
+            dtm_limit = tb_limit;
+            dtm_cached = true;
+        }
+        static const Dtm_View none;
+        return tb_active() ? dtm_cache : none;
+    }
+    mutable bool dtm_cached = false;
+    mutable Position_Key dtm_key{};
+    mutable int dtm_limit = 0;
+    mutable Dtm_View dtm_cache;
 
     // What the eval bar and the engine-line box draw, whatever mode the board is
     // in. A search running now is always about the position on the board, so it
@@ -947,13 +979,30 @@ class Session
         o.key("tbMoves").arr();
         std::vector<Tb_Move> tb_list;
         if(mode==Mode::ANALYSE && tb_active() && tb_moves(pos, legal, n_legal, tb_limit, tb_list))
-        for(const Tb_Move& m : tb_list)
-        o.obj()
-            .key("uci").str(get_UCI(&pos, legal+m.index))
-            .key("san").str(san(pos, legal, n_legal, m.index))
-            .key("wdl").num(m.wdl)
-            .key("dtz").num(m.dtz)
-         .end_obj();
+        {
+            // With the DTM tables a result's moves are ranked by the mate, the
+            // quickest win and the slowest loss first (#77); DTZ is what's left.
+            const Dtm_View& d = dtm();
+            const bool by_mate = d.valid && (int)d.moves.size()==n_legal;
+            if(by_mate)
+            std::stable_sort(tb_list.begin(), tb_list.end(), [&](const Tb_Move& a, const Tb_Move& b)
+            {
+                if(a.wdl!=b.wdl)
+                return a.wdl>b.wdl;
+                const int ma = d.moves[a.index], mb = d.moves[b.index];
+                return ma>0 && mb>0 ? ma<mb : ma<0 && mb<0 ? ma<mb : false;
+            });
+            for(const Tb_Move& m : tb_list)
+            {
+                o.obj()
+                    .key("uci").str(get_UCI(&pos, legal+m.index))
+                    .key("san").str(san(pos, legal, n_legal, m.index))
+                    .key("wdl").num(m.wdl)
+                    .key("dtz").num(m.dtz)
+                    .key("mate").num(by_mate ? mate_moves(d.moves[m.index]) : 0);
+                o.end_obj();
+            }
+        }
         o.end_arr();
 
         o.key("plans");
@@ -1064,6 +1113,7 @@ class Session
         o.key("tbLimit").num(tb_limit);
         o.key("tbAvailable").boolean(tablebase_setup().available());
         o.key("tbReason").str(tablebase_setup().reason);
+        o.key("tbDtm").boolean(tablebase_setup().dtm_pieces>0);
         o.key("tbMaxPieces").num(std::min(TB_LIMIT_MAX, tablebase_setup().max_pieces()));
         o.key("nne").boolean(nne_on);
         o.key("engineKnown").boolean(engine_build().known);
@@ -1560,7 +1610,7 @@ class Session
         if(v.score_kind.empty())
         o.null();
         else
-        o.obj().key("kind").str(v.score_kind).key("value").num(v.score_value).key("dtz").num(v.tb_dtz).end_obj();
+        o.obj().key("kind").str(v.score_kind).key("value").num(v.score_value).key("dtz").num(v.tb_dtz).key("mate").num(v.tb_mate).end_obj();
         // Each move also carries the position after it, which is what the page's
         // preview board shows while a move of the line is hovered (#58); the page
         // plays no chess itself, so it cannot work that out on its own.

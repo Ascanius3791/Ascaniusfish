@@ -982,6 +982,9 @@ function engineLine(s) {
 function scoreText(score) {
   if (!score) return '';
   if (score.kind === 'mate') return '#' + score.value;
+  // With the DTM tables (#77) a won position has its mate; a cursed win's mate
+  // is past the 50-move rule, so that one stays a result.
+  if (score.kind === 'tb' && score.mate && Math.abs(score.value) === 2) return '#' + score.mate;
   if (score.kind === 'tb') return score.value > 0 ? '1-0' : score.value < 0 ? '0-1' : '½-½';
   return (score.value >= 0 ? '+' : '') + (score.value / 100).toFixed(2);
 }
@@ -1090,7 +1093,8 @@ function renderEngine(s) {
   if (panel.hidden) { hidePreview(); shownLineKey = shownLinesKey = null; return; }
 
   panel.classList.toggle('running', (a.running || s.play.thinking || s.watch.thinking) && !a.error);
-  panel.classList.toggle('has-line', showLine && ((known && ev.source !== 'tb') || a.running));
+  // A tablebase position has a line only with the DTM tables: the mating one (#77).
+  panel.classList.toggle('has-line', showLine && ((known && (ev.source !== 'tb' || ev.line.length > 0)) || a.running));
   el('analysis-toggle').hidden = !canToggle;
   el('analysis-toggle').textContent = a.on ? 'Turn engine off' : 'Turn engine on';
   el('analysis-score').textContent = s.settings.evalBar && known ? scoreText(ev.score) : '';
@@ -1159,8 +1163,11 @@ function tbSentence(score) {
   const v = score.value;
   const who = v > 0 ? 'White' : 'Black';
   const dtz = score.dtz ? `, DTZ ${score.dtz}` : '';
+  const mate = score.mate ? Math.abs(score.mate) : 0;
   if (v === 0) return 'Tablebase: draw.';
-  if (Math.abs(v) === 1) return `Tablebase: ${who} wins only past the 50-move rule (drawn)${dtz}.`;
+  if (Math.abs(v) === 1) return `Tablebase: ${who} wins only past the 50-move rule (drawn)${dtz}`
+    + (mate ? `; mate in ${mate} without the rule.` : '.');
+  if (mate) return `Tablebase: ${who} mates in ${mate}${dtz}.`;
   return `Tablebase: ${who} wins${dtz}.`;
 }
 
@@ -1182,7 +1189,8 @@ function renderTbMoves(s) {
     san.textContent = m.san;
     const result = document.createElement('span');
     result.className = 'tb-result';
-    result.textContent = TB_LABEL[m.wdl] + (m.dtz ? ` · DTZ ${m.dtz}` : '');
+    // m.mate is the mover's (#77): #3 mates in 3, #-3 is mated in 3.
+    result.textContent = (m.mate ? `#${m.mate} · ` : '') + TB_LABEL[m.wdl] + (m.dtz ? ` · DTZ ${m.dtz}` : '');
     row.append(san, result);
     box.append(row);
   }
@@ -1787,7 +1795,8 @@ function renderSettings(s) {
   for (const option of el('set-tb-limit').options)
     option.disabled = Number(option.value) > st.tbMaxPieces;
   el('set-tb-note').textContent = st.tbAvailable
-    ? 'Exact results from Syzygy tables, shown at once and given to the engines. Same lifetime as the two above.'
+    ? 'Exact results from Syzygy tables' + (st.tbDtm ? ', and the mate in N from Gaviota DTM tables' : '')
+      + ', shown at once and given to the engines. Same lifetime as the two above.'
     : st.tbReason;
   el('set-nne').checked = st.nne;
   // Which build the engine is (#65): only a TT_BOUNDS_NEVER_NARROW=0 build can

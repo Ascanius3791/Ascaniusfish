@@ -27,7 +27,7 @@ Development is GitHub-issue driven. Read `docs/WORKFLOW.md` before writing an is
 
 ## Build & run
 
-Build system is a plain `Makefile` (`CXX=g++`, `-O3 -DNDEBUG` by default). This is a **header-driven single-TU build**: `ascaniusfish.cpp` is the only compiled source given to g++; every `lib/*.hpp` `#include`s its matching `src/*.cpp` directly (see e.g. `lib/Bitboards.hpp` including `../src/bit_operations.cpp`), so the whole engine is compiled as one translation unit. There is no separate object-file linking step — don't try to compile `src/*.cpp` files independently.
+Build system is a plain `Makefile` (`CXX=g++`, `-O3 -DNDEBUG` by default). This is a **header-driven single-TU build**: `ascaniusfish.cpp` is the only compiled source given to g++; every `lib/*.hpp` `#include`s its matching `src/*.cpp` directly (see e.g. `lib/Bitboards.hpp` including `../src/bit_operations.cpp`), so the whole engine is compiled as one translation unit. There is no separate object-file linking step — don't try to compile `src/*.cpp` files independently. The one exception is third-party C: the UCI engines also link `third_party/gaviota/libgtb.a` (see **Gaviota DTM tablebases**).
 
 ```bash
 make              # builds ./ascaniusfish and ./ascaniusfish_uci (equivalent: make all)
@@ -39,6 +39,7 @@ make perft        # movegen vs known perft counts (PERFT_DEPTH=4 for a quick che
 make bench        # fixed-depth search; prints "bench: nodes N ..." (the search signature)
 make speed-compare A=main B=.   # nps A/B of two git refs, 95% CI ("." = working tree)
 make tt-stats DEPTH=5 GAMES=4   # TT discards later re-requested, by depth (only build with -DTT_STATS)
+make gaviota-test # Gaviota DTM probe vs Lichess and vs its children (#77, needs ~/gaviota)
 make gui          # build + run the browser GUI server (GUI_PORT=8173 to pick the port)
 make gui NARROW=1 # the same, driving ./ascaniusfish_uci_narrow (-DTT_BOUNDS_NEVER_NARROW=0, #65)
 make nne-retrain  # after an eval() change: relabel the NNE dataset, retrain, check (docs/NNE_RELABEL.md; FROM=<branch> takes a cloud session's labels)
@@ -184,6 +185,13 @@ When editing engine internals, `lib/*.hpp` is the declaration/interface layer an
   first: `source` is `tb`, the score `{kind:"tb", value: white's WDL -2..2, dtz}`. In Analyse the state
   also carries `tbMoves` (every legal move, best first, result for the mover; clicking one plays it).
   `diagnostics/eval_view_test.cpp` covers it (needs `~/syzygy-nr` or argv[1]).
+  With `gaviota=<dir>` (`make gui`, on by default when `~/gaviota` exists, `GAVIOTA=none` off) the
+  server also links the Gaviota prober (#77) and adds to the Syzygy result, under the same switch and
+  limit: `dtm_view()` gives the mate distance, every legal move's, and the mating line (quickest mate,
+  longest resistance, 50-move rule ignored), worked out once per position (`Session::dtm()`, a cache:
+  the line is ~2000 probes). The score gets `mate` (white's, in moves; the page shows `#N` for a
+  plain win, a cursed win stays a result), `eval.line` is the mating line, `tbMoves` carry the mover's
+  `mate` and are ranked by it within a result, and the engines get `GaviotaTbPath`.
 - `gui/eval_split.hpp` — `basic_eval()` rebuilt for the gear's two debugging switches, both off
   by default and per session (#66). **Advanced debugging** (`advanced`) puts the static eval of
   the position on the board in a column of its own (≥1340px window), each term per side with its
@@ -309,6 +317,11 @@ aborts every search and quits the engines rather than orphaning them.
 The files are `mmap`'d and their headers are parsed **lazily**: `init()` costs ~6 ms and ~90 kB RSS, the first probe of a table ~1 ms, later ones 4 us (WDL) / 14 us (DTZ). An eager background read is possible if wanted. Numbers: `docs/measurements/syzygy_probe_2026-09-30.md`.
 
 The table set is `~/syzygy-nr` (default `SYZYGY_PATH`): the standard `.rtbw` files (symlinked from `~/syzygy`) plus the 3-4-5 **dtz-nr** ("no rounding") `.rtbz` files. The standard DTZ files store some distances in moves, so a probe can be one ply short; the nr files store plies and match all 1039 reference positions exactly. `make syzygy-test` checks the prober against `tools/syzygy_reference.txt` (Lichess-recorded, rebuilt with `tools/syzygy_reference`, needs curl) and against its own children on random positions (`SYZYGY_RANDOM=n` per table).
+
+### Gaviota DTM tablebases (#77)
+Syzygy has no distance to mate, so a won ≤5-piece root also reads the Gaviota tables (`~/gaviota`, 145 `*.gtb.cp4` files, 7.0 GB, from `tablebase.lichess.ovh/tables/standard/Gaviota/`). The prober is **third-party** C (`third_party/gaviota`, MIT; see `third_party/README.md`: vendored as published, no ownership markers, not edited here), built by the Makefile with gcc into `third_party/gaviota/libgtb.a` and linked only into the UCI engines and `diagnostics/gaviota_test` (`$(WITH_GTB)` = `-DWITH_GAVIOTA` + the library). `lib/gaviota.hpp` is our interface (`init(dir, cache_mb)`, `probe_dtm(pos, result, plies)`); without `-DWITH_GAVIOTA` it is stubs that find nothing, so every other tool still builds with the plain g++ line. The tables are read through the prober's own cache (`GaviotaTbCache`, 32 MB), not mmap'd.
+
+UCI `setoption name GaviotaTbPath value <dir>` loads them. `UCI_Engine::dtm_root()` (`src/uci.cpp`) answers a won or lost root before the Syzygy filter: the quickest mate (the longest resistance when lost), played at once and reported as `score mate N` with the whole line as the PV. With Syzygy loaded, a win is only played along moves that still win under the 50-move rule (`tb_classes()`), and a cursed win or blessed loss is left to the DTZ path; drawn roots never reach it. `make gaviota-test` checks the probe against Lichess's DTM (`tools/gaviota_reference.txt`, recorded by `tools/gaviota_reference`) and against its own children; `make tb-suite GAVIOTA=~/gaviota` also requires a shrinking `mate N` in every won game (`TB_SUITE_ARGS=opp_gaviota=on`: by exactly one).
 
 ### Python GUI bridge
 `lib/python_communication.hpp` / `src/python_communication.cpp` opens `display_board.py` as a subprocess via `popen` (piping UCI move strings to its stdin) so the C++ engine can drive a tkinter/pygame board with sound effects. Separately, `read_from_last_move()` (`ascaniusfish_2.hpp`) and `display_board.py`'s `write_to_last_move_file()` coordinate human-vs-engine play through the shared file `last_move.txt`, polling every 200ms; the color suffix (`ww`/`bb`) written after the move string is a same-color echo used to signal "no new move yet". Treat `last_move.txt` as ephemeral IPC state, not data to commit meaningfully.

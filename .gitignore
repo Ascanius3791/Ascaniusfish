@@ -48,7 +48,12 @@ syzygy-nr/
 *.rtbw
 *.rtbz
 tools/syzygy_reference
+tools/gaviota_reference
 tools/tb_suite
+# Gaviota DTM tables (#77, 7 GB, kept in ~/gaviota) and the prober's build
+*.gtb.cp4
+third_party/gaviota/obj/
+third_party/gaviota/libgtb.a
 tools/tb_trade_suite
 
 # The eval-correction net's dataset (tools/nne_data, #50)

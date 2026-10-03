@@ -33,25 +33,42 @@ GUI_BIND ?=
 GUI_TUNNEL ?=
 SYZYGY_PATH ?= $(HOME)/syzygy-nr
 SYZYGY_RANDOM ?=
-TOOL_TARGETS := tools/perft tools/bench tools/speed_compare tools/match tools/make_openings tools/make_endgames tools/gui_match tools/tt_stats tools/syzygy_reference tools/tb_suite tools/tb_trade_suite tools/nne_data tools/wdl_fit tools/tempo_swing
+TOOL_TARGETS := tools/perft tools/bench tools/speed_compare tools/match tools/make_openings tools/make_endgames tools/gui_match tools/tt_stats tools/syzygy_reference tools/tb_suite tools/tb_trade_suite tools/nne_data tools/wdl_fit tools/tempo_swing tools/gaviota_reference
 PROFILE_CXXFLAGS ?= -O2 -mpopcnt -g -pg -Wall -Wno-unknown-pragmas -Wno-parentheses -Wno-unused-variable
 
-.PHONY: all run play asm tests debug profile-startpos perft bench speed-compare match gui-match gui tt-stats tempo-swing syzygy-test nne-test nne-retrain tb-suite tb-trade-suite clean rebuild
+.PHONY: all run play asm tests debug profile-startpos perft bench speed-compare match gui-match gui tt-stats tempo-swing syzygy-test gaviota-test nne-test nne-retrain tb-suite tb-trade-suite clean rebuild
 
 all: $(TARGET) $(UCI_TARGET)
 
 $(TARGET): $(MAIN) $(HEADERS) $(SOURCES)
 	$(CXX) $(CXXFLAGS) -o $@ $(MAIN)
 
+# Gaviota DTM prober (#77): third-party C (third_party/README.md), built with gcc
+# into libgtb.a and linked into the UCI engines only. Every other build sees
+# lib/gaviota.hpp's "no tables" stubs.
+GTB_DIR := third_party/gaviota
+GTB_SOURCES := $(shell find $(GTB_DIR) -name '*.c')
+GTB_OBJECTS := $(patsubst $(GTB_DIR)/%.c,$(GTB_DIR)/obj/%.o,$(GTB_SOURCES))
+GTB_CFLAGS := -O2 -DNDEBUG -DZ_PREFIX -w $(addprefix -I$(GTB_DIR)/,sysport compression compression/liblzf compression/zlib compression/lzma compression/huffman)
+GTB_LIB := $(GTB_DIR)/libgtb.a
+WITH_GTB := -DWITH_GAVIOTA $(GTB_LIB)
+
+$(GTB_DIR)/obj/%.o: $(GTB_DIR)/%.c
+	@mkdir -p $(@D)
+	$(CC) $(GTB_CFLAGS) -c -o $@ $<
+
+$(GTB_LIB): $(GTB_OBJECTS)
+	$(AR) rcs $@ $^
+
 # UCI engine (stdin/stdout protocol), separate binary so GUIs can launch it without arguments
-$(UCI_TARGET): ascaniusfish_uci.cpp $(HEADERS) $(SOURCES)
-	$(CXX) $(CXXFLAGS) -pthread -o $@ ascaniusfish_uci.cpp
+$(UCI_TARGET): ascaniusfish_uci.cpp $(HEADERS) $(SOURCES) $(GTB_LIB)
+	$(CXX) $(CXXFLAGS) -pthread -o $@ ascaniusfish_uci.cpp $(WITH_GTB)
 
 # The same engine with -DTT_BOUNDS_NEVER_NARROW=0 (#65): UCI TTNarrowing/TTNarrowingDeeper
 # switch narrowing on stored bounds back on. make gui NARROW=1 drives it.
 UCI_NARROW_TARGET := ascaniusfish_uci_narrow
-$(UCI_NARROW_TARGET): ascaniusfish_uci.cpp $(HEADERS) $(SOURCES)
-	$(CXX) $(CXXFLAGS) -DTT_BOUNDS_NEVER_NARROW=0 -pthread -o $@ ascaniusfish_uci.cpp
+$(UCI_NARROW_TARGET): ascaniusfish_uci.cpp $(HEADERS) $(SOURCES) $(GTB_LIB)
+	$(CXX) $(CXXFLAGS) -DTT_BOUNDS_NEVER_NARROW=0 -pthread -o $@ ascaniusfish_uci.cpp $(WITH_GTB)
 
 a.out: $(MAIN) $(HEADERS) $(SOURCES)
 	$(CXX) $(CXXFLAGS) -o $@ $(MAIN)
@@ -129,9 +146,15 @@ tools/tb_suite: tools/tb_suite.cpp tools/syzygy_positions.hpp tools/game_rules.h
 
 # Endgame games with the tablebases (issue #38): the engine has to win what is
 # won inside the 50-move rule and not lose what is drawn. TB_MOVETIME in ms.
+# With the Gaviota DTM tables (#77; on when $(GAVIOTA_PATH) exists, GAVIOTA=<dir>
+# picks another, GAVIOTA=none turns them off) every won game must also report a
+# shrinking mate N; TB_SUITE_ARGS=opp_gaviota=on makes it shrink by exactly one.
 TB_MOVETIME ?=
+GAVIOTA_PATH ?= $(HOME)/gaviota
+GAVIOTA ?= $(wildcard $(GAVIOTA_PATH))
+TB_SUITE_ARGS ?=
 tb-suite: $(UCI_TARGET) tools/tb_suite
-	./tools/tb_suite run $(SYZYGY_PATH) movetime=$(TB_MOVETIME)
+	./tools/tb_suite run $(SYZYGY_PATH) movetime=$(TB_MOVETIME) $(if $(filter-out none,$(GAVIOTA)),gaviota=$(GAVIOTA)) $(TB_SUITE_ARGS)
 
 tools/tb_trade_suite: tools/tb_trade_suite.cpp tools/syzygy_positions.hpp tools/uci_engine.hpp $(HEADERS) $(SOURCES)
 	$(CXX) $(CXXFLAGS) -pthread -o $@ tools/tb_trade_suite.cpp
@@ -156,8 +179,8 @@ tb-trade-suite: $(UCI_TARGET) tools/tb_trade_suite
 GUI_TARGET := gui/ascaniusfish_gui
 GUI_HEADERS := gui/http_server.hpp gui/session.hpp gui/move_tree.hpp gui/json.hpp gui/engine_link.hpp gui/analysis_store.hpp gui/tablebase_view.hpp
 
-$(GUI_TARGET): gui/gui_server.cpp $(GUI_HEADERS) tools/game_rules.hpp tools/uci_engine.hpp $(HEADERS) $(SOURCES)
-	$(CXX) $(CXXFLAGS) -pthread -o $@ gui/gui_server.cpp
+$(GUI_TARGET): gui/gui_server.cpp $(GUI_HEADERS) tools/game_rules.hpp tools/uci_engine.hpp $(HEADERS) $(SOURCES) $(GTB_LIB)
+	$(CXX) $(CXXFLAGS) -pthread -o $@ gui/gui_server.cpp $(WITH_GTB)
 
 # Syzygy prober (lib/syzygy.hpp) vs the recorded Lichess reference, plus a
 # consistency check over SYZYGY_RANDOM (300) random positions per table
@@ -166,6 +189,17 @@ diagnostics/syzygy_test: diagnostics/syzygy_test.cpp tools/syzygy_positions.hpp 
 
 syzygy-test: diagnostics/syzygy_test
 	./diagnostics/syzygy_test $(SYZYGY_PATH) $(SYZYGY_RANDOM)
+
+# Gaviota DTM probe (lib/gaviota.hpp, #77) vs Lichess's DTM (tools/gaviota_reference.txt)
+# and against its own children
+diagnostics/gaviota_test: diagnostics/gaviota_test.cpp $(HEADERS) $(SOURCES) $(GTB_LIB)
+	$(CXX) $(CXXFLAGS) -pthread -o $@ diagnostics/gaviota_test.cpp $(WITH_GTB)
+
+gaviota-test: diagnostics/gaviota_test
+	./diagnostics/gaviota_test $(GAVIOTA_PATH)
+
+tools/gaviota_reference: tools/gaviota_reference.cpp
+	$(CXX) -O2 -Wall -o $@ tools/gaviota_reference.cpp
 
 # The engine's eval-correction net (lib/nne.hpp) vs the trainer's test-set
 # predictions: every correction within 0.01 cp (#52)
@@ -208,10 +242,11 @@ gui-match: tools/gui_match
 # The board in the browser: prints a http://localhost:<port> URL and serves it.
 # Tablebases are on by default when $(SYZYGY_PATH) exists; SYZYGY=<dir> picks another, SYZYGY=none turns them off.
 SYZYGY ?= $(wildcard $(SYZYGY_PATH))
+# The Gaviota DTM tables (#77) likewise through GAVIOTA (see tb-suite).
 # Play mode drives $(UCI_TARGET) over pipes, so that has to exist too; NARROW=1 drives
 # $(UCI_NARROW_TARGET) instead, whose narrowing the gear then switches (#65).
 gui: $(GUI_TARGET) $(if $(NARROW),$(UCI_NARROW_TARGET),$(UCI_TARGET))
-	./$(GUI_TARGET) $(if $(NARROW),engine=./$(UCI_NARROW_TARGET)) $(if $(GUI_PORT),port=$(GUI_PORT)) $(if $(GUI_BIND),bind=$(GUI_BIND)) $(if $(GUI_TUNNEL),tunnel=$(GUI_TUNNEL)) $(if $(filter-out none,$(SYZYGY)),syzygy=$(SYZYGY))
+	./$(GUI_TARGET) $(if $(NARROW),engine=./$(UCI_NARROW_TARGET)) $(if $(GUI_PORT),port=$(GUI_PORT)) $(if $(GUI_BIND),bind=$(GUI_BIND)) $(if $(GUI_TUNNEL),tunnel=$(GUI_TUNNEL)) $(if $(filter-out none,$(SYZYGY)),syzygy=$(SYZYGY)) $(if $(filter-out none,$(GAVIOTA)),gaviota=$(GAVIOTA))
 
 # make gui plus a cloudflared quick tunnel, so the printed link is already
 # shareable — no separate terminal, no combining a token by hand (issue #27).
@@ -233,4 +268,5 @@ debug: $(TARGET)
 rebuild: clean all
 
 clean:
-	rm -f $(TARGET) $(UCI_TARGET) $(UCI_NARROW_TARGET) a.out ascaniusfish.s $(TEST_TARGETS) $(TOOL_TARGETS) diagnostics/syzygy_test diagnostics/nne_inference_test tools/nne_train $(GUI_TARGET) benchmarks/profile_startpos benchmarks/gmon.out benchmarks/profile_startpos.gprof
+	rm -rf $(GTB_DIR)/obj $(GTB_LIB)
+	rm -f $(TARGET) $(UCI_TARGET) $(UCI_NARROW_TARGET) a.out ascaniusfish.s $(TEST_TARGETS) $(TOOL_TARGETS) diagnostics/syzygy_test diagnostics/gaviota_test diagnostics/nne_inference_test tools/nne_train $(GUI_TARGET) benchmarks/profile_startpos benchmarks/gmon.out benchmarks/profile_startpos.gprof

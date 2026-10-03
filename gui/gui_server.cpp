@@ -16,6 +16,8 @@
 //   engine=...        the UCI binary Play mode drives (default ./ascaniusfish_uci)
 //   syzygy=<dir>      Syzygy tables: the page shows a tablebase position's exact
 //                     result, and the engines are given the path (issue #40)
+//   gaviota=<dir>     Gaviota DTM tables, on top of syzygy=: the mate in N and
+//                     the mating line, also given to the engines (issue #77)
 //   tunnel=cloudflared  also launch `cloudflared tunnel --url` at this port and
 //                     print the combined shareable link once it comes up
 //
@@ -1294,7 +1296,7 @@ int main(int argc, char** argv)
     init_sliders_attacks(0);  // rook
 
     int port = DEFAULT_PORT;
-    std::string root_option, start_fen, engine_option, bind_option = "127.0.0.1", tunnel_option, syzygy_option;
+    std::string root_option, start_fen, engine_option, bind_option = "127.0.0.1", tunnel_option, syzygy_option, gaviota_option;
     for(int i=1;i<argc;i++)
     {
         std::string arg = argv[i];
@@ -1311,6 +1313,7 @@ int main(int argc, char** argv)
         else if(key=="fen")  start_fen = value;
         else if(key=="engine") engine_option = value;
         else if(key=="syzygy") syzygy_option = value;
+        else if(key=="gaviota") gaviota_option = value;
         else if(key=="tunnel") tunnel_option = value;
         else
         {
@@ -1330,6 +1333,14 @@ int main(int argc, char** argv)
     {
         tablebase_setup().load(syzygy_option);
         std::printf("Tablebases: %d WDL tables from %s\n", tablebase_setup().tables, syzygy_option.c_str());
+    }
+    if(!gaviota_option.empty())
+    {
+        tablebase_setup().load_dtm(gaviota_option);
+        if(tablebase_setup().dtm_pieces)
+        std::printf("DTM tables: up to %d pieces from %s\n", tablebase_setup().dtm_pieces, gaviota_option.c_str());
+        else
+        std::printf("DTM tables: none in %s%s\n", gaviota_option.c_str(), gaviota::compiled_in() ? "" : " (built without -DWITH_GAVIOTA)");
     }
 
     engine_path = find_engine(engine_option);

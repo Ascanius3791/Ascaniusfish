@@ -7,6 +7,7 @@
 #include "move_ordering.hpp"
 #include "time_manager.hpp"
 #include "syzygy.hpp"
+#include "gaviota.hpp"
 #include "tb_search.hpp"
 #include "nne.hpp"
 #include <string>
@@ -15,7 +16,7 @@
 #include <thread>
 
 // UCI front end. Implements uci, isready, ucinewgame, position, go, stop,
-// quit (setoption handles SyzygyPath, SyzygyProbeLimit, NNEFile, UseNNE and MultiPV, debug/register/ponderhit are accepted and ignored), plus
+// quit (setoption handles SyzygyPath, SyzygyProbeLimit, GaviotaTbPath, GaviotaTbCache, NNEFile, UseNNE and MultiPV, debug/register/ponderhit are accepted and ignored), plus
 // the non-standard "go perft N" for checking move generation from any FEN.
 // The search runs on its own thread so "stop"/"isready" are answered while
 // it thinks; see lib/search_control.hpp for how a search is aborted.
@@ -80,9 +81,13 @@ class UCI_Engine
     void handle_go(const std::vector<std::string>& tokens);
     void search(UCI_Limits limits, long long start_ns);
     void perft_divide(int depth);
+    bool tb_classes(const BB& root, const std::vector<BB>& children, std::vector<int>& cls, std::vector<int>& key);
     bool tb_root_filter(const BB& root, const std::vector<BB>& children, std::vector<int>& keep, int& tb_class);
+    bool dtm_root(const BB& root, const std::vector<BB>& children, const UCI_Limits& limits, long long start_ns);
     void search_tb_root(const BB& root, const std::vector<Move>& moves, const std::vector<BB>& children, const std::vector<int>& keep, int tb_class, int ply, const UCI_Limits& limits, long long start_ns);
     std::string syzygy_dir;
+    std::string gaviota_dir;                   // GaviotaTbPath (#77)
+    int gaviota_cache_mb = 32;                 // GaviotaTbCache
     std::string nne_file = "nets/nne_d6.bin";  // NNEFile
     bool use_nne = true;                       // UseNNE; nne::enabled says whether it is in effect
     bool nne_applied = false;                  // apply_nne() has run; the default is applied on the first isready/go

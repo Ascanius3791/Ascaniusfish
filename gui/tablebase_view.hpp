@@ -39,6 +39,18 @@ struct Tablebase_Setup
 
     // The most pieces the loaded tables can answer for, whatever the gear asks.
     int max_pieces() const { return syzygy::max_pieces(); }
+
+    // The Gaviota DTM tables (#77, `gaviota=<dir>`): the distance to mate next
+    // to Syzygy's result. They only add to it, so they count only while the
+    // Syzygy tables are on too.
+    std::string dtm_dir;
+    int dtm_pieces = 0;
+
+    void load_dtm(const std::string& directory)
+    {
+        dtm_dir = directory;
+        dtm_pieces = gaviota::init(directory, 32);
+    }
 };
 
 inline Tablebase_Setup& tablebase_setup()
@@ -126,6 +138,84 @@ inline bool tb_moves(const BB& pos, const BB* children, int n, int limit, std::v
         return a.wdl>0 ? a.dtz<b.dtz : a.dtz>b.dtz;
     });
     return true;
+}
+
+// What the Gaviota tables say about one position (#77): the mate distance of it
+// and of every legal move, and the mating line itself (the quickest mate for
+// the winner, the longest resistance for the loser, ignoring the 50-move rule).
+// Plies, signed for the side that has them: > 0 mates, < 0 is mated.
+struct Dtm_View
+{
+    bool valid = false;
+    int mate = 0;                         // the side to move's; 0 = a draw
+    std::vector<int> moves;               // per legal move index, the mover's after it; 0 = a draw
+    std::vector<std::string> uci, san;    // the line from the position
+};
+
+constexpr int DTM_LINE_MAX = 64;  // plies of the line; the longest 5-piece mates are longer
+
+// The positions after pos's legal moves, and their DTM (the opponent's).
+inline bool dtm_children(const BB& pos, BB* children, int& n, std::vector<int>& res, std::vector<int>& plies)
+{
+    n = std::get<0>(all_moves(&pos, children, MAX_ORDERED_MOVES));
+    res.assign(n, 0);
+    plies.assign(n, 0);
+    for(int i=0;i<n;i++)
+    if(!gaviota::probe_dtm(&children[i], res[i], plies[i]))
+    return false;
+    return true;
+}
+
+// The child the side to move plays on the mating line: the quickest one the
+// opponent loses, else the slowest one they win; -1 if every move draws.
+inline int dtm_pick(const std::vector<int>& res, const std::vector<int>& plies)
+{
+    int win = -1, lose = -1;
+    for(int i=0;i<(int)res.size();i++)
+    {
+        if(res[i]==-1 && (win<0 || plies[i]<plies[win])) win = i;
+        if(res[i]==1 && (lose<0 || plies[i]>plies[lose])) lose = i;
+    }
+    return win>=0 ? win : lose;
+}
+
+inline Dtm_View dtm_view(const BB& pos, int limit)
+{
+    Dtm_View v;
+    if(piece_count(pos)>std::min(limit, tablebase_setup().dtm_pieces))
+    return v;
+    int res, plies;
+    if(!gaviota::probe_dtm(&pos, res, plies))
+    return v;
+    BB children[MAX_ORDERED_MOVES];
+    int n;
+    std::vector<int> cres, cplies;
+    if(!dtm_children(pos, children, n, cres, cplies))
+    return v;
+    v.valid = true;
+    v.mate = res*plies;
+    for(int i=0;i<n;i++)
+    v.moves.push_back(cres[i]==0 ? 0 : -cres[i]*(cplies[i]+1));
+    if(res==0)
+    return v;
+    BB at = pos;
+    for(int k = dtm_pick(cres, cplies); k>=0 && (int)v.uci.size()<DTM_LINE_MAX; )
+    {
+        v.uci.push_back(get_UCI(&at, &children[k]));
+        v.san.push_back(san(at, children, n, k));
+        at = children[k];
+        if(!dtm_children(at, children, n, cres, cplies))
+        break;
+        k = dtm_pick(cres, cplies);
+    }
+    return v;
+}
+
+// Plies to mate as the moves a "#N" counts: the winner's last move is the
+// mating one, so mate in 1 ply is #1, and being mated in 2 plies is #-1.
+inline int mate_moves(int plies)
+{
+    return plies>0 ? (plies+1)/2 : -((-plies)/2);
 }
 
 inline const char* tb_wdl_name(int wdl)   // for the side that has it

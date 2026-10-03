@@ -375,10 +375,35 @@ static bool is_zeroing_step(const BB& before, const BB& after)
 bool UCI_Engine::tb_root_filter(const BB& root, const std::vector<BB>& children, std::vector<int>& keep, int& tb_class)
 {
     const int n = (int)children.size();
+    std::vector<int> cls, key;
+    if(!tb_classes(root, children, cls, key))
+    return false;
+    int best_class=0, best_key=INT_MAX;
+    for(int i=0;i<n;i++)
+    if(cls[i]>best_class || (cls[i]==best_class && key[i]<best_key))
+    {
+        best_class=cls[i];
+        best_key=key[i];
+    }
+    keep.clear();
+    for(int i=0;i<n;i++)
+    if(cls[i]==best_class && key[i]==best_key)
+    keep.push_back(i);
+    tb_class = best_class;
+    return true;
+}
+
+// Each root move's class under the 50-move rule, from the DTZ tables and the
+// game's real halfmove clock: 3 win, 2 draw, 1 loss; within a class a lower
+// key is better (fewest plies to the next zeroing move, the longest resistance).
+bool UCI_Engine::tb_classes(const BB& root, const std::vector<BB>& children, std::vector<int>& cls, std::vector<int>& key)
+{
+    const int n = (int)children.size();
     int hc = game[0].halfmoves_since_last_capture_or_pawn_move;  // the real clock: the FEN's, then the game's steps
     for(size_t i=1;i<game.size();i++)
     hc = is_zeroing_step(game[i-1], game[i]) ? 0 : hc+1;
-    std::vector<int> cls(n), key(n);  // class 3 win, 2 draw, 1 loss; lower key is better
+    cls.assign(n, 0);
+    key.assign(n, 0);
     for(int i=0;i<n;i++)
     {
         int dz;
@@ -402,18 +427,87 @@ bool UCI_Engine::tb_root_filter(const BB& root, const std::vector<BB>& children,
             key[i]=0;
         }
     }
-    int best_class=0, best_key=INT_MAX;
+    return true;
+}
+
+// A won or lost root inside the Gaviota tables (#77): the move with the
+// quickest mate, or the longest resistance, played at once and reported as
+// `mate N`, with the whole mating line as the PV. The DTM tables ignore the
+// 50-move rule; with Syzygy loaded a win is only played along moves that still
+// win under it, and a root the rule makes a draw (a cursed win, a blessed
+// loss) is left to the DTZ path. SyzygyProbeLimit caps these tables too, so
+// one setting says up to how many pieces any table is used. False = not
+// answered here.
+bool UCI_Engine::dtm_root(const BB& root, const std::vector<BB>& children, const UCI_Limits& limits, long long start_ns)
+{
+    int pieces = 0;
+    for(int i=0;i<12;i++)
+    pieces += __builtin_popcountll(root.Board[i]);
+    if(pieces>tb_probe_limit)
+    return false;
+    int root_res, root_plies;
+    if(!gaviota::probe_dtm(&root, root_res, root_plies) || root_res==0)
+    return false;
+    const int n = (int)children.size();
+    std::vector<int> res(n), plies(n);
     for(int i=0;i<n;i++)
-    if(cls[i]>best_class || (cls[i]==best_class && key[i]<best_key))
+    if(!gaviota::probe_dtm(&children[i], res[i], plies[i]))
+    return false;
+    long long probes = n+1;
+    std::vector<int> cls, key;
+    const bool fifty = syzygy::max_pieces()>0 && tb_classes(root, children, cls, key);
+    if(fifty && *std::max_element(cls.begin(), cls.end()) != (root_res==1 ? 3 : 1))
+    return false;
+    // children[i] is the opponent's: their loss is our win
+    int pick = -1;
+    for(int i=0;i<n;i++)
     {
-        best_class=cls[i];
-        best_key=key[i];
+        if(root_res==1 ? (res[i]!=-1 || (fifty && cls[i]!=3)) : res[i]!=1)
+        continue;
+        if(pick<0 || (root_res==1 ? plies[i]<plies[pick] : plies[i]>plies[pick]))
+        pick = i;
     }
-    keep.clear();
-    for(int i=0;i<n;i++)
-    if(cls[i]==best_class && key[i]==best_key)
-    keep.push_back(i);
-    tb_class = best_class;
+    if(pick<0)
+    return false;
+    const int mate_plies = plies[pick]+1;
+
+    // The line: the same choice at every ply, the loser's the longest resistance.
+    std::vector<std::string> line{get_UCI(&root, &children[pick])};
+    BB pos = children[pick];
+    BB buf[MAX_ORDERED_MOVES];
+    while(line.size()<64)
+    {
+        const int m = std::get<0>(all_moves(&pos, buf, MAX_ORDERED_MOVES));
+        // the winner's quickest mate (a child the opponent loses), else the
+        // loser's slowest one (a child the opponent wins)
+        int win = -1, win_plies = 0, lose = -1, lose_plies = 0;
+        bool known = true;
+        for(int i=0;i<m && known;i++)
+        {
+            int r, p;
+            known = gaviota::probe_dtm(&buf[i], r, p);
+            probes++;
+            if(known && r==-1 && (win<0 || p<win_plies)) { win = i; win_plies = p; }
+            if(known && r==1 && (lose<0 || p>lose_plies)) { lose = i; lose_plies = p; }
+        }
+        const int next = win>=0 ? win : lose;
+        if(m==0 || !known || next<0)
+        break;
+        line.push_back(get_UCI(&pos, &buf[next]));
+        pos = buf[next];
+    }
+
+    const bool white_mates = root.white_move==(root_res==1);
+    const long long elapsed_ms = (steady_now_ns()-start_ns)/1000000;
+    std::string info = "info depth 1 score " + uci_score(white_mates ? INT_MAX-mate_plies : INT_MIN+mate_plies, root.white_move)
+                     + " nodes " + std::to_string(probes) + " time " + std::to_string(elapsed_ms)
+                     + " tbhits " + std::to_string(probes) + " pv";
+    for(const std::string& mv : line)
+    info += " " + mv;
+    send(info);
+    while(limits.infinite && !stop_search_flag.load())
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    send("bestmove " + line[0]);
     return true;
 }
 
@@ -585,6 +679,8 @@ void UCI_Engine::search(UCI_Limits limits, long long start_ns)
         return;
     }
     clear_killer_moves();
+    if(gaviota::max_pieces()>0 && dtm_root(root, std::vector<BB>(wfh, wfh+n), limits, start_ns))
+    return;
     if(syzygy::max_pieces()>0)
     {
         std::vector<BB> children(wfh, wfh+n);
@@ -689,6 +785,11 @@ int UCI_Engine::loop()
             send("id author Ascanius");
             send("option name SyzygyPath type string default <empty>");
             send("option name SyzygyProbeLimit type spin default 5 min 0 max 5");
+            if(gaviota::compiled_in())
+            {
+                send("option name GaviotaTbPath type string default <empty>");
+                send("option name GaviotaTbCache type spin default 32 min 1 max 1024");
+            }
             send("option name NNEFile type string default nets/nne_d6.bin");
             send("option name UseNNE type check default true");
             send("option name MultiPV type spin default 1 min 1 max " + std::to_string(MAX_ORDERED_MOVES));
@@ -753,6 +854,25 @@ int UCI_Engine::loop()
                 {
                     int loaded = syzygy::init(syzygy_dir);
                     send("info string syzygy " + std::to_string(loaded) + " tables from " + syzygy_dir);
+                }
+            }
+            else if(name=="GaviotaTbPath" || name=="GaviotaTbCache")
+            {
+                stop_search();
+                if(name=="GaviotaTbPath")
+                gaviota_dir = value=="<empty>" ? "" : value;
+                else
+                gaviota_cache_mb = std::max(1, std::min(1024, std::atoi(value.c_str())));
+                if(gaviota_dir.empty())
+                {
+                    gaviota::release();
+                    send("info string gaviota off");
+                }
+                else
+                {
+                    const int pieces = gaviota::init(gaviota_dir, gaviota_cache_mb);
+                    send("info string gaviota " + (pieces ? "up to " + std::to_string(pieces) + " pieces" : std::string("no tables"))
+                         + " from " + gaviota_dir);
                 }
             }
             else if(name=="SyzygyProbeLimit")
