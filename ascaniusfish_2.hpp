@@ -505,6 +505,8 @@ PV_Line minimax(const BB*const original ,BB* const wfh ,int depth = 0, const WEI
             null_eval--;
             if(null_eval >= beta)
             {
+                if(null_eval >= INT_MAX - max_mating_seq)//a pass proves only the bound, not a mate or TB win (#78)
+                null_eval = beta;
                 PV_Line cutoff_pv = PV_Line(null_eval);
                 cutoff_pv.depth = depth;
                 cutoff_pv.current_lenght = 0;
@@ -532,6 +534,8 @@ PV_Line minimax(const BB*const original ,BB* const wfh ,int depth = 0, const WEI
             null_eval--;
             if(null_eval <= alpha)
             {
+                if(null_eval <= INT_MIN + max_mating_seq)
+                null_eval = alpha;
                 PV_Line cutoff_pv = PV_Line(null_eval);
                 cutoff_pv.depth = depth;
                 cutoff_pv.current_lenght = 0;
