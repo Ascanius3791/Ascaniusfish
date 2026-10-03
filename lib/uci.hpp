@@ -111,7 +111,7 @@ class UCI_Engine
     // #82: a TT entry keeps only its best move, so a line ends where an exact TT
     // hit returned it. TTWalk extends each iteration's lines by following the
     // TT's moves from their end; ply is the root's index in path_history.
-    bool tt_walk = false;
+    bool tt_walk = true;
     void extend_pv_from_tt(const BB& root, PV_Line& pv, int ply);
     std::string nne_hash;                      // the loaded net's file hash, for the provenance line
     // "hint" (#79): the line and the depth it was searched to, for the position
