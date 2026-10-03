@@ -41,20 +41,18 @@ constexpr int MAX_PV_Lenght = 128; //maximum principlad variation lenght(cheap)
 //keeps PV_CHUNK moves inline instead of a flat Move[MAX_PV_Lenght]), so total size
 //is roughly (1<<exponent_for_size) * bucket_size * 184B.
 //
-//DO NOT RAISE EITHER EXPONENT just because there is memory to spare. These tables
-//are deliberately small: a small footprint is what lets several engine processes
+//DO NOT RAISE THE EXPONENT just because there is memory to spare. The table is
+//deliberately small: a small footprint is what lets several engine processes
 //run at the same time - debugging a binary next to a probe/benchmark, and two
 //agents working in this repo who may each want to play a game. That parallelism is
 //worth more here than the marginal search gain from a bigger table, so raising
-//these is Ascanius' call and not a free win. Going SMALLER is fine and already
+//it is Ascanius' call and not a free win. Going SMALLER is fine and already
 //supported: -DTT_EXPONENT=n (tools/match builds its engines with tt=14).
 #ifndef TT_EXPONENT
 #define TT_EXPONENT 15
 #endif
 constexpr int TT_EXPONENT_FOR_SIZE = TT_EXPONENT;   //regular per-game transposition table: 262144 entries, ~46MB (-DTT_EXPONENT=n overrides it downwards, e.g. for parallel match engines)
 constexpr int TT_BUCKET_SIZE = 8;
-constexpr int PTT_EXPONENT_FOR_SIZE = 16;  //persistent transposition table: 524288 entries, ~92MB
-constexpr int PTT_BUCKET_SIZE = 8;
 
 //true (default): a stored bound only cuts, it never narrows alpha and beta (#64).
 //-DTT_BOUNDS_NEVER_NARROW=0 builds the variant whose UCI options TTNarrowing and

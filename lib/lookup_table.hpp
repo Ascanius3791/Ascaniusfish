@@ -29,9 +29,8 @@ struct TT_readout
 };
 
 // EXPONENT_FOR_SIZE/BUCKET_SIZE are template parameters (not runtime ones) so that
-// table/fill_count stay plain fixed-size C arrays for every table size we need -
-// see PTT below, which gets a bigger table via a different instantiation instead of
-// a runtime-sized/heap-backed container.
+// table/fill_count stay plain fixed-size C arrays for every table size we need,
+// instead of a runtime-sized/heap-backed container.
 template<int EXPONENT_FOR_SIZE, int BUCKET_SIZE>
 class lookup_table_base
 {
@@ -73,42 +72,5 @@ class lookup_table_base
 // The regular per-game transposition table - same name, same size as before.
 // Actual size lives in lib/Settings.hpp (TT_EXPONENT_FOR_SIZE/TT_BUCKET_SIZE).
 using lookup_table = lookup_table_base<TT_EXPONENT_FOR_SIZE, TT_BUCKET_SIZE>;
-
-// Persistent transposition table: bigger (meant to accumulate across many games,
-// not just one search), with its own eviction policy and disk load/save.
-// Deriving from a *different* instantiation of lookup_table_base than `lookup_table`
-// uses is exactly why the size had to be a template parameter rather than a
-// constructor argument - the underlying arrays are still fixed-size C arrays either way.
-// Actual size lives in lib/Settings.hpp (PTT_EXPONENT_FOR_SIZE/PTT_BUCKET_SIZE) -
-// read the sizing note there before raising it; the short version is "don't", so
-// that several engine processes can run at once. TT_entry is ~184 bytes (PV_Line
-// keeps PV_CHUNK moves inline rather than a flat Move[MAX_PV_Lenght]), which puts
-// the PTT at 524288 entries / ~92MB.
-class PTT : public lookup_table_base<PTT_EXPONENT_FOR_SIZE, PTT_BUCKET_SIZE>
-{
-    protected:
-    // Persistent entries aren't tied to one game, so the base's recency term
-    // (weighted by entry.search_id/current_search_id, i.e. how many searches ago
-    // this entry was last touched) isn't a meaningful eviction signal here - score
-    // purely by search depth instead, with a tie-break preferring exact bounds
-    // over lower/upper ones.
-    float value_for_victim_index(const TT_entry& entry) const override;
-
-    public:
-    static constexpr const char* default_path = "books/ptt_cache.bin";
-
-    // Writes every initialized entry to path in a small binary format
-    // (magic number, version, entry count, then raw TT_entry records - TT_entry/
-    // PV_Line/Move are all fixed-size scalars/arrays, so a raw dump round-trips safely
-    // as long as it's read back by the same binary/platform).
-    bool save(const std::string& path = default_path) const;
-
-    // Reads entries written by save() and feeds each one through the inherited
-    // insert(), so an entry only overwrites what's already in memory when it's from
-    // a deeper search (insert() already enforces that) - this is what makes a
-    // load-then-play-then-save cycle keep only the best analysis seen so far,
-    // without any separate merge step.
-    bool load(const std::string& path = default_path);
-};
 
 #endif // LOOKUP_TABLE_HPP
