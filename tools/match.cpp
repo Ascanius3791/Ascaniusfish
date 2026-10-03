@@ -17,7 +17,7 @@
 //   pairs=<n>          only the first n openings
 //   openings=<file>    EPD suite (default tools/openings.epd)
 //   pgn=<file>         game output (default match.pgn)
-//   tt=<n>             TT exponent for engines built from refs (default 11, ~36MB)
+//   tt=<n>             TT exponent for engines built from refs (default 17, 32MB)
 //   optionsA=<n=v,...> UCI options for engine A (optionsB= for B), e.g.
 //                      optionsA="UCI_LimitStrength=true,UCI_Elo=1500" for a
 //                      Stockfish playing at a given CCRL rating
@@ -398,7 +398,7 @@ int main(int argc, char** argv)
     if(argc<3)
     {
         std::fprintf(stderr, "usage: %s <A> <B> [depth=3] [depthA=n] [depthB=n] [tc=s+inc] [concurrency=n] [pairs=n]\n"
-                             "       [openings=tools/openings.epd] [pgn=match.pgn] [tt=14] [optionsA=Name=Value,...] [optionsB=...]\n"
+                             "       [openings=tools/openings.epd] [pgn=match.pgn] [tt=17] [optionsA=Name=Value,...] [optionsB=...]\n"
                              "  A, B: UCI engine binary, or git ref to build (\".\" = working tree)\n", argv[0]);
         return 2;
     }
@@ -446,7 +446,7 @@ int main(int argc, char** argv)
     Side a, b;
     a.ref = argv[1];
     b.ref = argv[2];
-    int tt = std::atoi(get("tt", "14").c_str());
+    int tt = std::atoi(get("tt", "17").c_str());
     prepare(a, root, "A");  // worktrees one after the other (git locks), then both builds at once
     prepare(b, root, "B");
     a.options = parse_options(get("optionsA", ""));

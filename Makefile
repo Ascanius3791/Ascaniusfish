@@ -123,7 +123,7 @@ tools/make_endgames: tools/make_endgames.cpp tools/game_rules.hpp tools/uci_engi
 
 # The labels' TT (a fresh one per position, like ucinewgame): small, since
 # several labellers run at once (#50).
-NNE_TT ?= 13
+NNE_TT ?= 16
 tools/nne_data: tools/nne_data.cpp gui/move_tree.hpp tools/game_rules.hpp $(HEADERS) $(SOURCES)
 	$(CXX) $(CXXFLAGS) -DTT_EXPONENT=$(NNE_TT) -pthread -o $@ tools/nne_data.cpp
 

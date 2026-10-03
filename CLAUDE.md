@@ -372,12 +372,14 @@ The GUI asks its engine once at startup which build it is (`engine_build()`,
 `gui/engine_link.hpp`) and shows it, with both switches, in the gear.
 
 #### Transposition table size: do not raise it
-`TT_EXPONENT` (default 15) and `TT_BUCKET_SIZE` (8) in `lib/Settings.hpp` give the
-regular TT `2^15 * 8 = 262144` entries. The exponent is both the array dimension and the
+`TT_EXPONENT` (default 18) and `TT_BUCKET_SIZE` (8) in `lib/Settings.hpp` give the
+regular TT `2^18 * 8 = 2097152` entries of 32 bytes, 64MB. The exponent is both the array dimension and the
 hash mask width (`lookup_table_base::get_hash`), so it can only be a power of two.
 
-**Do not increase these just because the memory budget allows it.** Since the
-best-move-only entries (#82) shrank `TT_entry` to 32 bytes, the TT is only ~8MB, so it is tempting to raise the exponent "for free" — don't. The small
+**Do not increase these just because the memory budget allows it.** When the
+best-move-only entries (#82) shrank `TT_entry` from ~184 to 32 bytes, Ascanius raised every
+exponent by 3 (15 → 18, ~46MB → 64MB) to spend the room gained; that was their call, and the
+next raise is theirs too. The small
 footprint is deliberate: it is what lets several engine processes run at once,
 which is the thing being optimized for here. Debugging often means a binary and a
 probe/benchmark side by side, and two agents working in this repo simultaneously
@@ -386,5 +388,6 @@ search gain, so raising it is a decision for Ascanius, not a free win an agent
 should take on its own. Raise it only if Ascanius explicitly asks.
 
 If you need a *smaller* table, that is fine and already supported: build with
-`-DTT_EXPONENT=n` (`tools/match` does this, defaulting to `tt=14`, so 6 parallel games (12
-engines) fit in RAM with a cushion; `make tt-stats TT_EXPONENT=n` likewise).
+`-DTT_EXPONENT=n` (`tools/match` does this, defaulting to `tt=17`, 32MB, so 6 parallel games
+(12 engines) fit in RAM with a cushion; `tools/tempo_swing` likewise, `tools/nne_data` uses
+`NNE_TT=16`, and `make tt-stats TT_EXPONENT=n`).

@@ -3,7 +3,7 @@
 // moved, measured from the root score's odd/even swing over depth.
 //
 //   ./tools/tempo_swing [engine=.] [positions=nets/nne_d6_test.tsv] [per_bin=600]
-//                       [depths=2,4,6] [agree=30] [jobs=4] [minutes=10] [tt=14]
+//                       [depths=2,4,6] [agree=30] [jobs=4] [minutes=10] [tt=17]
 //                       [seed=70] [options=Name=Value,...] [out=<raw.tsv>]
 //
 // A leaf of an even-depth search has the root's mover to move, a leaf of an
@@ -219,7 +219,7 @@ int main(int argc, char** argv)
     const int agree = std::atoi(get("agree", "30").c_str());
     const int jobs = std::max(1, std::atoi(get("jobs", "4").c_str()));
     const double minutes = std::atof(get("minutes", "10").c_str());
-    const int tt = std::atoi(get("tt", "14").c_str());
+    const int tt = std::atoi(get("tt", "17").c_str());
 
     // Positions: shuffled, quiet roots, up to per_bin per phase bin.
     std::vector<Sample> samples;

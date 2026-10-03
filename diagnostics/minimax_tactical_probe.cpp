@@ -56,7 +56,7 @@ int main()
         FEN_to_BB("4k3/8/8/8/8/8/8/4K3 w - - 0 1", &parent);
         castling_rights(&parent);
 
-        lookup_table* table = new lookup_table; // ~46MB (TT_EXPONENT_FOR_SIZE) - must be heap-allocated
+        lookup_table* table = new lookup_table; // 64MB (TT_EXPONENT_FOR_SIZE) - must be heap-allocated
         TT_entry entry;
         entry.zobrist_hash = parent.zobrist_hash;
         entry.initialized = true;
