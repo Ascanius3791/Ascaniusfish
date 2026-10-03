@@ -16,7 +16,7 @@
     }
 
     template<int EXPONENT_FOR_SIZE, int BUCKET_SIZE>
-    float lookup_table_base<EXPONENT_FOR_SIZE, BUCKET_SIZE>::value_for_victim_index(const TT_entry& entry) const
+    float lookup_table_base<EXPONENT_FOR_SIZE, BUCKET_SIZE>::value_for_victim_index(const TT_slot& entry) const
     {
 #ifndef LOOKUP_TABLE_AGE_PENALTY
 #define LOOKUP_TABLE_AGE_PENALTY 2.0f
@@ -31,19 +31,14 @@
     {
         //std::vector<TT_entry>& bucket = table[hash_0][hash_1][hash_2];
         //if the bucket is (partially) unfilled return the index of the first unfilled entry
-        short fill_count_for_bucket = fill_count[hash];
+        short fill_count_for_bucket = table[hash].fill_count();
         if(fill_count_for_bucket<bucket_size)
         {
             return fill_count_for_bucket;
         }
-        TT_entry* bucket = table[hash];
-        if(bucket[0].initialized==0)
-        {
-            std::cout << "Error: trying to find victim index in an empty bucket!" << std::endl;
-            exit(1);
-        }
+        TT_slot* bucket = table[hash].slot;
         int victim_index=-1;
-        float min_value=value_for_victim_index(candidate);
+        float min_value=value_for_victim_index(TT_slot(candidate));
         for(int i=0;i<bucket_size;i++)
         {
             float value=value_for_victim_index(bucket[i]);
@@ -63,8 +58,8 @@
         number_of_attemted_readouts++;
         uint64_t zobrist_hash=original->zobrist_hash;
         size_t hash = get_hash(zobrist_hash);
-        TT_entry* bucket = table[hash];
-        short fill_count_for_bucket = fill_count[hash];
+        TT_bucket& bucket = table[hash];
+        short fill_count_for_bucket = bucket.fill_count();
 
         if(fill_count_for_bucket==0)
         {
@@ -74,15 +69,15 @@
         TT_readout readout;
         for(int i=0;i<fill_count_for_bucket;i++)
         {
-            if(bucket[i].zobrist_hash==zobrist_hash)//no full-board check backing this up anymore - a hash collision would silently misidentify the position
+            if(bucket.holds(i, zobrist_hash))//no full-board check backing this up anymore - a hash collision would silently misidentify the position
             {
                 readout.is_found=1;
-                readout.is_from_opening_book=bucket[i].is_from_opening_book;
+                readout.is_from_opening_book=bucket.slot[i].is_from_opening_book;
 
-                readout.pv_line=bucket[i].pv_line;
-                readout.pv_line.eval=bucket[i].pv_line.eval;
-                readout.pv_line.depth=bucket[i].pv_line.depth;
-                readout.pv_line.bound_type=bucket[i].pv_line.bound_type;
+                readout.pv_line=bucket.slot[i].pv_line;
+                readout.pv_line.eval=bucket.slot[i].pv_line.eval;
+                readout.pv_line.depth=bucket.slot[i].pv_line.depth;
+                readout.pv_line.bound_type=bucket.slot[i].pv_line.bound_type;
 
                 number_of_succ_readouts++;
             }
@@ -99,8 +94,8 @@
                 new_entry.search_id=current_search_id;// before find_victim_index, which values the candidate too
                 size_t zobrist_hash=new_entry.zobrist_hash;
                 size_t hash = get_hash(zobrist_hash);
-                short fill_count_for_bucket = fill_count[hash];
-                TT_entry* bucket = table[hash];
+                TT_bucket& bucket = table[hash];
+                short fill_count_for_bucket = bucket.fill_count();
 
                 //quickly check if the board can even be added to the table
                 short victim_index=find_victim_index(hash,new_entry);
@@ -113,8 +108,8 @@
                 // }
                 for(int i=0;i<fill_count_for_bucket;i++)
                 {
-                    TT_entry& old_entry = bucket[i];
-                    if(old_entry.zobrist_hash==new_entry.zobrist_hash)//if they are equal
+                    TT_slot& old_entry = bucket.slot[i];
+                    if(bucket.holds(i, new_entry.zobrist_hash))//if they are equal
                     {
                         is_already_in_table=1;
                         if(new_entry.pv_line.depth>old_entry.pv_line.depth)
@@ -142,16 +137,14 @@
                 TT_STATS_HOOK(tt_stats::on_store(new_entry));
                 if(fill_count_for_bucket<bucket_size)
                 {
-                    fill_count[hash]++;
+                    bucket.key[0]++;//the fill count
                 }
                 else
                 {
-                    TT_STATS_HOOK(tt_stats::on_discard(bucket[victim_index], tt_stats::EVICTED));
+                    TT_STATS_HOOK(TT_entry evicted; evicted.zobrist_hash=(bucket.key[victim_index] & key_bits) | (zobrist_hash & ~key_bits); evicted.pv_line=bucket.slot[victim_index].pv_line; tt_stats::on_discard(evicted, tt_stats::EVICTED));
                 }
-                //moved, not copied: new_entry is dead after this, and a copy here
-                //would clone the whole extension chain a second time (the first
-                //clone is the by-value parameter itself).
-                bucket[victim_index]=std::move(new_entry);
+                bucket.key[victim_index]=(bucket.key[victim_index] & ~key_bits) | (zobrist_hash & key_bits);//keeps key[0]'s fill count
+                bucket.slot[victim_index]=new_entry;
             }
 
     template<int EXPONENT_FOR_SIZE, int BUCKET_SIZE>
@@ -161,8 +154,8 @@
         int number_of_filled_buckets=0;
         for(int i=0;i<size;i++)
         {
-            sum+=fill_count[i];
-            if(fill_count[i]>0)
+            sum+=table[i].fill_count();
+            if(table[i].fill_count()>0)
             number_of_filled_buckets++;
         }
         std::cout << "Number of filled buckets: " << number_of_filled_buckets << std::endl;
@@ -178,13 +171,8 @@
         {
             for(int j=0;j<bucket_size;j++)
             {
-                table[i][j].initialized=0;
-                table[i][j].pv_line.clear_extension();//give any extension chunks back to the pool
+                table[i].key[j]=0;//and with key[0] the fill count
             }
-        }
-        for(int i=0;i<size;i++)
-        {
-            fill_count[i]=0;
         }
         number_of_inserions=0;
         number_of_succ_readouts=0;
@@ -200,16 +188,9 @@
         {
             for(int j=0;j<bucket_size;j++)
             {
-                table[i][j].initialized=0;
-                table[i][j].pv_line = PV_Line();
-                table[i][j].zobrist_hash = 0;
-                table[i][j].is_from_opening_book = 0;
-                table[i][j].search_id = 0;
+                table[i].key[j] = 0;
+                table[i].slot[j] = TT_slot();
             }
-        }
-        for(int i=0;i<size;i++)
-        {
-            fill_count[i]=0;
         }
         number_of_inserions=0;
         number_of_succ_readouts=0;
@@ -245,8 +226,8 @@
         std::map<int, std::map<int,int>> histogram;   // depth -> bound_type -> count
         for(int i=0;i<size;i++)
         {
-            const TT_entry* bucket = table[i];
-            short fill_count_for_bucket = fill_count[i];
+            const TT_slot* bucket = table[i].slot;
+            short fill_count_for_bucket = table[i].fill_count();
             for(int j=0;j<fill_count_for_bucket;j++)
             {
                 histogram[bucket[j].pv_line.depth][bucket[j].pv_line.bound_type]++;

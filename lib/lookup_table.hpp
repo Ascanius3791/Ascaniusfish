@@ -22,6 +22,17 @@ struct TT_entry
     int search_id=0;// which search (lookup_table_base::new_search) last wrote or refreshed this entry
 };
 
+// A TT_entry as the table keeps it: everything but the key, which its bucket
+// keeps apart with the other keys (#81).
+struct TT_slot
+{
+    TT_Result pv_line;
+    bool is_from_opening_book=0;
+    int search_id=0;
+    TT_slot() = default;
+    TT_slot(const TT_entry& entry) : pv_line(entry.pv_line), is_from_opening_book(entry.is_from_opening_book), search_id(entry.search_id) {}
+};
+
 struct TT_readout
 {
     PV_Line pv_line;
@@ -30,7 +41,7 @@ struct TT_readout
 };
 
 // EXPONENT_FOR_SIZE/BUCKET_SIZE are template parameters (not runtime ones) so that
-// table/fill_count stay plain fixed-size C arrays for every table size we need,
+// table stays a plain fixed-size C array for every table size we need,
 // instead of a runtime-sized/heap-backed container.
 template<int EXPONENT_FOR_SIZE, int BUCKET_SIZE>
 class lookup_table_base
@@ -42,8 +53,19 @@ class lookup_table_base
     static const int exponent_for_size = EXPONENT_FOR_SIZE;
     static const int size = 1 << exponent_for_size;
     static const uint64_t mask = -1ULL >> (64 - exponent_for_size);
-    TT_entry table[size][bucket_size];
-    short fill_count[size];
+    // A bucket's keys share one cache line, ahead of its entries (#81): a miss
+    // reads only that line, a hit one more. The low byte of key[0] is the fill
+    // count; those bits are the bucket index, the same for every key in it.
+    static_assert(EXPONENT_FOR_SIZE>=8, "the fill count lives in the key bits the bucket index fixes");
+    static constexpr uint64_t key_bits = ~0xFFULL;
+    struct alignas(64) TT_bucket
+    {
+        uint64_t key[BUCKET_SIZE];
+        TT_slot slot[BUCKET_SIZE];
+        short fill_count() const { return key[0] & 0xFF; }
+        bool holds(int i, uint64_t zobrist_hash) const { return ((key[i]^zobrist_hash) & key_bits)==0; }
+    };
+    TT_bucket table[size];
 
     size_t get_hash(uint64_t zobrist_hash) const;
     public:
@@ -56,7 +78,7 @@ class lookup_table_base
     TT_readout is_retrivable_eval(const BB* const original, int requestes_depth);
 
     protected:
-    virtual float value_for_victim_index(const TT_entry& entry) const;
+    virtual float value_for_victim_index(const TT_slot& entry) const;
     int find_victim_index(int hash,const TT_entry& candidate);// returns -1 if the candidate is the lease valuable, otherwise returns the index of the least valuable entry in the bucket
     public:
     void insert(TT_entry original);
