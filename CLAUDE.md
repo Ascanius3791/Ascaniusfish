@@ -347,5 +347,5 @@ search gain, so raising it is a decision for Ascanius, not a free win an agent
 should take on its own. Raise it only if Ascanius explicitly asks.
 
 If you need a *smaller* table, that is fine and already supported: build with
-`-DTT_EXPONENT=n` (`tools/match` does this, defaulting to `tt=11`, so many match
-engines fit in RAM; `make tt-stats TT_EXPONENT=n` likewise).
+`-DTT_EXPONENT=n` (`tools/match` does this, defaulting to `tt=14`, so 6 parallel games (12
+engines) fit in RAM with a cushion; `make tt-stats TT_EXPONENT=n` likewise).
