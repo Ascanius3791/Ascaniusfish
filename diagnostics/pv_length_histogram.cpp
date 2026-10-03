@@ -21,10 +21,9 @@ class Probed_TT : public lookup_table
         long long by_depth[64] = {0};
         long long initialized = 0, len_gt_8 = 0, len_gt_16 = 0, sum_len = 0, max_len = 0;
         for(int h=0; h<size; h++)
-        for(int b=0; b<bucket_size; b++)
+        for(int b=0; b<table[h].fill_count(); b++)
         {
-            const TT_entry& e = table[h][b];
-            if(!e.initialized) continue;
+            const TT_slot& e = table[h].slot[b];
             initialized++;
             int l = e.pv_line.current_lenght;
             if(l<0) l=0;
