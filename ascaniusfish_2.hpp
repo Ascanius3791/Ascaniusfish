@@ -3,6 +3,7 @@
 #include "lib/cuckoo_cycle_table.hpp"
 #include "lib/search_control.hpp"
 #include "lib/tb_search.hpp"
+#include "lib/mate_search.hpp"
 #include "lib/nne.hpp"
 #include "lib/pruning.hpp"
 #include "lib/move_ordering.hpp"
@@ -301,6 +302,8 @@ PV_Line minimax_tactical(const BB* const original, BB* const wfh, const WEIGHTS&
         break;
     }
     const bool mated = original->white_move ? pv_line.eval <= INT_MIN + max_mating_seq : pv_line.eval >= INT_MAX - max_mating_seq;
+    if(searched_a_move && skipped_a_move && mated && mate_confirmed(original, wfh, pv_line.eval))
+    return pv_line;//the mate search proved it with the skipped evasion too, eval now that mate's length (#78)
     if(!searched_a_move || (skipped_a_move && mated))
     {
         // Every evasion was skipped, or every one searched got mated while a
