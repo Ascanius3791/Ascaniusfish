@@ -105,6 +105,8 @@ std::string uci_score(int eval, bool white_to_move)
 {
     // Mate scores count half moves from the root: INT_MAX-n = white mates in
     // n plies, INT_MIN+n = black mates in n plies (see interpret_eval()).
+    if(is_tb_score(eval))
+    return "cp " + std::to_string(white_to_move == (eval>0) ? TB_WIN_CP : -TB_WIN_CP);  // a table win, not a mate
     int mate_plies = 0;
     bool white_mates = false;
     if(eval >= INT_MAX - max_mating_seq)
@@ -116,8 +118,6 @@ std::string uci_score(int eval, bool white_to_move)
     {
         mate_plies = eval - INT_MIN;
     }
-    else if(is_tb_score(eval))
-    return "cp " + std::to_string(white_to_move == (eval>0) ? TB_WIN_CP : -TB_WIN_CP);  // a table win, not a mate
     else
     return "cp " + std::to_string(white_to_move ? eval : -eval);
 
@@ -425,9 +425,39 @@ void UCI_Engine::search_tb_root(const BB& root, const std::vector<Move>& moves, 
     std::string best = get_UCI(&root, &children[keep[0]]);
     const int tb_cp = tb_class==3 ? 10000 : tb_class==2 ? 0 : -10000;  // side to move's view
     std::vector<int> order = keep;
-    if(keep.size()==1)
+    // A search below a kept move only says something where the tables don't
+    // answer. minimax() probes every node within SyzygyProbeLimit, so once the
+    // kept moves' positions are all within it, each one is its table score at
+    // once and there is nothing to search: the eval picks among them, a mate first.
+    bool all_probed = true;
+    for(int i : keep)
     {
-        send("info depth 1 score cp " + std::to_string(tb_cp) + " nodes 1 tbhits 1 pv " + best);
+        int unused;
+        if(!tb_probe_score(&children[i], unused))
+        {
+            all_probed = false;
+            break;
+        }
+    }
+    if(keep.size()==1 || all_probed)
+    {
+        int pick = keep[0];
+        int pick_eval = eval(&children[pick], WEIGHTS_OG, -1);
+        for(int i : keep)
+        {
+            const int e = eval(&children[i], WEIGHTS_OG, -1);
+            if(root.white_move ? e>pick_eval : e<pick_eval)
+            {
+                pick = i;
+                pick_eval = e;
+            }
+        }
+        best = get_UCI(&root, &children[pick]);
+        const std::string score = exception_eval(&children[pick])==2
+            ? uci_score(root.white_move ? INT_MAX-1 : INT_MIN+1, root.white_move)  // mate in 1
+            : "cp " + std::to_string(tb_cp);
+        const std::string count = std::to_string(keep.size());
+        send("info depth 1 score " + score + " nodes " + count + " tbhits " + count + " pv " + best);
         while(limits.infinite && !stop_search_flag.load())
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
         send("bestmove " + best);
@@ -488,8 +518,11 @@ void UCI_Engine::search_tb_root(const BB& root, const std::vector<Move>& moves, 
         std::vector<std::string> line = pv_to_uci(root, best_pv);
         if(!line.empty())
         best = line[0];
+        bool proven_mate = best_pv.eval <= INT_MIN + max_mating_seq || best_pv.eval >= INT_MAX - max_mating_seq;
+        // The tables' result, not the eval's guess below a kept move; only a
+        // mate the search has seen says more than they do.
         std::string info = "info depth " + std::to_string(d)
-                         + " score " + uci_score(best_pv.eval, root.white_move)
+                         + " score " + (proven_mate ? uci_score(best_pv.eval, root.white_move) : "cp " + std::to_string(tb_cp))
                          + " nodes " + std::to_string(nodes)
                          + " nps " + std::to_string(nodes*1000/std::max(1LL, elapsed_ms))
                          + " time " + std::to_string(elapsed_ms)
@@ -497,7 +530,6 @@ void UCI_Engine::search_tb_root(const BB& root, const std::vector<Move>& moves, 
         for(const std::string& m : line)
         info += " " + m;
         send(info);
-        bool proven_mate = best_pv.eval <= INT_MIN + max_mating_seq || best_pv.eval >= INT_MAX - max_mating_seq;
         if(proven_mate && !limits.infinite)
         break;
         if(tm)

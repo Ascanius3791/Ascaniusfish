@@ -162,7 +162,7 @@ float correction_from_scratch(const BB& pos);
 
 // The quiet-leaf score: `static_eval` (white's view, from eval()) plus the net's
 // correction, rounded and clamped to +-SCORE_LIMIT, so however large the static
-// eval is, the sum never reaches the TB band (|eval| >= TB_WIN_SCORE) or the
+// eval is, the sum never reaches a TB score (|eval| >= TB_WIN_SCORE) or the
 // mate band beyond it.
 constexpr int SCORE_LIMIT = TB_WIN_SCORE - 1;
 int corrected_eval(const BB* pos, int static_eval);
