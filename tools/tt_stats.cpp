@@ -16,6 +16,7 @@
 #endif
 #include "../lib/uci.hpp"
 #include "game_rules.hpp"
+#include "bench_positions.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -23,39 +24,6 @@
 #include <sstream>
 #include <string>
 #include <vector>
-
-// The FEN of every opening in an EPD suite (hmvc/fmvn opcodes become the clocks).
-static std::vector<std::string> load_opening_fens(const std::string& path)
-{
-    std::ifstream f(path);
-    if(!f)
-    {
-        std::fprintf(stderr, "cannot open %s\n", path.c_str());
-        std::exit(1);
-    }
-    std::vector<std::string> out;
-    std::string line;
-    while(std::getline(f, line))
-    {
-        if(line.empty() || line[0]=='#')
-        continue;
-        std::istringstream in(line);
-        std::string field, fen;
-        for(int i=0;i<4 && in>>field;i++) fen += (i ? " " : "") + field;
-        std::string ops;
-        std::getline(in, ops);
-        auto opcode = [&](const std::string& name) -> std::string
-        {
-            size_t at = ops.find(" " + name + " ");
-            if(at==std::string::npos) return "";
-            at += name.size()+2;
-            return ops.substr(at, ops.find(';', at)-at);
-        };
-        std::string hmvc = opcode("hmvc"), fmvn = opcode("fmvn");
-        out.push_back(fen + " " + (hmvc.empty() ? "0" : hmvc) + " " + (fmvn.empty() ? "1" : fmvn));
-    }
-    return out;
-}
 
 int main(int argc, char** argv)
 {
@@ -90,7 +58,7 @@ int main(int argc, char** argv)
     CuckooCycleTable* cycle_table = new CuckooCycleTable;
     BB root_children[MAX_LEGAL_MOVES];
 
-    std::vector<std::string> fens = load_opening_fens(openings_path);
+    std::vector<std::string> fens = load_epd_fens(openings_path);
     if(movetime_ms>0)
     std::printf("tt-stats: %d ms per move, %d games, max %d plies, TT %d x %d entries\n",
         movetime_ms, games, max_plies, 1<<TT_EXPONENT_FOR_SIZE, TT_BUCKET_SIZE);

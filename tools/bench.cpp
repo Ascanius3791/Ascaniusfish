@@ -4,8 +4,12 @@
 // The total node count is a signature of search behaviour: it changes only
 // when the search itself changes, never with machine speed.
 //
-//   ./tools/bench [depth] [-q] [nne=<file>] [narrow=0|1|2]
+//   ./tools/bench [depth] [-q] [nne=<file>] [narrow=0|1|2] [epd=<file>]
 // -q prints only the final "bench:" line (used by tools/speed_compare).
+// epd=<file> searches that suite's positions after the bench's own, e.g.
+// epd=tools/openings.epd for the 130 positions of #80/#81.
+// keep: the TT is not cleared between positions; each one is a new search
+// (new_search(), as UCI "go" does), so the table runs full like in a game (#81).
 // nne=<file> evaluates quiet leaves with that eval-correction net (UCI UseNNE,
 // #52); the node count is then a different signature.
 // narrow=n sets tt_narrowing (#65); only a -DTT_BOUNDS_NEVER_NARROW=0 build reads it.
@@ -23,11 +27,19 @@ int main(int argc, char** argv)
 {
     int depth = BENCH_DEFAULT_DEPTH;
     bool quiet = false;
+    bool keep = false;
     const char* nne_file = nullptr;
+    std::vector<std::string> fens(std::begin(BENCH_FENS), std::end(BENCH_FENS));
     for(int i=1;i<argc;i++)
     {
         if(std::strcmp(argv[i], "-q")==0) quiet = true;
+        else if(std::strcmp(argv[i], "keep")==0) keep = true;
         else if(std::strncmp(argv[i], "nne=", 4)==0) nne_file = argv[i]+4;
+        else if(std::strncmp(argv[i], "epd=", 4)==0)
+        {
+            std::vector<std::string> more = load_epd_fens(argv[i]+4);
+            fens.insert(fens.end(), more.begin(), more.end());
+        }
         else if(std::strncmp(argv[i], "narrow=", 7)==0) tt_narrowing = std::atoi(argv[i]+7);//#65, only a -DTT_BOUNDS_NEVER_NARROW=0 build reads it
         else depth = std::atoi(argv[i]);
     }
@@ -55,8 +67,9 @@ int main(int argc, char** argv)
     long long total_nodes = 0;
     long long total_ns = 0;
     int index = 0;
-    for(const char* fen : BENCH_FENS)
+    for(const std::string& fen_string : fens)
     {
+        const char* fen = fen_string.c_str();
         index++;
         BB root;
         if(!uci_parse_fen(fen, root))
@@ -64,6 +77,9 @@ int main(int argc, char** argv)
             std::fprintf(stderr, "invalid bench FEN: %s\n", fen);
             return 1;
         }
+        if(keep)
+        table->new_search();
+        else
         table->reset();
         path_history[0] = root;
 

@@ -38,6 +38,9 @@ bench: nodes <N> time_ms <T> nps <X>
 signature: a refactor that is meant to be behaviour-neutral must keep it
 unchanged. Commits touching search or eval put `bench: <N>` in the body.
 `BENCH_DEPTH=n` changes the depth (then the signature is different too).
+Run directly, `./tools/bench <depth> epd=tools/openings.epd` adds that suite's
+positions (130 in all), and `keep` leaves the TT full between positions, each
+one a new search, as in a game (#81).
 
 "Nodes" counts `minimax()` and `minimax_tactical()` calls. Move ordering
 evaluates every child with the full evaluator, so this is only a fraction of

@@ -2,7 +2,15 @@
 #ifndef BENCH_POSITIONS_HPP
 #define BENCH_POSITIONS_HPP
 // The positions of the bench (tools/bench.cpp), also used by
-// diagnostics/multipv_agreement.cpp.
+// diagnostics/multipv_agreement.cpp, and the reader for EPD suites
+// (tools/bench epd=, tools/tt_stats).
+
+#include <cstdio>
+#include <cstdlib>
+#include <fstream>
+#include <sstream>
+#include <string>
+#include <vector>
 
 // Openings, middlegames with tactics, and endgames (incl. the perft positions).
 static const char* const BENCH_FENS[] =
@@ -38,5 +46,38 @@ static const char* const BENCH_FENS[] =
     "8/R7/2q5/8/6k1/8/1P5p/K6R w - - 0 124",
     "8/8/8/8/8/6k1/6p1/6K1 w - - 0 1",
 };
+
+// The FEN of every position in an EPD suite (hmvc/fmvn opcodes become the clocks).
+static std::vector<std::string> load_epd_fens(const std::string& path)
+{
+    std::ifstream f(path);
+    if(!f)
+    {
+        std::fprintf(stderr, "cannot open %s\n", path.c_str());
+        std::exit(1);
+    }
+    std::vector<std::string> out;
+    std::string line;
+    while(std::getline(f, line))
+    {
+        if(line.empty() || line[0]=='#')
+        continue;
+        std::istringstream in(line);
+        std::string field, fen;
+        for(int i=0;i<4 && in>>field;i++) fen += (i ? " " : "") + field;
+        std::string ops;
+        std::getline(in, ops);
+        auto opcode = [&](const std::string& name) -> std::string
+        {
+            size_t at = ops.find(" " + name + " ");
+            if(at==std::string::npos) return "";
+            at += name.size()+2;
+            return ops.substr(at, ops.find(';', at)-at);
+        };
+        std::string hmvc = opcode("hmvc"), fmvn = opcode("fmvn");
+        out.push_back(fen + " " + (hmvc.empty() ? "0" : hmvc) + " " + (fmvn.empty() ? "1" : fmvn));
+    }
+    return out;
+}
 
 #endif // BENCH_POSITIONS_HPP
