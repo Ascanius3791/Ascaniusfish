@@ -33,10 +33,10 @@ GUI_BIND ?=
 GUI_TUNNEL ?=
 SYZYGY_PATH ?= $(HOME)/syzygy-nr
 SYZYGY_RANDOM ?=
-TOOL_TARGETS := tools/perft tools/bench tools/speed_compare tools/match tools/make_openings tools/make_endgames tools/gui_match tools/tt_stats tools/syzygy_reference tools/tb_suite tools/tb_trade_suite tools/nne_data tools/wdl_fit tools/tempo_swing tools/gaviota_reference tools/mate_suite
+TOOL_TARGETS := tools/perft tools/bench tools/speed_compare tools/match tools/make_openings tools/make_endgames tools/gui_match tools/tt_stats tools/syzygy_reference tools/tb_suite tools/tb_trade_suite tools/nne_data tools/wdl_fit tools/tempo_swing tools/gaviota_reference tools/mate_suite tools/ptt_seed
 PROFILE_CXXFLAGS ?= -O2 -mpopcnt -g -pg -Wall -Wno-unknown-pragmas -Wno-parentheses -Wno-unused-variable
 
-.PHONY: all run play asm tests debug profile-startpos perft bench speed-compare match gui-match gui tt-stats tempo-swing syzygy-test gaviota-test nne-test nne-retrain tb-suite tb-trade-suite mate-suite clean rebuild
+.PHONY: all run play asm tests debug profile-startpos perft bench speed-compare match gui-match gui tt-stats tempo-swing syzygy-test gaviota-test nne-test nne-retrain tb-suite tb-trade-suite mate-suite ptt-seed clean rebuild
 
 all: $(TARGET) $(UCI_TARGET)
 
@@ -168,6 +168,14 @@ MATE_MOVETIME ?= 1000
 MATE_SUITE_ARGS ?=
 mate-suite: $(UCI_TARGET) tools/mate_suite
 	./tools/mate_suite run movetime=$(MATE_MOVETIME) $(MATE_SUITE_ARGS)
+
+# Seeded vs cold search to the stored depth + 1 (#79): does the PTT's line help?
+tools/ptt_seed: tools/ptt_seed.cpp tools/bench_positions.hpp tools/uci_engine.hpp
+	$(CXX) $(CXXFLAGS) -pthread -o $@ tools/ptt_seed.cpp
+
+PTT_SEED_ARGS ?=
+ptt-seed: $(UCI_TARGET) tools/ptt_seed
+	./tools/ptt_seed $(PTT_SEED_ARGS)
 
 tools/tb_trade_suite: tools/tb_trade_suite.cpp tools/syzygy_positions.hpp tools/uci_engine.hpp $(HEADERS) $(SOURCES)
 	$(CXX) $(CXXFLAGS) -pthread -o $@ tools/tb_trade_suite.cpp
