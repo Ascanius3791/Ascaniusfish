@@ -4,7 +4,7 @@
 version 4
 parent 1
 data ccrl4040-3000-balanced
-tuner 50946d2
+tuner 2348211
 loss 0.124711
 
 # material_eval(): pawn rook knight bishop queen king
@@ -182,7 +182,7 @@ ks_storm_blocked_div 4
 ks_full_piece_material 31
 
 # fit report (loss = valid loss by the real eval)
-# tools/tune 50946d2: set 4 from set 1, /home/ascanius/Documents/Cpp/other_programms/Chess/data/tune
+# tools/tune 2348211: set 4 from set 1, /home/ascanius/Documents/Cpp/other_programms/Chess/data/tune
 # positions: train 1034763, valid 127374, test 127569
 # K 329.79 (fitted on set 1), lambda 1e-09, lr 2, epochs 1500, best epoch 1500 (valid, model 0.124697), 251 s
 # loss (sigma(basic_eval/K) - result)^2, real eval:
