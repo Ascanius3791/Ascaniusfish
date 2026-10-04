@@ -41,6 +41,16 @@ static int weight_fields(WEIGHTS& W, Weight_Field* out)
     add("punishment_for_isolated_pawn", &W.punishment_for_isolated_pawn, 1);
     add("pawn_supporting_value", &W.pawn_supporting_value, 1);
     add("passed_pawn_value", W.passed_pawn_value, 8, "passed_pawn_eval(): by relative rank, full with bare kings, half with all material");
+    add("passed_free_path", W.passed_free_path, 8,
+        "passed_pawn_eval()'s endgame modifiers (#90), by relative rank where 8 numbers, scaled to 0 with all material:\n"
+        "# nothing ahead; per square (max 5) of the enemy king's / our king's distance to the stop square;\n"
+        "# an own pawn beside or protecting it; our rook behind it (+), theirs (-); unstoppable by the\n"
+        "# rule of the square (not scaled, the side's best passer only)");
+    add("passed_king_enemy", W.passed_king_enemy, 8);
+    add("passed_king_own", W.passed_king_own, 8);
+    add("passed_supported", W.passed_supported, 8);
+    add("passed_rook_behind", &W.passed_rook_behind, 1);
+    add("passed_unstoppable", &W.passed_unstoppable, 1);
     add("mobility_value", &W.mobility_value, 1, "basic_eval(): per attacked square");
     add("activity_pawn_attack", &W.activity_pawn_attack, 1,
         "piece_activity_eval(): added for the owner per piece or square hit, halved at the end;\n"

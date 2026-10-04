@@ -24,6 +24,13 @@ class WEIGHTS
         int punishment_for_trippled_pawn;//also get punishmeht for doubles pawns
         int pawn_supporting_value;
         int passed_pawn_value[8];//by relative rank, full value in the endgame, half with all material on (#84)
+        // the passer's endgame modifiers (#90), by relative rank where an array, scaled to 0 with all material on
+        int passed_free_path[8];//no piece on the squares ahead of it
+        int passed_king_enemy[8];//per square of the enemy king's distance to its stop square (at most 5)
+        int passed_king_own[8];//lost per square of our king's distance to its stop square (at most 5)
+        int passed_supported[8];//an own pawn beside it or protecting it
+        int passed_rook_behind;//our rook behind it on its file, the same lost for theirs
+        int passed_unstoppable;//not scaled: the enemy king cannot catch it by the rule of the square, the enemy having king and pawns only; the side's best passer only
         int value_of_king_safety_for_sorting;//this is a factor!//it should not be changed, untill time is relevant for depth of eval
         // #85: the rest of what basic_eval() uses. A weight set (lib/weight_set.hpp) holds these
         // and the fields above that basic_eval() reads.

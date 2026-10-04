@@ -316,6 +316,59 @@ int passed_pawn_bonus(int relative_rank, int OW, const WEIGHTS& W)
     return W.passed_pawn_value[relative_rank]*(OW + 2*(2*MATERIAL_MAX-OW))/(4*MATERIAL_MAX);
 }
 
+static int square_distance(int a, int b)
+{
+    return std::max(std::abs(a/8-b/8), std::abs(a%8-b%8));
+}
+
+void passed_pawn_parts(const BB* const original, bool white, int sq, int OW, const WEIGHTS& W, int part[PASSER_PARTS])
+{
+    const int rank = sq/8, column = sq%8, r = white ? rank : 7-rank;// r: relative rank, 1..6
+    const int endgame = 2*MATERIAL_MAX-OW;// the modifiers are scaled by endgame/(2*MATERIAL_MAX)
+    const uint64_t occupancy = original->get_occupancy();
+    const uint64_t path = mask_column[column] & (white ? (~0ULL << (8*(rank+1))) : ((1ULL << (8*rank))-1));
+    const int stop = white ? sq+8 : sq-8;
+    const int own_king = __builtin_ctzll(original->Board[5+6*!white]), enemy_king = __builtin_ctzll(original->Board[5+6*white]);
+    for(int k=0;k<PASSER_PARTS;k++) part[k] = 0;
+
+    part[PASSER_BASE] = passed_pawn_bonus(r, OW, W);
+
+    const bool free_path = !(occupancy & path);
+    if(free_path)
+    part[PASSER_PATH] = W.passed_free_path[r]*endgame/(2*MATERIAL_MAX);
+
+    part[PASSER_KING] = (W.passed_king_enemy[r]*std::min(square_distance(enemy_king, stop), 5)
+                       - W.passed_king_own[r]*std::min(square_distance(own_king, stop), 5))*endgame/(2*MATERIAL_MAX);
+
+    uint64_t neighbours = 0;
+    if(column>0) neighbours |= mask_column[column-1];
+    if(column<7) neighbours |= mask_column[column+1];
+    const uint64_t beside_or_behind = (0xFFULL << (8*rank)) | (0xFFULL << (8*(white ? rank-1 : rank+1)));
+    if(original->Board[0+6*!white] & neighbours & beside_or_behind)
+    part[PASSER_SUPPORT] = W.passed_supported[r]*endgame/(2*MATERIAL_MAX);
+
+    for(int behind = white ? sq-8 : sq+8; behind>=0 && behind<64; behind += white ? -8 : 8)
+    {
+        if(!(occupancy & (1ULL<<behind)))
+        continue;
+        if(original->Board[1+6*!white] & (1ULL<<behind))
+        part[PASSER_ROOK] = W.passed_rook_behind*endgame/(2*MATERIAL_MAX);
+        else if(original->Board[1+6*white] & (1ULL<<behind))
+        part[PASSER_ROOK] = -W.passed_rook_behind*endgame/(2*MATERIAL_MAX);
+        break;
+    }
+
+    const int e = 6*white;// the enemy's pieces
+    if(free_path && !(original->Board[1+e] | original->Board[2+e] | original->Board[3+e] | original->Board[4+e]))
+    {
+        const int promotion = white ? 56+column : column;
+        const int pawn_moves = (7-r) - (r==1);// a pawn on its first rank steps two
+        const int king_moves = square_distance(enemy_king, promotion) - (original->white_move != white);
+        if(king_moves > pawn_moves)
+        part[PASSER_SQUARE] = W.passed_unstoppable;
+    }
+}
+
 int passed_pawn_eval(const BB* const original, const WEIGHTS& W)
 {
     const int OW = std::min(enemy_material_left_39ths(original,1)+enemy_material_left_39ths(original,0), 2*MATERIAL_MAX);
@@ -323,12 +376,16 @@ int passed_pawn_eval(const BB* const original, const WEIGHTS& W)
     for(int white=0;white<2;white++)
     {
         uint64_t passed = passed_pawns_of_colour(original, white);
-        int side = 0;
+        int side = 0, square = 0;
         while(passed)
         {
             const int i = find_and_delete_trailling_1(passed);
-            side += passed_pawn_bonus(white ? i/8 : 7-i/8, OW, W);
+            int part[PASSER_PARTS];
+            passed_pawn_parts(original, white, i, OW, W, part);
+            side += part[PASSER_BASE] + part[PASSER_PATH] + part[PASSER_KING] + part[PASSER_SUPPORT] + part[PASSER_ROOK];
+            square = std::max(square, part[PASSER_SQUARE]);
         }
+        side += square;
         score += white ? side : -side;
     }
     return score;

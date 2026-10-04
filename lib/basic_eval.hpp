@@ -30,6 +30,11 @@ int positional_eval(const BB* const original, const WEIGHTS& W = WEIGHTS_OG);
 // file (#84). The helpers are shared with gui/eval_split.hpp.
 uint64_t passed_pawns_of_colour(const BB* const original, bool white);
 int passed_pawn_bonus(int relative_rank, int OW, const WEIGHTS& W = WEIGHTS_OG);// cp for one passer, OW = both sides' material in 39ths, 0..78
+// One passer's score in parts, its own side's view (#90): the base bonus and the
+// endgame modifiers (OW as above). PASSER_SQUARE counts only for the side's best
+// passer, so passed_pawn_eval() takes its maximum rather than the sum.
+enum Passer_Part { PASSER_BASE, PASSER_PATH, PASSER_KING, PASSER_SUPPORT, PASSER_ROOK, PASSER_SQUARE, PASSER_PARTS };
+void passed_pawn_parts(const BB* const original, bool white, int sq, int OW, const WEIGHTS& W, int part[PASSER_PARTS]);
 int passed_pawn_eval(const BB* const original, const WEIGHTS& W = WEIGHTS_OG);// white's view
 
 int tempo_eval(const BB* const original, const WEIGHTS& W = WEIGHTS_OG);// the side to move's tempo, white's view (#70)

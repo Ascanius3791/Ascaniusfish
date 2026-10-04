@@ -135,6 +135,17 @@ pawn_supporting_value 15
 # passed_pawn_eval(): by relative rank, full with bare kings, half with all material
 passed_pawn_value 0 2 4 9 18 33 55 0
 
+# passed_pawn_eval()'s endgame modifiers (#90), by relative rank where 8 numbers, scaled to 0 with all material:
+# nothing ahead; per square (max 5) of the enemy king's / our king's distance to the stop square;
+# an own pawn beside or protecting it; our rook behind it (+), theirs (-); unstoppable by the
+# rule of the square (not scaled, the side's best passer only)
+passed_free_path 0 0 0 0 0 0 0 0
+passed_king_enemy 0 0 0 0 0 0 0 0
+passed_king_own 0 0 0 0 0 0 0 0
+passed_supported 0 0 0 0 0 0 0 0
+passed_rook_behind 0
+passed_unstoppable 0
+
 # basic_eval(): per attacked square
 mobility_value 5
 
