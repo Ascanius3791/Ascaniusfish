@@ -193,7 +193,13 @@ When editing engine internals, `lib/*.hpp` is the declaration/interface layer an
   So a search never blocks a request — page loads, `flip`, `undo` and mode switches are all
   answered while the engine thinks, and every iteration's depth/score is pushed over SSE.
   `gui_server.cpp` keeps up to **three** links per session (`Engine_Set`): one for Play and
-  Analyse, one per side for Watch, each started on the first search it is asked for. A link the
+  Analyse, one per side for Watch, each started on the first search it is asked for. **Pure
+  watch** (#91, the Watch panel's checkbox, `Session::watch_pure`, `pure` in `/api/watch`, on
+  by default) has the white link play both sides, so each search starts from the TT the other
+  side just filled (safe: engine settings are per session, only `Go_Limits` differ per side);
+  off is tournament mode, a process per side. `tools/match`/`tools/gui_match` always keep one
+  process per side. `tools/watch_tt` measures the difference
+  (`docs/measurements/watch_shared_tt_2026-10-04.md`). A link the
   session's mode cannot use is let go on the next tick, and so is every link of a session no
   page has been watching for 5 s — the self-play game is paused and the analysis toggle goes
   off first. Each process holds ~140 MB of tables, so leaving an idle pair around would eat the
@@ -320,7 +326,7 @@ misses checks instead of crashing.
 The mode selector shows Analyse / Play / Watch. Analyse is free play, FEN setup and a live
 `go infinite` analysis of whatever is on the board; Play is a full game against
 `./ascaniusfish_uci` (`engine=` picks a different binary); Watch is Ascaniusfish against itself,
-two processes with a depth or movetime each, started/paused/stepped from the panel and reviewable
+one shared process (Pure watch) or two, with a depth or movetime each, started/paused/stepped from the panel and reviewable
 in the move tree afterwards with every move's eval and reached depth. The eval bar beside the
 board and the Engine panel (the score, depth/nodes/nps and the best line in SAN) are the same two
 things in **all three** modes (#25), drawn from `eval`; the gear in the header opens the settings

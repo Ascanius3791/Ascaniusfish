@@ -53,6 +53,7 @@ tools/syzygy_reference
 tools/gaviota_reference
 tools/tb_suite
 tools/ptt_seed
+tools/watch_tt
 # Gaviota DTM tables (#77, 7 GB, kept in ~/gaviota) and the prober's build
 *.gtb.cp4
 third_party/gaviota/obj/
