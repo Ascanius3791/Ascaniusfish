@@ -162,17 +162,19 @@ so a set that becomes the default needs `make nne-retrain` (docs/NNE_RELABEL.md,
 ## Issues
 
 1. #83: this plan.
-2. **Every eval number is a weight in one versioned set**: move the constants into
+2. #85 **Every eval number is a weight in one versioned set**: move the constants into
    `WEIGHTS`, read black's tables rank-flipped, versioned weight files, `WeightsFile`.
    `bench` unchanged.
-3. **A balanced position set from engine games**: `tools/tune_data`, CCRL 40/15 to
+3. #86 **A balanced position set from 3000+ engine games**: `tools/tune_data`, CCRL 40/15 to
    train/valid/test with one third per result.
-4. **The tuner fits the weights to game results**: `tools/tune`; K, linear coefficients,
+4. #87 **The tuner fits the weights to game results**: `tools/tune`; K, linear coefficients,
    nonlinear terms, a new weight set with the next version.
-5. **Tuned weights beat WEIGHTS_OG in a match**: net off and net on (retrained). If they
+5. #88 **Tuned weights beat WEIGHTS_OG in a match**: net off and net on (retrained). If they
    win, they become the default.
-6. **The eval knows passed pawns, the bishop pair and open files**, each fitted by the
+6. #89 **The eval knows passed pawns, the bishop pair and open files**, each fitted by the
    tuner and kept only if a match shows a gain. Comes after 5.
+
+#85 and #86 are independent and can run in parallel; #87 needs both.
 
 #4 (colour-symmetric eval) predates this plan. `diagnostics/king_safety_test.cpp` already
 checks `basic_eval()` for mirror symmetry. Issue 2 keeps that test passing.
