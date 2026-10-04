@@ -23,6 +23,7 @@ class WEIGHTS
         int punishment_for_isolated_pawn;
         int punishment_for_trippled_pawn;//also get punishmeht for doubles pawns
         int pawn_supporting_value;
+        int passed_pawn_value[8];//by relative rank, full value in the endgame, half with all material on (#84)
         int value_of_king_safety_for_sorting;//this is a factor!//it should not be changed, untill time is relevant for depth of eval
             void change_values(int alpha, bool change_white_pawn_values, int probabiltiy_of_change =100);
 

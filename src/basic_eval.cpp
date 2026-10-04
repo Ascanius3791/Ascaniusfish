@@ -294,8 +294,6 @@ int positional_eval(const BB* const original, const WEIGHTS& W)
 
 }
 
-static const int PASSED_BONUS[8] = {0, 2, 4, 9, 18, 33, 55, 0};//by relative rank, full value in the endgame, half with all material on
-
 uint64_t passed_pawns_of_colour(const BB* const original, bool white)
 {
     const uint64_t pawns = original->Board[0+6*!white];
@@ -314,12 +312,12 @@ uint64_t passed_pawns_of_colour(const BB* const original, bool white)
     return passed;
 }
 
-int passed_pawn_bonus(int relative_rank, int OW)
+int passed_pawn_bonus(int relative_rank, int OW, const WEIGHTS& W)
 {
-    return PASSED_BONUS[relative_rank]*(OW + 2*(2*MATERIAL_MAX-OW))/(4*MATERIAL_MAX);
+    return W.passed_pawn_value[relative_rank]*(OW + 2*(2*MATERIAL_MAX-OW))/(4*MATERIAL_MAX);
 }
 
-int passed_pawn_eval(const BB* const original)
+int passed_pawn_eval(const BB* const original, const WEIGHTS& W)
 {
     const int OW = std::min(enemy_material_left_39ths(original,1)+enemy_material_left_39ths(original,0), 2*MATERIAL_MAX);
     int score = 0;
@@ -330,7 +328,7 @@ int passed_pawn_eval(const BB* const original)
         while(passed)
         {
             const int i = find_and_delete_trailling_1(passed);
-            side += passed_pawn_bonus(white ? i/8 : 7-i/8, OW);
+            side += passed_pawn_bonus(white ? i/8 : 7-i/8, OW, W);
         }
         score += white ? side : -side;
     }
@@ -361,7 +359,7 @@ int basic_eval(const BB*const original , const WEIGHTS& W)// return the evaluati
     //score=score*0.1; //games get fun, when they DO NOT CARE ABOUT MATERIAL
 
     score += positional_eval(original,W);
-    score += passed_pawn_eval(original);
+    score += passed_pawn_eval(original,W);
 
     
     score+= 5*(count(original->get_attacked_squares(1))-count(original->get_attacked_squares(0)));

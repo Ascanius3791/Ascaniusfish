@@ -433,6 +433,10 @@ WEIGHTS::WEIGHTS()
     punishment_for_isolated_pawn = 10;
     punishment_for_trippled_pawn = 30;//also get punishmeht for doubles pawns
     pawn_supporting_value = 15;
+    {
+        const int passed[8] = {0, 2, 4, 9, 18, 33, 55, 0};
+        for(int r=0;r<8;r++) passed_pawn_value[r] = passed[r];
+    }
     value_of_king_safety_for_sorting = 50;//this is a factor!//it should not be changed, untill
 
     //halve the pawn values
