@@ -1666,13 +1666,14 @@ class Session
             "opening and endgame tables blended by the phase below",
             "attacks on each king's ring and its pawn shelter (src/king_safety.cpp)",
             "doubled, tripled and isolated pawns, pawns supporting their own pieces",
+            "a bonus per passed pawn by its rank, larger with less material on",
             "5 per square the side attacks (an inline line in basic_eval)",
             "what each piece attacks and defends",
             "the side to move's tempo, more with more material on the board",
         };
         // Which rows have sides of their own, and whether white − black is the total.
-        static const bool sides[EVAL_ROWS]      = { true,  false, true, true, true, false, true };
-        static const bool difference[EVAL_ROWS] = { false, false, true, true, true, false, true };
+        static const bool sides[EVAL_ROWS]      = { true,  false, true, true, true, true, false, true };
+        static const bool difference[EVAL_ROWS] = { false, false, true, true, true, true, false, true };
         const Eval_Breakdown b = eval_breakdown(&pos, W);
         o.obj();
         o.key("rows").arr();
