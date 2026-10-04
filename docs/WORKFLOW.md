@@ -56,6 +56,7 @@ Co-Authored-By: ...
 ## Measuring strength
 
 - **The standard test is an SPRT**: logistic Elo bounds [0, +10], α = β = 0.05 (LLR ±2.94), on the pentanomial game-pair statistics of `tools/match` (`sprt=0,10`, #92). A change is stronger once H1 is accepted; fixed 200–400 game matches (±30–40 Elo) no longer decide. A faster proxy may pre-screen, never replace it.
+- **Every test has a wall-time budget**, 10 min unless Ascanius approves more (`time=`). No decision within it means the change is dropped, or left to Ascanius's judgement with the LLR and Elo ± CI reached.
 - **No Stockfish evaluations.** We don't clone Stockfish: no engine's eval, best move or MultiPV (Lichess cloud evals included) as a label, tuning target, test reference or filter. Finished games and their results are fine (CCRL, Lichess dumps, matches against Stockfish for a rating).
 
 ## Issue worktrees
