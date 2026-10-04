@@ -341,8 +341,9 @@ inline Eval_Split split_pawn_structure(const BB* const original, const WEIGHTS& 
     return s;
 }
 
-// passed_pawn_eval() (#84): each passed pawn's passed_pawn_bonus() by its
-// relative rank, half with all material on, full with bare kings.
+// passed_pawn_eval() (#84, #90): each passed pawn's passed_pawn_parts(), one
+// part per modifier. The unstoppable bonus counts once per side, for its best
+// passer, as there.
 inline Eval_Split split_passed(const BB* const original, const WEIGHTS& W)
 {
     Eval_Split s;
@@ -354,18 +355,35 @@ inline Eval_Split split_passed(const BB* const original, const WEIGHTS& W)
     std::string by_rank;
     for(int r=1;r<7;r++)
     by_rank += (r>1 ? " " : "") + std::to_string(passed_pawn_bonus(r, phase, W));
-    Eval_Part& p = s.add("Passed pawns", "no enemy pawn ahead on its own or a neighbouring file; ranks 2-7 give "
-                         + by_rank + " cp at material " + std::to_string(phase) + "/78");
+    const std::string scaled = "; endgame value, scaled to 0 with all material on (now "
+                             + std::to_string(100*(2*MATERIAL_MAX-phase)/(2*MATERIAL_MAX)) + "%)";
+    Eval_Part* part[PASSER_PARTS];
+    part[PASSER_BASE] = &s.add("Passed pawns", "no enemy pawn ahead on its own or a neighbouring file; ranks 2-7 give "
+                               + by_rank + " cp at material " + std::to_string(phase) + "/78");
+    part[PASSER_PATH] = &s.add("Free path", "no piece on any square ahead of the passer" + scaled);
+    part[PASSER_KING] = &s.add("King distance", "the enemy king's distance to the stop square (up to 5) against ours, by rank" + scaled);
+    part[PASSER_SUPPORT] = &s.add("Supported", "an own pawn beside the passer or protecting it" + scaled);
+    part[PASSER_ROOK] = &s.add("Rook behind", "the first piece behind the passer on its file is a rook: ours +, theirs -" + scaled);
+    part[PASSER_SQUARE] = &s.add("Unstoppable", "rule of the square: path free, the enemy has king and pawns only and its king "
+                                 "cannot reach the promotion square in time; the side's best passer only");
     for(int white=0;white<2;white++)
     {
         uint64_t passed = passed_pawns_of_colour(original, white);
         while(passed)
         {
             const int i = find_and_delete_trailling_1(passed);
-            p.count[white]++;
-            p.raw[white] += passed_pawn_bonus(white ? i/8 : 7-i/8, phase, W);
-            if(p.n_hits[white] < Eval_Part::MAX_HITS)
-            p.hits[white][p.n_hits[white]++] = (short)(i*64 + i);
+            int value[PASSER_PARTS];
+            passed_pawn_parts(original, white, i, phase, W, value);
+            for(int k=0;k<PASSER_PARTS;k++)
+            {
+                Eval_Part& p = *part[k];
+                if(value[k]==0 && k!=PASSER_BASE)
+                continue;
+                p.count[white]++;
+                p.raw[white] = k==PASSER_SQUARE ? std::max(p.raw[white], value[k]) : p.raw[white] + value[k];
+                if(p.n_hits[white] < Eval_Part::MAX_HITS)
+                p.hits[white][p.n_hits[white]++] = (short)(i*64 + i);
+            }
         }
     }
     return s;
