@@ -263,14 +263,17 @@ class Session
     bool analysis_older = false;
     long long analysis_stored_at = 0;
 
-    // Watch mode. Ascaniusfish against itself, one engine process per side so
-    // the two have their own transposition tables. `running` plays the game on
-    // move after move; `step` is one move and then a pause. Pausing clears
-    // `running` without touching the search that is out: the move being thought
-    // about is still played, which is what "after the current move" means.
+    // Watch mode. Ascaniusfish against itself. `watch_pure` (Pure watch, #91,
+    // on by default) has one engine process play both sides, sharing its
+    // transposition table; off is tournament mode, one process per side, each
+    // with its own table. `running` plays the game on move after move; `step`
+    // is one move and then a pause. Pausing clears `running` without touching
+    // the search that is out: the move being thought about is still played,
+    // which is what "after the current move" means.
     Go_Limits watch_limits[2];   // [0] white, [1] black
     bool watch_running = false;
     bool watch_step = false;
+    bool watch_pure = true;
 
     // The Clock/Fixed-depth switch and the clock it is set to, one pair per
     // mode (Play's applies to both colours from a preset, or per colour from
@@ -1242,6 +1245,7 @@ class Session
         o.key("watch").obj();
         o.key("running").boolean(watch_running);
         o.key("stepping").boolean(watch_step);
+        o.key("pure").boolean(watch_pure);
         o.key("thinking").boolean(watching());
         o.key("mover").str(white_to_move() ? "white" : "black");
         o.key("atTip").boolean(tree.at_tip());

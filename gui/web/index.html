@@ -236,6 +236,11 @@
       <div class="controls">
         <button id="watch-run"></button>
         <button id="watch-step" title="Play one move, then pause">Step</button>
+        <!-- Pure watch (#91): one engine process, so one TT, for both sides. -->
+        <label class="pure-watch">
+          <input type="checkbox" id="watch-pure-box"><span>Pure watch</span>
+          <span class="info" title="on: the two sides share one TT · off: tournament mode">i</span>
+        </label>
       </div>
 
       <p id="watch-setting-summary" class="setting-summary" hidden>

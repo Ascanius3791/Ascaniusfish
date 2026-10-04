@@ -555,6 +555,11 @@ select:focus, input:focus { outline: none; border-color: var(--accent); }
 .ptt-use { display: inline-flex; align-items: center; gap: 3px; font-size: 12px; color: var(--muted); cursor: pointer; }
 .ptt-use[hidden] { display: none; }
 .ptt-use input { margin: 0; accent-color: var(--accent); }
+.pure-watch { display: inline-flex; align-items: center; gap: 4px; margin-left: 4px; font-size: 13px; color: var(--muted); cursor: pointer; }
+.pure-watch input { margin: 0; accent-color: var(--accent); }
+/* An (i) whose title is the explanation. */
+.info { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px;
+  border: 1px solid var(--muted); border-radius: 50%; font: italic 600 10px/1 serif; cursor: help; }
 .mpv-count { min-width: 3ch; text-align: center; color: var(--text); font-variant-numeric: tabular-nums; }
 
 /* One row per line, its score first. The box holds the rows asked for, up to

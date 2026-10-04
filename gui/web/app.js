@@ -590,6 +590,8 @@ el('watch-run').addEventListener('click', () => {
   if (state) command('/api/watch', { action: state.watch.running ? 'pause' : 'start' });
 });
 el('watch-step').addEventListener('click', () => command('/api/watch', { action: 'step' }));
+el('watch-pure-box').addEventListener('change', event =>
+  command('/api/watch', { pure: event.target.checked }));
 
 el('analysis-toggle').addEventListener('click', () => {
   if (state) command('/api/analyse', { on: !state.analysis.on });
@@ -1045,6 +1047,7 @@ function renderWatchPanel(s) {
   // One move and a pause is a fixed-depth thing: on a clock the time would run
   // on through the pause anyway.
   el('watch-step').hidden = w.clockOn;
+  el('watch-pure-box').checked = w.pure;
 
   el('watch-state').textContent = watchLine(s);
   el('watch-state').classList.toggle('bad', !!w.error);

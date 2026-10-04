@@ -34,8 +34,9 @@
 // (gui/engine_link.hpp): the search runs on a worker thread, so a request never
 // waits for it and the SSE stream carries the thinking indicator, the engine's
 // move and — in Analyse mode — every iteration of a "go infinite" search on the
-// position now on the board. Watch mode drives two of those processes, one per
-// side, and plays them against each other; when the last page watching a
+// position now on the board. Watch mode drives one of those processes for both
+// sides (Pure watch, #91) or, in tournament mode, two, one per side, and plays
+// them against each other; when the last page watching a
 // session goes away its game is paused and its engines are let go, so a closed
 // tab never leaves two searches running for nobody.
 #include "http_server.hpp"
@@ -302,12 +303,18 @@ static void stop_tunnel()
     unlink(tunnel_log_path.c_str());
 }
 
-// A session's engine processes. Play and Analyse share one; Watch needs one
-// per side, so the two self-play engines keep their own transposition tables
-// and neither of them is also the analysis engine. Each starts on the first
-// search it is asked for, so a session that never watches never forks the two
-// extra processes.
+// A session's engine processes. Play and Analyse share one; Watch has one per
+// side in tournament mode, so the two self-play engines keep their own
+// transposition tables, and in Pure watch (#91) SLOT_WHITE plays both sides,
+// so each search starts from the table the other side's just filled. Neither
+// is also the analysis engine. Each starts on the first search it is asked
+// for, so a session that never watches never forks the extra processes.
 enum { SLOT_SOLO = 0, SLOT_WHITE = 1, SLOT_BLACK = 2, N_SLOTS = 3 };
+
+static int watch_slot(const Session& session)
+{
+    return session.watch_pure || session.white_to_move() ? SLOT_WHITE : SLOT_BLACK;
+}
 
 struct Engine_Set
 {
@@ -410,8 +417,7 @@ static bool maybe_start_search(Session& session)
                      : Search_Kind::NONE;
     if(kind==Search_Kind::NONE)
     return false;
-    int slot = kind!=Search_Kind::WATCH ? SLOT_SOLO
-             : session.white_to_move()  ? SLOT_WHITE : SLOT_BLACK;
+    int slot = kind==Search_Kind::WATCH ? watch_slot(session) : SLOT_SOLO;
     Go_Limits limits = kind==Search_Kind::ANALYSIS ? Go_Limits::analysis()
                      : session.clocked_now()       ? session.clock_go_limits(now_ms())
                      : kind==Search_Kind::PLAY     ? session.limits
@@ -441,7 +447,7 @@ static bool maybe_start_search(Session& session)
     if(kind==Search_Kind::ANALYSIS ? session.analysis_lines_now()==1 : true)
     request.hint = session.ptt_hint();
     // A "ucinewgame" only when this engine has not seen this game before: in
-    // Watch mode each side's process meets the game once, and in Analyse mode
+    // Watch mode each process meets the game once, and in Analyse mode
     // moving around a game is not a reason to throw its table away.
     request.new_game = set.slot_game[slot]!=session.game_serial();
     long long token = link_of(set, slot).start_search(request);
@@ -536,7 +542,8 @@ constexpr long long ENGINE_IDLE_MS = 5000;
 static bool slot_wanted(const Session& session, int slot)
 {
     if(session.mode==Mode::WATCH)      // the solo engine only to analyse a paused game
-    return slot==SLOT_WHITE || slot==SLOT_BLACK || (slot==SLOT_SOLO && session.analysis_on);
+    return slot==SLOT_WHITE || (slot==SLOT_BLACK && !session.watch_pure)
+        || (slot==SLOT_SOLO && session.analysis_on);
     return slot==SLOT_SOLO;
 }
 
@@ -1088,6 +1095,15 @@ static Response handle_post_authed(const Request& req)
         {
             abort_search(session);
             session.start_watch();
+        }
+        // Pure watch (#91): one process for both sides, or one each. Any time,
+        // even mid-game: it decides only which process the next move asks.
+        auto pure = body.find("pure");
+        if(pure!=body.end())
+        {
+            if(pure->second!="true" && pure->second!="false")
+            return Response::json(json::error("pure must be true or false"), 400);
+            session.watch_pure = pure->second=="true";
         }
         auto action = body.find("action");
         if(action!=body.end())
