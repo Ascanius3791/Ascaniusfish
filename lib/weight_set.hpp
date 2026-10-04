@@ -3,12 +3,13 @@
 #define WEIGHT_SET_HPP
 #include "Weights.hpp"
 #include <string>
-#include "weights_default.hpp"  // WEIGHTS_DEFAULT_TEXT: the default set, generated from weights/w1.txt
+#include "weights_default.hpp"  // WEIGHTS_DEFAULT_TEXT: the default set, generated from WEIGHTS_DEFAULT's file
 
 // A weight set (#85): every number basic_eval() uses, as a text file that names
-// its version. weights/w1.txt is set 1, WEIGHTS_OG's values; the default set is
-// compiled in from lib/weights_default.hpp, which the Makefile generates from
-// it, so a new default is a new file and not an edit of src/Weights.cpp. UCI
+// its version. weights/w1.txt is set 1; the default set (WEIGHTS_OG's values, set 4
+// since #90) is compiled in from lib/weights_default.hpp, which the Makefile
+// generates from the file WEIGHTS_DEFAULT names, so a new default is a new file
+// and not an edit of src/Weights.cpp. UCI
 // `WeightsFile` loads another one, and the engine reports "weights N".
 //
 // The format is "key values...", whitespace-separated, '#' to the end of a line

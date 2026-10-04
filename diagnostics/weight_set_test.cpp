@@ -1,8 +1,8 @@
 // OWNERSHIP=Claude
 // Weight sets (#85, lib/weight_set.hpp). Checks:
-//  1. weights/w1.txt reads back to WEIGHTS_OG, every field, and
-//     write_weight_set(WEIGHTS_OG) is the file byte for byte;
-//  2. the compiled-in default (lib/weights_default.hpp) is that file, not a stale copy;
+//  1. weights/w1.txt reads, every field, and writing what it read gives the file byte for byte;
+//  2. the compiled-in default (lib/weights_default.hpp) is the file WEIGHTS_DEFAULT names, not a
+//     stale copy, and WEIGHTS_OG is that set, every field;
 //  3. a table's numbers go to the squares the format says (a8 first, h1 last);
 //  4. a broken file is refused, naming what is wrong, and leaves W as it was;
 //  5. with every piece-square table scrambled (no longer rank-symmetric),
@@ -101,11 +101,22 @@ static void round_trip(const std::string& file)
     std::string error;
     const bool ok = load_weight_set("weights/w1.txt", W, info, error);
     expect(ok, "weights/w1.txt reads" + (ok ? std::string() : ": " + error));
-    expect(same(W, WEIGHTS_OG), "weights/w1.txt is WEIGHTS_OG, every field (" + std::to_string(n) + " keys)");
+    bool all = true;
+    for(int f=0;f<n;f++)
+    for(int k=0;k<fields[f].count;k++)
+    all = all && fields[f].values[k] != 12345;
+    expect(all, "weights/w1.txt sets every field (" + std::to_string(n) + " keys)");
     expect(W.version==1 && info.parent==0, "it is set 1, without a parent");
-    expect(write_weight_set(WEIGHTS_OG, Weight_Set_Info()) == file, "write_weight_set(WEIGHTS_OG) is weights/w1.txt byte for byte");
-    expect(std::string(WEIGHTS_DEFAULT_TEXT) == "\n" + file && std::string(WEIGHTS_DEFAULT_FILE) == "weights/w1.txt",
-           "lib/weights_default.hpp holds weights/w1.txt (else: make lib/weights_default.hpp)");
+    expect(write_weight_set(W, Weight_Set_Info()) == file, "writing what weights/w1.txt read gives it byte for byte");
+
+    // the default: whatever set WEIGHTS_DEFAULT in the Makefile names
+    const std::string name = WEIGHTS_DEFAULT_FILE;
+    expect(std::string(WEIGHTS_DEFAULT_TEXT) == "\n" + read_file(name),
+           "lib/weights_default.hpp holds " + name + " (else: make lib/weights_default.hpp)");
+    WEIGHTS D = WEIGHTS_OG;
+    D.version = 0;
+    const bool read = load_weight_set(name, D, info, error);
+    expect(read && same(D, WEIGHTS_OG), name + " is WEIGHTS_OG, every field");
 }
 
 static void squares(const std::string& file)
