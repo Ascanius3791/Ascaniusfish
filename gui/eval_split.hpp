@@ -342,7 +342,7 @@ inline Eval_Split split_pawn_structure(const BB* const original, const WEIGHTS& 
 
 // passed_pawn_eval() (#84): each passed pawn's passed_pawn_bonus() by its
 // relative rank, half with all material on, full with bare kings.
-inline Eval_Split split_passed(const BB* const original)
+inline Eval_Split split_passed(const BB* const original, const WEIGHTS& W)
 {
     Eval_Split s;
     int phase = 0;
@@ -352,7 +352,7 @@ inline Eval_Split split_passed(const BB* const original)
     phase = std::min(phase, 2*MATERIAL_MAX);
     std::string by_rank;
     for(int r=1;r<7;r++)
-    by_rank += (r>1 ? " " : "") + std::to_string(passed_pawn_bonus(r, phase));
+    by_rank += (r>1 ? " " : "") + std::to_string(passed_pawn_bonus(r, phase, W));
     Eval_Part& p = s.add("Passed pawns", "no enemy pawn ahead on its own or a neighbouring file; ranks 2-7 give "
                          + by_rank + " cp at material " + std::to_string(phase) + "/78");
     for(int white=0;white<2;white++)
@@ -362,7 +362,7 @@ inline Eval_Split split_passed(const BB* const original)
         {
             const int i = find_and_delete_trailling_1(passed);
             p.count[white]++;
-            p.raw[white] += passed_pawn_bonus(white ? i/8 : 7-i/8, phase);
+            p.raw[white] += passed_pawn_bonus(white ? i/8 : 7-i/8, phase, W);
             if(p.n_hits[white] < Eval_Part::MAX_HITS)
             p.hits[white][p.n_hits[white]++] = (short)(i*64 + i);
         }
@@ -447,7 +447,7 @@ inline Eval_Breakdown eval_breakdown(const BB* const pos, const WEIGHTS& W)
     set(1, "Piece tables",     "piecetable()",          true,  piecetable(pos, W),          split_piecetable(pos, W));
     set(2, "King safety",      "king_safety_eval()",    true,  king_safety_eval(pos),       split_king_safety(pos));
     set(3, "Pawn structure",   "positional_eval()",     true,  positional_eval(pos, W),     split_pawn_structure(pos, W));
-    set(4, "Passed pawns",     "passed_pawn_eval()",    true,  passed_pawn_eval(pos),       split_passed(pos));
+    set(4, "Passed pawns",     "passed_pawn_eval()",    true,  passed_pawn_eval(pos, W),    split_passed(pos, W));
     set(5, "Attacked squares", "basic_eval()'s 5*(attacked squares) line", false, 0,     split_attacked(pos));
     set(6, "Piece activity",   "piece_activity_eval()", true,  piece_activity_eval(pos, W), split_piece_activity(pos));
     set(7, "Tempo",            "tempo_eval()",          true,  tempo_eval(pos),             split_tempo(pos));
