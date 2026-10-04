@@ -26,6 +26,12 @@ int pawn_struckture_eval_of_colour(const BB* const original, bool white, const W
 
 int positional_eval(const BB* const original, const WEIGHTS& W = WEIGHTS_OG);
 
+// A passed pawn has no enemy pawn ahead of it on its own or a neighbouring
+// file (#84). The helpers are shared with gui/eval_split.hpp.
+uint64_t passed_pawns_of_colour(const BB* const original, bool white);
+int passed_pawn_bonus(int relative_rank, int OW);// cp for one passer, OW = both sides' material in 39ths, 0..78
+int passed_pawn_eval(const BB* const original);// white's view
+
 int tempo_eval(const BB* const original);// the side to move's tempo, white's view (#70)
 
 int basic_eval(const BB*const original , const WEIGHTS& W = WEIGHTS_OG);// return the evaluation in centipawns

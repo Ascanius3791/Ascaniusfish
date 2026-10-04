@@ -294,6 +294,49 @@ int positional_eval(const BB* const original, const WEIGHTS& W)
 
 }
 
+static const int PASSED_BONUS[8] = {0, 2, 4, 9, 18, 33, 55, 0};//by relative rank, full value in the endgame, half with all material on
+
+uint64_t passed_pawns_of_colour(const BB* const original, bool white)
+{
+    const uint64_t pawns = original->Board[0+6*!white];
+    const uint64_t enemy = original->Board[0+6*white];
+    uint64_t virtual_pawns = pawns, passed = 0;
+    while(virtual_pawns)
+    {
+        const int i = find_and_delete_trailling_1(virtual_pawns);
+        const int column = i%8, rank = i/8;
+        uint64_t files = mask_column[column];
+        if(column>0) files |= mask_column[column-1];
+        if(column<7) files |= mask_column[column+1];
+        const uint64_t ahead = white ? (~0ULL << (8*(rank+1))) : ((1ULL << (8*rank))-1);// rank 7 white: shift 64 is UB, but a white pawn never stands there
+        if(!(enemy & files & ahead)) passed |= 1ULL<<i;
+    }
+    return passed;
+}
+
+int passed_pawn_bonus(int relative_rank, int OW)
+{
+    return PASSED_BONUS[relative_rank]*(OW + 2*(2*MATERIAL_MAX-OW))/(4*MATERIAL_MAX);
+}
+
+int passed_pawn_eval(const BB* const original)
+{
+    const int OW = std::min(enemy_material_left_39ths(original,1)+enemy_material_left_39ths(original,0), 2*MATERIAL_MAX);
+    int score = 0;
+    for(int white=0;white<2;white++)
+    {
+        uint64_t passed = passed_pawns_of_colour(original, white);
+        int side = 0;
+        while(passed)
+        {
+            const int i = find_and_delete_trailling_1(passed);
+            side += passed_pawn_bonus(white ? i/8 : 7-i/8, OW);
+        }
+        score += white ? side : -side;
+    }
+    return score;
+}
+
 // The side to move is worth a tempo (#70). Without it the eval gave the side
 // that just moved too much: tools/tempo_swing measures that as half the odd/even
 // swing of the root score (net off), from TEMPO_ENDGAME with bare kings
@@ -318,7 +361,8 @@ int basic_eval(const BB*const original , const WEIGHTS& W)// return the evaluati
     //score=score*0.1; //games get fun, when they DO NOT CARE ABOUT MATERIAL
 
     score += positional_eval(original,W);
-    
+    score += passed_pawn_eval(original);
+
     
     score+= 5*(count(original->get_attacked_squares(1))-count(original->get_attacked_squares(0)));
     
