@@ -113,6 +113,19 @@ piece activity + tempo.
 | `piece_activity_eval()` | ~17 literals (30, 15, 20, 40, …) | **no** | linear |
 | `tempo_eval()` | `TEMPO_OPENING = 24`, `TEMPO_ENDGAME = 9` | **no** | linear |
 
+*That was the eval at #83. Since #90 (eval version 4) every term above is in the weights,
+and all but king danger are linear:*
+- *One game phase, `game_phase()`, blends every opening/endgame pair: knight and bishop 1,
+  rook 2, queen 4, both sides, pawns not counted, 24 = all pieces on.*
+- *Material is `piece_value` (opening) and `piece_value_endgame` (no √).*
+- *The mobility line and the activity "square" weights became per-piece mobility tables
+  (`mobility_{knight,bishop,rook,queen}_{opening,endgame}`, by the attacked squares no own
+  piece stands on) inside `piece_activity_eval()`, whose `/2` is gone.*
+- *The queen has its own activity weights.*
+- *Passers have `passed_pawn_value_opening` beside the endgame `passed_pawn_value`.*
+- *`pawn_supporting_value` is gone (`activity_pawn_defend` counts the same thing).*
+- *The king shelter is scaled by the enemy's pieces in phase units.*
+
 **Rank-folded piece-square tables.** Black's non-pawn pieces read white's table *at the same
 square, not the rank-flipped one* (`piecetable()`, also `gui/eval_split.hpp` and
 `src/plan_eval.cpp`). The eval only stays colour-symmetric because every non-pawn table is

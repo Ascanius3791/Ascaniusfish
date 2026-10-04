@@ -154,7 +154,7 @@ static void broken(const std::string& file)
         {replaced(file, "version 1\n", ""), "no version", "no version"},
         {replaced(file, "version 1\n", "version 0\n"), "version 0", "version is not a number >= 1"},
         {replaced(file, "ks_danger_div 5000", "ks_danger_div 0"), "a zero divisor", "must be > 0"},
-        {replaced(file, "piece_value 100", "piece_value 99999999999"), "a number out of range", "'piece_value' needs 6 numbers"},
+        {replaced(file, "piece_value 140", "piece_value 99999999999"), "a number out of range", "'piece_value' needs 6 numbers"},
         {file.substr(0, file.find("piece_table_value_endgame king") + 60), "a file cut inside a table", "needs 64 numbers"},
     };
     for(const Case& c : cases)

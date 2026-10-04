@@ -1663,18 +1663,17 @@ class Session
     {
         const WEIGHTS& W = WEIGHTS_OG;
         static const char* const info[EVAL_ROWS] = {
-            "piece values; the total is white − black scaled by the material left",
+            "piece values, opening and endgame blended by the phase below",
             "opening and endgame tables blended by the phase below",
             "attacks on each king's ring and its pawn shelter (src/king_safety.cpp)",
-            "doubled, tripled and isolated pawns, pawns supporting their own pieces",
-            "a bonus per passed pawn by its rank, larger with less material on",
-            "5 per square the side attacks (an inline line in basic_eval)",
-            "what each piece attacks and defends",
-            "the side to move's tempo, more with more material on the board",
+            "doubled, tripled and isolated pawns",
+            "a bonus per passed pawn by its rank, and what makes it more or less stoppable",
+            "what each piece attacks and defends, and its mobility",
+            "the side to move's tempo, more with more pieces on the board",
         };
         // Which rows have sides of their own, and whether white − black is the total.
-        static const bool sides[EVAL_ROWS]      = { true,  false, true, true, true, true, false, true };
-        static const bool difference[EVAL_ROWS] = { false, false, true, true, true, true, false, true };
+        static const bool sides[EVAL_ROWS]      = { true,  false, true, true, true, false, true };
+        static const bool difference[EVAL_ROWS] = { false, false, true, true, true, false, true };
         const Eval_Breakdown b = eval_breakdown(&pos, W);
         o.obj();
         o.key("rows").arr();
@@ -1786,12 +1785,11 @@ class Session
         else
         o.null();
 
-        // piecetable()'s phase: each side's tables are blended by the *enemy's*
-        // material left, in 39ths (39 = all of it: opening table only).
+        // game_phase(), which blends every opening and endgame weight
+        // (PHASE_MAX = all pieces on: opening only).
         o.key("phase").obj();
-        o.key("white").num((int)std::lround(enemy_material_left_percent(&pos, true)*MATERIAL_MAX));
-        o.key("black").num((int)std::lround(enemy_material_left_percent(&pos, false)*MATERIAL_MAX));
-        o.key("max").num(MATERIAL_MAX);
+        o.key("value").num(game_phase(&pos));
+        o.key("max").num(PHASE_MAX);
         o.end_obj();
         o.end_obj();
     }

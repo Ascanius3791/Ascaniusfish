@@ -15,16 +15,17 @@ class WEIGHTS
         int check_value;
         int piece_table_value_opening[6][64];//white's view; black reads them rank-flipped (sq^56)
         int piece_table_value_endgame[6][64];
-        int piece_value[6];//general value of pieces(for materialistic eval)
+        int piece_value[6];//general value of pieces(for materialistic eval); in material_eval() the value with all pieces on (game_phase() 24)
+        int piece_value_endgame[6];//with no pieces on (game_phase() 0); material_eval() blends the two
         int offensive_value[6];//attack value of pieces(for king saefty)
         int defensive_value[6];//defence value of pieces(for king safety)
         int king_safety_value;
         int punishment_for_double_pawn;
         int punishment_for_isolated_pawn;
         int punishment_for_trippled_pawn;//also get punishmeht for doubles pawns
-        int pawn_supporting_value;
-        int passed_pawn_value[8];//by relative rank, full value in the endgame, half with all material on (#84)
-        // the passer's endgame modifiers (#90), by relative rank where an array, scaled to 0 with all material on
+        int passed_pawn_value[8];//by relative rank, with no pieces on (#84)
+        int passed_pawn_value_opening[8];//with all pieces on; passed_pawn_bonus() blends the two by game_phase()
+        // the passer's endgame modifiers (#90), by relative rank where an array, scaled to 0 with all pieces on
         int passed_free_path[8];//no piece on the squares ahead of it
         int passed_king_enemy[8];//per square of the enemy king's distance to its stop square (at most 5)
         int passed_king_own[8];//lost per square of our king's distance to its stop square (at most 5)
@@ -35,15 +36,20 @@ class WEIGHTS
         // #85: the rest of what basic_eval() uses. A weight set (lib/weight_set.hpp) holds these
         // and the fields above that basic_eval() reads.
         int version;//of the weight set these came from
-        int mobility_value;//per attacked square
-        int tempo_opening, tempo_endgame;//the side to move's tempo, with all and with no material
-        // piece_activity_eval(): added for the piece's owner per piece (or square) it hits;
-        // "bishop" is every diagonal, queens included, and "rook" every line
+        int tempo_opening, tempo_endgame;//the side to move's tempo, with all and with no pieces
+        // piece_activity_eval(): added for the piece's owner per piece it hits
         int activity_pawn_attack, activity_pawn_defend, activity_pawn_blocked, activity_pawn_push_attack, activity_pawn_push_defend;
-        int activity_bishop_defend, activity_bishop_attack, activity_bishop_square;
-        int activity_rook_defend, activity_rook_attack, activity_rook_square;
-        int activity_knight_defend, activity_knight_attack, activity_knight_square;
+        int activity_bishop_defend, activity_bishop_attack;
+        int activity_rook_defend, activity_rook_attack;
+        int activity_queen_defend, activity_queen_attack;
+        int activity_knight_defend, activity_knight_attack;
         int activity_king_defend, activity_king_attack;
+        // piece_activity_eval()'s mobility: per piece, by the number of squares it attacks that
+        // no own piece stands on, with all pieces on and with none (blended by game_phase())
+        int mobility_knight_opening[9], mobility_knight_endgame[9];
+        int mobility_bishop_opening[14], mobility_bishop_endgame[14];
+        int mobility_rook_opening[15], mobility_rook_endgame[15];
+        int mobility_queen_opening[28], mobility_queen_endgame[28];
         // king_safety_eval() (src/king_safety.cpp, #42)
         int ks_attacker_weight[6];
         int ks_min_attackers;

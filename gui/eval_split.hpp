@@ -16,8 +16,8 @@
 //
 // Every part is in each side's own view (positive = good for that side), like
 // the panel's other rows, and kept *unscaled*: the original divides its whole
-// sum once (by MATERIAL_MAX = 39 for the tables, by 2 for activity), so a part's
-// cp value is raw/scale and only the sum of all parts truncates to the total.
+// sum once (by PHASE_MAX = 24 for material and the tables), so a part's cp
+// value is raw/scale and only the sum of all parts truncates to the total.
 #ifndef GUI_EVAL_SPLIT_HPP
 #define GUI_EVAL_SPLIT_HPP
 
@@ -86,12 +86,12 @@ struct Eval_Part
 
 struct Eval_Split
 {
-    static const int MAX_PARTS = 16;
+    static const int MAX_PARTS = 24;
     Eval_Part parts[MAX_PARTS];
     int n = 0;
     int scale = 1;
-    // A term that is not a plain sum of its parts (material: the difference
-    // is scaled by what is left) sets its total from the parts itself.
+    // A term that is not a plain sum of its parts (activity: whole role terms
+    // plus the mobility, divided once) sets its total from the parts itself.
     bool has_fixed = false;
     int fixed = 0;
 
@@ -113,19 +113,16 @@ struct Eval_Split
     }
 };
 
-// piecetable(): per piece type, each side's (opening*OW + endgame*EW) in 39ths.
-// count = the number of such pieces; the info carries the opening and endgame
-// halves. Integer arithmetic throughout, so grouping by piece type is exact.
+// piecetable(): per piece type, each side's (opening*phase + endgame*(24-phase))
+// in PHASE_MAXths. count = the number of such pieces; the info carries the
+// opening and endgame halves. Integer arithmetic throughout, so grouping by
+// piece type is exact.
 inline Eval_Split split_piecetable(const BB* const original, const WEIGHTS& W)
 {
     static const char* names[6] = {"Pawns", "Rooks", "Knights", "Bishops", "Queens", "King"};
     Eval_Split s;
-    s.scale = MATERIAL_MAX;
-    int OW[2], EW[2];
-    OW[1] = enemy_material_left_39ths(original, 1);
-    OW[0] = enemy_material_left_39ths(original, 0);
-    EW[0] = MATERIAL_MAX - OW[0];
-    EW[1] = MATERIAL_MAX - OW[1];
+    s.scale = PHASE_MAX;
+    const int phase = game_phase(original);
     for(int type=0;type<6;type++)
     {
         int opening[2] = {0, 0}, endgame[2] = {0, 0};
@@ -137,13 +134,13 @@ inline Eval_Split split_piecetable(const BB* const original, const WEIGHTS& W)
             while(bb)
             {
                 int i = find_and_delete_trailling_1(bb);
-                opening[white] += W.piece_table_value_opening[type][i^flip]*OW[white];
-                endgame[white] += W.piece_table_value_endgame[type][i^flip]*EW[white];
+                opening[white] += W.piece_table_value_opening[type][i^flip]*phase;
+                endgame[white] += W.piece_table_value_endgame[type][i^flip]*(PHASE_MAX-phase);
                 p.count[white]++;
             }
             p.raw[white] = opening[white] + endgame[white];
         }
-        auto cp = [](int raw) { return std::to_string((raw + (raw<0 ? -MATERIAL_MAX/2 : MATERIAL_MAX/2))/MATERIAL_MAX); };
+        auto cp = [](int raw) { return std::to_string((raw + (raw<0 ? -PHASE_MAX/2 : PHASE_MAX/2))/PHASE_MAX); };
         p.info = "opening + endgame table, cp: white " + cp(opening[1]) + " + " + cp(endgame[1])
                + " (" + std::to_string(p.count[1]) + " pieces), black " + cp(opening[0]) + " + " + cp(endgame[0])
                + " (" + std::to_string(p.count[0]) + ")";
@@ -151,35 +148,45 @@ inline Eval_Split split_piecetable(const BB* const original, const WEIGHTS& W)
     return s;
 }
 
-// piece_activity_eval(): one part per weight. "Own"/"enemy" are pieces of that
-// colour on a square the piece hits (occupancy-aware for sliders); queens count
-// both as a bishop and as a rook, as in the original. The names carry the "/2"
-// the original divides its whole sum by, so count × weight / 2 is the cp shown.
+// piece_activity_eval(): one part per weight, and one per mobility table. "Own"/
+// "enemy" are pieces of that colour on a square the piece hits (occupancy-aware
+// for sliders). A mobility part is each piece's table at the squares it attacks
+// that no own piece stands on, opening and endgame blended by the phase. Kept in
+// PHASE_MAXths; the total is the role parts plus the mobility divided once, as
+// in the original.
 inline Eval_Split split_piece_activity(const BB* const original, const WEIGHTS& W)
 {
     Eval_Split s;
-    s.scale = 2;
-    enum { P_HIT, P_DEF, P_BLOCKED, P_PUSH_HIT, P_PUSH_DEF, D_OWN, D_ENEMY, D_MOB, S_OWN, S_ENEMY, S_MOB, N_OWN, N_ENEMY, N_MOB, K_OWN, K_ENEMY };
+    s.scale = PHASE_MAX;
+    const int phase = game_phase(original);
+    enum { P_HIT, P_DEF, P_BLOCKED, P_PUSH_HIT, P_PUSH_DEF, B_OWN, B_ENEMY, R_OWN, R_ENEMY, Q_OWN, Q_ENEMY, N_OWN, N_ENEMY, K_OWN, K_ENEMY, N_ROLES };
     struct { const char* name; int weight; const char* info; } spec[] = {
         {"P attacks",            W.activity_pawn_attack, "enemy pieces on the pawn's capture squares"},
         {"P defends",            W.activity_pawn_defend, "own pieces on the pawn's capture squares"},
         {"P blocked",            W.activity_pawn_blocked, "a piece right in front of the pawn"},
         {"P attacks after push", W.activity_pawn_push_attack, "enemy pieces on the squares the pawn would capture on after one push (or two, from the starting rank)"},
         {"P defends after push", W.activity_pawn_push_defend, "own pieces on the squares the pawn would capture on after one push (or two, from the starting rank)"},
-        {"B/Q defends",          W.activity_bishop_defend, "own pieces a bishop or queen sees diagonally"},
-        {"B/Q attacks",          W.activity_bishop_attack, "enemy pieces a bishop or queen sees diagonally"},
-        {"B/Q diagonals",        W.activity_bishop_square, "squares a bishop or queen sees diagonally"},
-        {"R/Q defends",          W.activity_rook_defend, "own pieces a rook or queen sees on lines"},
-        {"R/Q attacks",          W.activity_rook_attack, "enemy pieces a rook or queen sees on lines"},
-        {"R/Q lines",            W.activity_rook_square, "squares a rook or queen sees on lines"},
+        {"B defends",            W.activity_bishop_defend, "own pieces a bishop sees"},
+        {"B attacks",            W.activity_bishop_attack, "enemy pieces a bishop sees"},
+        {"R defends",            W.activity_rook_defend, "own pieces a rook sees"},
+        {"R attacks",            W.activity_rook_attack, "enemy pieces a rook sees"},
+        {"Q defends",            W.activity_queen_defend, "own pieces a queen sees"},
+        {"Q attacks",            W.activity_queen_attack, "enemy pieces a queen sees"},
         {"N defends",            W.activity_knight_defend, "own pieces a knight covers"},
         {"N attacks",            W.activity_knight_attack, "enemy pieces a knight covers"},
-        {"N squares",            W.activity_knight_square, "squares a knight covers, empty board"},
         {"K defends",            W.activity_king_defend, "own pieces next to the king"},
         {"K attacks",            W.activity_king_attack, "enemy pieces next to the king"},
     };
-    for(const auto& sp : spec)// "P attacks ×30/2", "P blocked −20/2"
-    s.add(std::string(sp.name) + (sp.weight<0 ? " −" : " ×") + std::to_string(std::abs(sp.weight)) + "/2", sp.info);
+    for(const auto& sp : spec)// "P attacks ×30", "P blocked −20"
+    s.add(std::string(sp.name) + (sp.weight<0 ? " −" : " ×") + std::to_string(std::abs(sp.weight)), sp.info);
+    struct { const char* name; int type; const int* op; const int* eg; } mob[] = {
+        {"B mobility", 3, W.mobility_bishop_opening, W.mobility_bishop_endgame},
+        {"R mobility", 1, W.mobility_rook_opening, W.mobility_rook_endgame},
+        {"Q mobility", 4, W.mobility_queen_opening, W.mobility_queen_endgame},
+        {"N mobility", 2, W.mobility_knight_opening, W.mobility_knight_endgame},
+    };
+    for(const auto& m : mob)
+    s.add(m.name, "its table at the squares the piece attacks that no own piece stands on (count: those squares, all its pieces)");
 
     uint64_t all_black_pieces = original->Board[6]|original->Board[7]|original->Board[8]|original->Board[9]|original->Board[10]|original->Board[11];
     uint64_t all_white_pieces = original->Board[0]|original->Board[1]|original->Board[2]|original->Board[3]|original->Board[4]|original->Board[5];
@@ -206,31 +213,22 @@ inline Eval_Split split_piece_activity(const BB* const original, const WEIGHTS& 
             hit(P_PUSH_HIT, i, enemy_pieces & push_attacks);
             hit(P_PUSH_DEF, i, own_pieces & push_attacks);
         }
-        uint64_t own_bishops = original->Board[3+6*!col]|original->Board[4+6*!col];
-        while(own_bishops)
+        for(int k=0;k<4;k++)
         {
-            int i = find_and_delete_trailling_1(own_bishops);
-            uint64_t attacks = get_bishop_attacks(i, all_pieces);
-            hit(D_OWN, i, own_pieces & attacks);
-            hit(D_ENEMY, i, enemy_pieces & attacks);
-            hit(D_MOB, i, attacks, false);
-        }
-        uint64_t own_rooks = original->Board[1+6*!col]|original->Board[4+6*!col];
-        while(own_rooks)
-        {
-            int i = find_and_delete_trailling_1(own_rooks);
-            uint64_t attacks = get_rook_attacks(i, all_pieces);
-            hit(S_OWN, i, own_pieces & attacks);
-            hit(S_ENEMY, i, enemy_pieces & attacks);
-            hit(S_MOB, i, attacks, false);
-        }
-        uint64_t own_knights = original->Board[2+6*!col];
-        while(own_knights)
-        {
-            int i = find_and_delete_trailling_1(own_knights);
-            hit(N_OWN, i, own_pieces & Kn_template[i]);
-            hit(N_ENEMY, i, enemy_pieces & Kn_template[i]);
-            hit(N_MOB, i, Kn_template[i], false);
+            const int type = mob[k].type, own_part = type==3 ? B_OWN : type==1 ? R_OWN : type==4 ? Q_OWN : N_OWN;
+            uint64_t pieces = original->Board[type+6*!col];
+            while(pieces)
+            {
+                int i = find_and_delete_trailling_1(pieces);
+                const uint64_t attacks = type==3 ? get_bishop_attacks(i, all_pieces) : type==1 ? get_rook_attacks(i, all_pieces)
+                                       : type==4 ? get_bishop_attacks(i, all_pieces) | get_rook_attacks(i, all_pieces) : Kn_template[i];
+                hit(own_part, i, own_pieces & attacks);
+                hit(own_part+1, i, enemy_pieces & attacks);
+                const int m = count(attacks & ~own_pieces);
+                Eval_Part& p = s.parts[N_ROLES+k];
+                p.count[col] += m;
+                p.raw[col] += mob[k].op[m]*phase + mob[k].eg[m]*(PHASE_MAX-phase);
+            }
         }
         uint64_t own_king = original->Board[5+6*!col];
         while(own_king)
@@ -240,33 +238,39 @@ inline Eval_Split split_piece_activity(const BB* const original, const WEIGHTS& 
             hit(K_ENEMY, i, enemy_pieces & K_template[i]);
         }
     }
-    for(int k=0;k<s.n;k++)
+    int roles = 0, mobility = 0;
+    for(int k=0;k<N_ROLES;k++)
     for(int col=0;col<2;col++)
-    s.parts[k].raw[col] = s.parts[k].count[col]*spec[k].weight;
+    {
+        s.parts[k].raw[col] = s.parts[k].count[col]*spec[k].weight*PHASE_MAX;
+        roles += (col ? 1 : -1)*s.parts[k].count[col]*spec[k].weight;
+    }
+    for(int k=N_ROLES;k<s.n;k++)
+    mobility += s.parts[k].raw[1] - s.parts[k].raw[0];
+    s.has_fixed = true;
+    s.fixed = roles + mobility/PHASE_MAX;
     return s;
 }
 
-// material_eval(): each side's piece values by type (the kings included, as in
-// the original; they cancel), and the original's formula applied to the parts'
-// sums in the same float order: (white - black) * sqrt(2 - 140.5*2/all).
+// material_eval(): each side's piece values by type (the kings cancel), opening
+// and endgame blended by the phase, in PHASE_MAXths.
 inline Eval_Split split_material(const BB* const original, const WEIGHTS& W)
 {
-    static const char* names[6] = {"Pawns", "Rooks", "Knights", "Bishops", "Queens", "Kings"};
+    static const char* names[5] = {"Pawns", "Rooks", "Knights", "Bishops", "Queens"};
     Eval_Split s;
-    float side[2] = {0, 0};
-    for(int type=0;type<6;type++)
+    s.scale = PHASE_MAX;
+    const int phase = game_phase(original);
+    for(int type=0;type<5;type++)
     {
-        Eval_Part& p = s.add(names[type], "piece value " + std::to_string(W.piece_value[type]) + " each");
+        const int blended = W.piece_value[type]*phase + W.piece_value_endgame[type]*(PHASE_MAX-phase);
+        Eval_Part& p = s.add(names[type], "piece value " + std::to_string(W.piece_value[type]) + " (opening) to "
+                             + std::to_string(W.piece_value_endgame[type]) + " (endgame), now " + std::to_string(blended/PHASE_MAX) + " each");
         for(int white=0;white<2;white++)
         {
             p.count[white] = count(original->Board[type + 6*!white]);
-            p.raw[white] = W.piece_value[type]*p.count[white];
-            side[white] += W.piece_value[type]*p.count[white];
+            p.raw[white] = blended*p.count[white];
         }
     }
-    const float left = side[1] + side[0];
-    s.has_fixed = true;
-    s.fixed = (int)((side[1]-side[0])*sqrt(2-(8*1+3*4*2*5+9+3.5)*2/left));
     return s;
 }
 
@@ -279,7 +283,7 @@ inline Eval_Split split_king_safety(const BB* const original, const WEIGHTS& W)
     Eval_Part& attack = s.add("Attack on the king", "enemy pieces reaching the king ring: white's king "
         + std::to_string(d[1].attackers) + " attackers / " + std::to_string(d[1].danger_units) + " danger units, black's king "
         + std::to_string(d[0].attackers) + " / " + std::to_string(d[0].danger_units));
-    Eval_Part& shelter = s.add("Pawn shelter", "pawn cover in front of each king, scaled by the enemy's material");
+    Eval_Part& shelter = s.add("Pawn shelter", "pawn cover in front of each king, scaled by the enemy's pieces (knight and bishop 1, rook 2, queen 4)");
     for(int white=0;white<2;white++)
     {
         attack.raw[white] = -d[white].attack_penalty;
@@ -293,12 +297,11 @@ inline Eval_Split split_king_safety(const BB* const original, const WEIGHTS& W)
 inline Eval_Split split_pawn_structure(const BB* const original, const WEIGHTS& W)
 {
     Eval_Split s;
-    enum { DOUBLED, TRIPLED, ISOLATED, SUPPORT };
-    Eval_Part* part[4];
+    enum { DOUBLED, TRIPLED, ISOLATED };
+    Eval_Part* part[3];
     part[DOUBLED] = &s.add("Doubled", "−" + std::to_string(W.punishment_for_double_pawn) + " per file with two or more own pawns");
     part[TRIPLED] = &s.add("Tripled", "another −" + std::to_string(W.punishment_for_trippled_pawn) + " per file with three or more");
     part[ISOLATED] = &s.add("Isolated", "−" + std::to_string(W.punishment_for_isolated_pawn) + " per pawn with no own pawn on a neighbouring file");
-    part[SUPPORT] = &s.add("Supports", "+" + std::to_string(W.pawn_supporting_value) + " per own piece or pawn on a pawn's capture squares");
     auto record = [](Eval_Part* p, int white, int from, int to)
     {
         if(p->n_hits[white] < Eval_Part::MAX_HITS)
@@ -306,9 +309,6 @@ inline Eval_Split split_pawn_structure(const BB* const original, const WEIGHTS& 
     };
     for(int white=0;white<2;white++)
     {
-        uint64_t own = 0;
-        for(int i=0;i<6;i++)
-        own |= original->Board[i+6*!white];
         const uint64_t pawns = original->Board[0+6*!white];
         for(int j=0;j<8;j++)
         {
@@ -320,10 +320,6 @@ inline Eval_Split split_pawn_structure(const BB* const original, const WEIGHTS& 
         while(virtual_pawns)
         {
             const int i = find_and_delete_trailling_1(virtual_pawns);
-            uint64_t supported = own & (white ? BP_template[i] : WP_template[i]);
-            part[SUPPORT]->count[white] += count(supported);
-            while(supported)
-            record(part[SUPPORT], white, i, find_and_delete_trailling_1(supported));
             const int column = i%8;
             const bool left = column>0 && (mask_column[column-1] & pawns);
             const bool right = column<7 && (mask_column[column+1] & pawns);
@@ -336,7 +332,6 @@ inline Eval_Split split_pawn_structure(const BB* const original, const WEIGHTS& 
         part[DOUBLED]->raw[white] = -W.punishment_for_double_pawn*part[DOUBLED]->count[white];
         part[TRIPLED]->raw[white] = -W.punishment_for_trippled_pawn*part[TRIPLED]->count[white];
         part[ISOLATED]->raw[white] = -W.punishment_for_isolated_pawn*part[ISOLATED]->count[white];
-        part[SUPPORT]->raw[white] = W.pawn_supporting_value*part[SUPPORT]->count[white];
     }
     return s;
 }
@@ -347,19 +342,15 @@ inline Eval_Split split_pawn_structure(const BB* const original, const WEIGHTS& 
 inline Eval_Split split_passed(const BB* const original, const WEIGHTS& W)
 {
     Eval_Split s;
-    int phase = 0;
-    for(int side=0;side<2;side++)
-    phase += 1*count(original->Board[0+6*side]) + 5*count(original->Board[1+6*side]) + 3*count(original->Board[2+6*side])
-           + 3*count(original->Board[3+6*side]) + 9*count(original->Board[4+6*side]);
-    phase = std::min(phase, 2*MATERIAL_MAX);
+    const int phase = game_phase(original);
     std::string by_rank;
     for(int r=1;r<7;r++)
     by_rank += (r>1 ? " " : "") + std::to_string(passed_pawn_bonus(r, phase, W));
-    const std::string scaled = "; endgame value, scaled to 0 with all material on (now "
-                             + std::to_string(100*(2*MATERIAL_MAX-phase)/(2*MATERIAL_MAX)) + "%)";
+    const std::string scaled = "; endgame value, scaled to 0 with all pieces on (now "
+                             + std::to_string(100*(PHASE_MAX-phase)/PHASE_MAX) + "%)";
     Eval_Part* part[PASSER_PARTS];
     part[PASSER_BASE] = &s.add("Passed pawns", "no enemy pawn ahead on its own or a neighbouring file; ranks 2-7 give "
-                               + by_rank + " cp at material " + std::to_string(phase) + "/78");
+                               + by_rank + " cp at phase " + std::to_string(phase) + "/" + std::to_string(PHASE_MAX));
     part[PASSER_PATH] = &s.add("Free path", "no piece on any square ahead of the passer" + scaled);
     part[PASSER_KING] = &s.add("King distance", "the enemy king's distance to the stop square (up to 5) against ours, by rank" + scaled);
     part[PASSER_SUPPORT] = &s.add("Supported", "an own pawn beside the passer or protecting it" + scaled);
@@ -389,35 +380,17 @@ inline Eval_Split split_passed(const BB* const original, const WEIGHTS& W)
     return s;
 }
 
-// basic_eval()'s inline line W.mobility_value*(attacked squares of white - of black).
-inline Eval_Split split_attacked(const BB* const original, const WEIGHTS& W)
-{
-    Eval_Split s;
-    const std::string w = std::to_string(W.mobility_value);
-    Eval_Part& p = s.add("Attacked squares ×" + w, "squares the side attacks, " + w + " each");
-    for(int white=0;white<2;white++)
-    {
-        p.count[white] = count(original->get_attacked_squares(white));
-        p.raw[white] = W.mobility_value*p.count[white];
-    }
-    return s;
-}
-
-// tempo_eval() (#70): the side to move's tempo, from W.tempo_endgame with bare
-// kings to W.tempo_opening with all material, blended by both sides' material.
+// tempo_eval() (#70): the side to move's tempo, from W.tempo_endgame with no
+// pieces to W.tempo_opening with all of them, blended by the phase.
 inline Eval_Split split_tempo(const BB* const original, const WEIGHTS& W)
 {
     Eval_Split s;
-    int phase = 0;
-    for(int side=0;side<2;side++)
-    phase += 1*count(original->Board[0+6*side]) + 5*count(original->Board[1+6*side]) + 3*count(original->Board[2+6*side])
-           + 3*count(original->Board[3+6*side]) + 9*count(original->Board[4+6*side]);
-    phase = std::min(phase, 2*MATERIAL_MAX);
-    Eval_Part& p = s.add("Side to move", "the mover's tempo: " + std::to_string(W.tempo_endgame) + " cp with bare kings to "
-                         + std::to_string(W.tempo_opening) + " with all material; material here " + std::to_string(phase) + "/78");
+    const int phase = game_phase(original);
+    Eval_Part& p = s.add("Side to move", "the mover's tempo: " + std::to_string(W.tempo_endgame) + " cp with no pieces to "
+                         + std::to_string(W.tempo_opening) + " with all of them; phase here " + std::to_string(phase) + "/" + std::to_string(PHASE_MAX));
     const int mover = original->white_move;
     p.count[mover] = 1;
-    p.raw[mover] = (W.tempo_opening*phase + W.tempo_endgame*(2*MATERIAL_MAX-phase))/(2*MATERIAL_MAX);
+    p.raw[mover] = (W.tempo_opening*phase + W.tempo_endgame*(PHASE_MAX-phase))/PHASE_MAX;
     return s;
 }
 
@@ -435,7 +408,7 @@ struct Eval_Row
     Eval_Split split;
 };
 
-static const int EVAL_ROWS = 8;
+static const int EVAL_ROWS = 7;
 
 // Every term in basic_eval()'s order. `basic` is basic_eval() itself and
 // `real_sum` the real terms added up, so real_sum != basic means basic_eval()
@@ -468,9 +441,8 @@ inline Eval_Breakdown eval_breakdown(const BB* const pos, const WEIGHTS& W)
     set(2, "King safety",      "king_safety_eval()",    true,  king_safety_eval(pos, W),    split_king_safety(pos, W));
     set(3, "Pawn structure",   "positional_eval()",     true,  positional_eval(pos, W),     split_pawn_structure(pos, W));
     set(4, "Passed pawns",     "passed_pawn_eval()",    true,  passed_pawn_eval(pos, W),    split_passed(pos, W));
-    set(5, "Attacked squares", "basic_eval()'s mobility_value*(attacked squares) line", false, 0, split_attacked(pos, W));
-    set(6, "Piece activity",   "piece_activity_eval()", true,  piece_activity_eval(pos, W), split_piece_activity(pos, W));
-    set(7, "Tempo",            "tempo_eval()",          true,  tempo_eval(pos, W),          split_tempo(pos, W));
+    set(5, "Piece activity",   "piece_activity_eval()", true,  piece_activity_eval(pos, W), split_piece_activity(pos, W));
+    set(6, "Tempo",            "tempo_eval()",          true,  tempo_eval(pos, W),          split_tempo(pos, W));
     b.basic = basic_eval(pos, W);
     return b;
 }

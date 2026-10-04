@@ -35,59 +35,41 @@ bool side_to_move_lacks_non_pawn_material(const BB* const original)
     return non_pawn_pieces == 0;
 }
 
+int game_phase(const BB* const original)
+{
+    const uint64_t* B = original->Board;
+    const int phase = count(B[2]|B[3]|B[8]|B[9]) + 2*count(B[1]|B[7]) + 4*count(B[4]|B[10]);
+    return phase < PHASE_MAX ? phase : PHASE_MAX;
+}
+
 int piecetable(const BB* const original , const WEIGHTS& W)
 {
-    // Exact: the phase weights are k/39, so the sum is kept in 39ths as an
-    // integer and divided once. That makes the result colour-symmetric (int
-    // division truncates toward zero) and independent of summation order.
+    // Exact: the sum is kept in PHASE_MAXths as an integer and divided once, so the
+    // result is colour-symmetric (int division truncates toward zero).
+    const int phase = game_phase(original), endgame = PHASE_MAX-phase;
     int score=0;
-    int EW[2],OW[2];//endgame weight, opening weight, in 39ths
-    OW[1]=enemy_material_left_39ths(original,1);//0=black, 1 = white
-    OW[0]=enemy_material_left_39ths(original,0);
-    EW[0]=MATERIAL_MAX-OW[0];
-    EW[1]=MATERIAL_MAX-OW[1];
-
-    // Original summed square-by-square (exactly one piece per square), so the
-    // float accumulation order was strictly increasing square index. Summing
-    // grouped by piece type instead is mathematically equivalent but not
-    // bit-identical (float addition isn't associative, and the result gets
-    // truncated to int), so piece_at[] rebuilds the per-square order while
-    // still avoiding the original's 12-branch-per-square scan.
-    int piece_at[64];
-    for(int i=0;i<64;i++) piece_at[i]=-1;
-    uint64_t all_pieces=0;
-    for(int piece=0; piece<12; piece++)
+    for(int piece=0; piece<6; piece++)
     {
-        uint64_t bb = original->Board[piece];
-        all_pieces |= bb;
-        while(bb)
+        uint64_t white = original->Board[piece], black = original->Board[piece+6];
+        while(white)
         {
-            int i=find_and_delete_trailling_1(bb);
-            piece_at[i]=piece;
+            const int i=find_and_delete_trailling_1(white);
+            score += W.piece_table_value_opening[piece][i]*phase + W.piece_table_value_endgame[piece][i]*endgame;
+        }
+        while(black)
+        {
+            const int i=find_and_delete_trailling_1(black)^56;// black reads white's table rank-flipped (#85)
+            score -= W.piece_table_value_opening[piece][i]*phase + W.piece_table_value_endgame[piece][i]*endgame;
         }
     }
-    while(all_pieces)
-    {
-        int i=find_and_delete_trailling_1(all_pieces);
-        int piece=piece_at[i];
-        if(piece<6)
-        {
-            score += W.piece_table_value_opening[piece][i]*OW[1]+W.piece_table_value_endgame[piece][i]*EW[1];
-        }
-        else
-        {
-            piece-=6;
-            score -= W.piece_table_value_opening[piece][i^56]*OW[0]+W.piece_table_value_endgame[piece][i^56]*EW[0];// black reads white's table rank-flipped (#85)
-        }
-    }
-
-
-    return score/MATERIAL_MAX;
+    return score/PHASE_MAX;
 }
 
 int piece_activity_eval(const BB* const original, const WEIGHTS& W)
 {
     int score=0;
+    int mobility=0;// in PHASE_MAXths, divided once at the end
+    const int phase = game_phase(original), endgame = PHASE_MAX-phase;
     uint64_t all_black_pieces= original->Board[6]|original->Board[7]|original->Board[8]|original->Board[9]|original->Board[10]|original->Board[11];
     uint64_t all_white_pieces= original->Board[0]|original->Board[1]|original->Board[2]|original->Board[3]|original->Board[4]|original->Board[5];
     uint64_t all_pieces= all_black_pieces|all_white_pieces;
@@ -117,31 +99,43 @@ int piece_activity_eval(const BB* const original, const WEIGHTS& W)
             score-=count(enemy_pieces & push_attacks)*W.activity_pawn_push_attack+count(own_pieces & push_attacks)*W.activity_pawn_push_defend;
         }
         
-        uint64_t own_bishops = original->Board[3+6*!col]|original->Board[4+6*!col];
+        // mobility: the squares a piece attacks that no own piece stands on, by its own table
+        const int sign = 1-2*!col;
+        uint64_t own_bishops = original->Board[3+6*!col];
         while(own_bishops)
         {
             int i=find_and_delete_trailling_1(own_bishops);
-            uint64_t bishop_attacks = get_bishop_attacks(i,all_pieces);
-            score+=count(own_pieces & bishop_attacks)*W.activity_bishop_defend*(1-2*!col);
-            score+=count(enemy_pieces & bishop_attacks)*W.activity_bishop_attack*(1-2*!col);
-            score+=count(bishop_attacks)*(1-2*!col)*W.activity_bishop_square;
+            uint64_t a = get_bishop_attacks(i,all_pieces);
+            score+=sign*(count(own_pieces & a)*W.activity_bishop_defend + count(enemy_pieces & a)*W.activity_bishop_attack);
+            const int m = count(a & ~own_pieces);
+            mobility+=sign*(W.mobility_bishop_opening[m]*phase + W.mobility_bishop_endgame[m]*endgame);
         }
-        uint64_t own_rooks = original->Board[1+6*!col]|original->Board[4+6*!col];
+        uint64_t own_rooks = original->Board[1+6*!col];
         while(own_rooks)
         {
             int i=find_and_delete_trailling_1(own_rooks);
-            uint64_t rook_attacks = get_rook_attacks(i,all_pieces);
-            score+=count(own_pieces & rook_attacks)*(1-2*!col)*W.activity_rook_defend;
-            score+=count(enemy_pieces & rook_attacks)*(1-2*!col)*W.activity_rook_attack;
-            score+=count(rook_attacks)*(1-2*!col)*W.activity_rook_square;
+            uint64_t a = get_rook_attacks(i,all_pieces);
+            score+=sign*(count(own_pieces & a)*W.activity_rook_defend + count(enemy_pieces & a)*W.activity_rook_attack);
+            const int m = count(a & ~own_pieces);
+            mobility+=sign*(W.mobility_rook_opening[m]*phase + W.mobility_rook_endgame[m]*endgame);
+        }
+        uint64_t own_queens = original->Board[4+6*!col];
+        while(own_queens)
+        {
+            int i=find_and_delete_trailling_1(own_queens);
+            uint64_t a = get_bishop_attacks(i,all_pieces) | get_rook_attacks(i,all_pieces);
+            score+=sign*(count(own_pieces & a)*W.activity_queen_defend + count(enemy_pieces & a)*W.activity_queen_attack);
+            const int m = count(a & ~own_pieces);
+            mobility+=sign*(W.mobility_queen_opening[m]*phase + W.mobility_queen_endgame[m]*endgame);
         }
         uint64_t own_knights = original->Board[2+6*!col];
         while(own_knights)
         {
             int i=find_and_delete_trailling_1(own_knights);
-            score+=count(own_pieces & (Kn_template[i]))*(1-2*!col)*W.activity_knight_defend;
-            score+=count(enemy_pieces & (Kn_template[i]))*(1-2*!col)*W.activity_knight_attack;
-            score+=count(Kn_template[i])*(1-2*!col)*W.activity_knight_square;
+            uint64_t a = Kn_template[i];
+            score+=sign*(count(own_pieces & a)*W.activity_knight_defend + count(enemy_pieces & a)*W.activity_knight_attack);
+            const int m = count(a & ~own_pieces);
+            mobility+=sign*(W.mobility_knight_opening[m]*phase + W.mobility_knight_endgame[m]*endgame);
         }
         uint64_t own_king = original->Board[5+6*!col];
         while(own_king)
@@ -152,7 +146,7 @@ int piece_activity_eval(const BB* const original, const WEIGHTS& W)
         }
 
     }
-    return score/2;//influece was too hard
+    return score + mobility/PHASE_MAX;
 
 }
 
@@ -219,25 +213,17 @@ int king_safety_of_colour(const BB* const original,bool white, const WEIGHTS& W 
 
 inline int material_eval(const BB* const original, const WEIGHTS& W)
 {
-    float score_W=0,score_B=0,material_left=0;
-    for(int i=0;i<6;i++)
-    {
-        score_W += W.piece_value[i]*count(original->Board[i]);
-        score_B += W.piece_value[i]*count(original->Board[i+6]);
-    }
-    material_left = score_W+score_B;
-    return (int)((score_W-score_B)*sqrt(2-(8*1+3*4*2*5+9+3.5)*2/material_left));
+    const int phase = game_phase(original), endgame = PHASE_MAX-phase;
+    int score=0;
+    for(int i=0;i<5;i++)// the kings cancel
+    score += (W.piece_value[i]*phase + W.piece_value_endgame[i]*endgame)*(count(original->Board[i])-count(original->Board[i+6]));
+    return score/PHASE_MAX;
 }
 
 int pawn_struckture_eval_of_colour(const BB* const original, bool white, const WEIGHTS& W)//positive is good for both colours
 {
     int score=0;
 
-    uint64_t occ_sq=0;//own pieces and pawns only: a pawn supports its own side (#36)
-    for(int i=0;i<6;i++)
-    {
-        occ_sq |= original->Board[i+6*!white];
-    }
     uint64_t pawns = original->Board[0+6*!white];
     uint64_t virtual_pawns = pawns;
     //punish pawn doubles and triples
@@ -253,15 +239,6 @@ int pawn_struckture_eval_of_colour(const BB* const original, bool white, const W
     while(virtual_pawns)
     {
         int i=find_and_delete_trailling_1(virtual_pawns);
-        // reward pawn supporting something
-        if(white)
-        {
-            score+=W.pawn_supporting_value*count(occ_sq & BP_template[i]);//count is 0 or 1 or 2
-        }
-        if(!white)
-        {
-            score+=W.pawn_supporting_value*count(occ_sq & WP_template[i]);
-        }
         //punish isolated pawns
         int column = i%8;
         if(column==0)
@@ -311,9 +288,9 @@ uint64_t passed_pawns_of_colour(const BB* const original, bool white)
     return passed;
 }
 
-int passed_pawn_bonus(int relative_rank, int OW, const WEIGHTS& W)
+int passed_pawn_bonus(int relative_rank, int phase, const WEIGHTS& W)
 {
-    return W.passed_pawn_value[relative_rank]*(OW + 2*(2*MATERIAL_MAX-OW))/(4*MATERIAL_MAX);
+    return (W.passed_pawn_value_opening[relative_rank]*phase + W.passed_pawn_value[relative_rank]*(PHASE_MAX-phase))/PHASE_MAX;
 }
 
 static int square_distance(int a, int b)
@@ -321,40 +298,40 @@ static int square_distance(int a, int b)
     return std::max(std::abs(a/8-b/8), std::abs(a%8-b%8));
 }
 
-void passed_pawn_parts(const BB* const original, bool white, int sq, int OW, const WEIGHTS& W, int part[PASSER_PARTS])
+void passed_pawn_parts(const BB* const original, bool white, int sq, int phase, const WEIGHTS& W, int part[PASSER_PARTS])
 {
     const int rank = sq/8, column = sq%8, r = white ? rank : 7-rank;// r: relative rank, 1..6
-    const int endgame = 2*MATERIAL_MAX-OW;// the modifiers are scaled by endgame/(2*MATERIAL_MAX)
+    const int endgame = PHASE_MAX-phase;// the modifiers are scaled by endgame/PHASE_MAX
     const uint64_t occupancy = original->get_occupancy();
     const uint64_t path = mask_column[column] & (white ? (~0ULL << (8*(rank+1))) : ((1ULL << (8*rank))-1));
     const int stop = white ? sq+8 : sq-8;
     const int own_king = __builtin_ctzll(original->Board[5+6*!white]), enemy_king = __builtin_ctzll(original->Board[5+6*white]);
     for(int k=0;k<PASSER_PARTS;k++) part[k] = 0;
 
-    part[PASSER_BASE] = passed_pawn_bonus(r, OW, W);
+    part[PASSER_BASE] = passed_pawn_bonus(r, phase, W);
 
     const bool free_path = !(occupancy & path);
     if(free_path)
-    part[PASSER_PATH] = W.passed_free_path[r]*endgame/(2*MATERIAL_MAX);
+    part[PASSER_PATH] = W.passed_free_path[r]*endgame/PHASE_MAX;
 
     part[PASSER_KING] = (W.passed_king_enemy[r]*std::min(square_distance(enemy_king, stop), 5)
-                       - W.passed_king_own[r]*std::min(square_distance(own_king, stop), 5))*endgame/(2*MATERIAL_MAX);
+                       - W.passed_king_own[r]*std::min(square_distance(own_king, stop), 5))*endgame/PHASE_MAX;
 
     uint64_t neighbours = 0;
     if(column>0) neighbours |= mask_column[column-1];
     if(column<7) neighbours |= mask_column[column+1];
     const uint64_t beside_or_behind = (0xFFULL << (8*rank)) | (0xFFULL << (8*(white ? rank-1 : rank+1)));
     if(original->Board[0+6*!white] & neighbours & beside_or_behind)
-    part[PASSER_SUPPORT] = W.passed_supported[r]*endgame/(2*MATERIAL_MAX);
+    part[PASSER_SUPPORT] = W.passed_supported[r]*endgame/PHASE_MAX;
 
     for(int behind = white ? sq-8 : sq+8; behind>=0 && behind<64; behind += white ? -8 : 8)
     {
         if(!(occupancy & (1ULL<<behind)))
         continue;
         if(original->Board[1+6*!white] & (1ULL<<behind))
-        part[PASSER_ROOK] = W.passed_rook_behind*endgame/(2*MATERIAL_MAX);
+        part[PASSER_ROOK] = W.passed_rook_behind*endgame/PHASE_MAX;
         else if(original->Board[1+6*white] & (1ULL<<behind))
-        part[PASSER_ROOK] = -W.passed_rook_behind*endgame/(2*MATERIAL_MAX);
+        part[PASSER_ROOK] = -W.passed_rook_behind*endgame/PHASE_MAX;
         break;
     }
 
@@ -371,7 +348,7 @@ void passed_pawn_parts(const BB* const original, bool white, int sq, int OW, con
 
 int passed_pawn_eval(const BB* const original, const WEIGHTS& W)
 {
-    const int OW = std::min(enemy_material_left_39ths(original,1)+enemy_material_left_39ths(original,0), 2*MATERIAL_MAX);
+    const int phase = game_phase(original);
     int score = 0;
     for(int white=0;white<2;white++)
     {
@@ -381,7 +358,7 @@ int passed_pawn_eval(const BB* const original, const WEIGHTS& W)
         {
             const int i = find_and_delete_trailling_1(passed);
             int part[PASSER_PARTS];
-            passed_pawn_parts(original, white, i, OW, W, part);
+            passed_pawn_parts(original, white, i, phase, W, part);
             side += part[PASSER_BASE] + part[PASSER_PATH] + part[PASSER_KING] + part[PASSER_SUPPORT] + part[PASSER_ROOK];
             square = std::max(square, part[PASSER_SQUARE]);
         }
@@ -394,11 +371,11 @@ int passed_pawn_eval(const BB* const original, const WEIGHTS& W)
 // The side to move is worth a tempo (#70). Without it the eval gave the side
 // that just moved too much: tools/tempo_swing measures that as half the odd/even
 // swing of the root score (net off), from W.tempo_endgame with bare kings
-// to W.tempo_opening with all material on the board.
+// to W.tempo_opening with all pieces on the board.
 int tempo_eval(const BB* const original, const WEIGHTS& W)
 {
-    int OW = std::min(enemy_material_left_39ths(original,1)+enemy_material_left_39ths(original,0), 2*MATERIAL_MAX);//both sides' material, 0..78
-    int tempo = (W.tempo_opening*OW + W.tempo_endgame*(2*MATERIAL_MAX-OW))/(2*MATERIAL_MAX);
+    const int phase = game_phase(original);
+    int tempo = (W.tempo_opening*phase + W.tempo_endgame*(PHASE_MAX-phase))/PHASE_MAX;
     return original->white_move ? tempo : -tempo;
 }
 
@@ -416,8 +393,6 @@ int basic_eval(const BB*const original , const WEIGHTS& W)// return the evaluati
     score += positional_eval(original,W);
     score += passed_pawn_eval(original,W);
 
-    
-    score+= W.mobility_value*(count(original->get_attacked_squares(1))-count(original->get_attacked_squares(0)));
     
     score += piece_activity_eval(original,W);
 

@@ -1808,11 +1808,10 @@ function renderTerms(s) {
     : ok ? `✓ Adds up to basic_eval: ${signed(t.basic)} cp.`
          : `✗ Adds up to basic_eval, but a row's white − black is not its total (red).`;
 
-  // piecetable()'s blend: each side's tables by the enemy's material left.
-  const share = n => `${Math.round(100 * n / t.phase.max)}% opening`;
+  // game_phase(): the one blend of every opening and endgame weight.
   el('terms-phase').textContent =
-    `Phase (piece tables): white's ${share(t.phase.white)} (black's material ${t.phase.white}/${t.phase.max}), ` +
-    `black's ${share(t.phase.black)} (${t.phase.black}/${t.phase.max}); the rest endgame.`;
+    `Phase ${t.phase.value}/${t.phase.max} (knight and bishop 1, rook 2, queen 4, both sides): ` +
+    `${Math.round(100 * t.phase.value / t.phase.max)}% opening, the rest endgame.`;
 }
 
 // ------------------------------------------------------------------- settings

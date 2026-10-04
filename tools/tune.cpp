@@ -11,16 +11,16 @@
 // held fixed.
 //
 // The fit runs on a model of basic_eval() that is exact up to its integer
-// truncations: per position the pieces on the piece-square tables (with the phase
-// weight of their side), the material counts, and the coefficient of every other
-// tuned weight. Those coefficients are taken from the real term functions
-// (positional_eval(), passed_pawn_eval(), piece_activity_eval(), tempo_eval(),
+// truncations: per position the pieces on the piece-square tables (with the game
+// phase, game_phase()), and the coefficient of every other tuned weight. Those
+// coefficients are taken from the real term functions (material_eval(),
+// positional_eval(), passed_pawn_eval(), piece_activity_eval(), tempo_eval(),
 // king_safety_detail()) with one weight set to a probe value and the rest of that
 // term at 0, so the model cannot drift from the eval. Every term is linear in its
-// weights except two, which the model keeps in closed form, so the gradient is exact:
-//   material_eval()  (white - black) * sqrt(2 - 281/material_left)
-//   king danger      max(0, units)^2 / ks_danger_div, units linear in the ks_* weights
-// Held fixed: the pawn value (the centipawn), ks_min_attackers (a gate),
+// weights except king danger, which the model keeps in closed form, so the gradient
+// is exact: max(0, units)^2 / ks_danger_div, units linear in the ks_* weights.
+// Held fixed: the pawn's opening value (the centipawn), the king values (never
+// read by basic_eval()), ks_min_attackers (a gate),
 // ks_danger_div (its scale is the units' scale), ks_storm_blocked_div and
 // ks_full_piece_material (divisors). The table means against the piece values and
 // the king table (one king a side: a constant cancels) are degenerate; lambda keeps
@@ -69,7 +69,8 @@ struct Options
 
 // ---- the parameters: every number of a weight set, flat, in weight_fields() order
 
-static const int MAX_PARAMS = 1024;
+static const int MAX_PARAMS = 4096;
+static const uint32_t PARAM_MASK = MAX_PARAMS-1;   // a linear feature word's parameter bits
 static int n_params = 0;
 static std::string param_name[MAX_PARAMS];
 static int param_offset[MAX_PARAMS];   // byte offset of the int inside a WEIGHTS
@@ -99,22 +100,20 @@ static void build_params(const WEIGHTS& from)
         param_tuned[j] = true;
         param_den[j] = 1;
     }
-    for(const int* p : {&W.piece_value[0], &W.ks_min_attackers, &W.ks_danger_div, &W.ks_storm_blocked_div, &W.ks_full_piece_material})
+    for(const int* p : {&W.piece_value[0], &W.piece_value[5], &W.piece_value_endgame[5], &W.ks_min_attackers, &W.ks_danger_div, &W.ks_storm_blocked_div, &W.ks_full_piece_material})
     param_tuned[flat(W, p)] = false;
 }
 
 // ---- one position as the model sees it
 
 // Feature words. A table piece: bits 0-8 piece*64 + square (white's view), bit 9 set
-// for black, bits 16-23 the opening weight OW of its side in 39ths (the endgame weight
-// is 39 - OW). A linear or danger feature: bits 0-9 the parameter, bits 16-31 the
-// numerator (int16).
+// for black, bits 16-23 the game phase (0..PHASE_MAX, the endgame weight is
+// PHASE_MAX - phase). A linear or danger feature: bits 0-11 the parameter, bits 16-31
+// the numerator (int16).
 struct Pos
 {
     uint32_t off;               // first feature word
     uint8_t n_tab, n_lin, n_ks[2];   // n_ks[1]: white king's danger units (gated in)
-    int8_t d[5];                // white - black count, pawn..queen
-    uint8_t t[5];               // white + black count
     uint8_t r2;                 // 2 * result
 };
 
@@ -128,39 +127,50 @@ struct Split
 
 static WEIGHTS W_FROM;
 static int TO_BASE, TE_BASE;            // flat index of the tables' [0][0]
-static const double MATERIAL_C = (8*1+3*4*2*5+9+3.5)*2;   // material_eval()'s 281
 
 struct Probe_Group { std::vector<int> params; int value; };
-static Probe_Group G_POSITIONAL, G_PASSED, G_ACTIVITY, G_TEMPO, G_KS_ATTACK, G_KS_SHELTER;
+static Probe_Group G_MATERIAL, G_POSITIONAL, G_PASSED, G_ACTIVITY, G_TEMPO, G_KS_ATTACK, G_KS_SHELTER;
 
 static void build_groups()
 {
     WEIGHTS& W = W_FROM;
     auto add = [&](Probe_Group& g, const int* p, int n) { for(int i=0;i<n;i++) g.params.push_back(flat(W, p+i)); };
+    add(G_MATERIAL, W.piece_value, 5);  // the kings cancel
+    add(G_MATERIAL, W.piece_value_endgame, 5);
+    G_MATERIAL.value = PHASE_MAX;       // material_eval(): /PHASE_MAX, exact
     add(G_POSITIONAL, &W.punishment_for_double_pawn, 1);
     add(G_POSITIONAL, &W.punishment_for_trippled_pawn, 1);
     add(G_POSITIONAL, &W.punishment_for_isolated_pawn, 1);
-    add(G_POSITIONAL, &W.pawn_supporting_value, 1);
     G_POSITIONAL.value = 1;
+    add(G_PASSED, W.passed_pawn_value_opening, 8);
     add(G_PASSED, W.passed_pawn_value, 8);
-    add(G_PASSED, W.passed_free_path, 8);   // #90's modifiers: v*(78-OW)/78, also exact at 156
+    add(G_PASSED, W.passed_free_path, 8);   // #90's modifiers: v*endgame/PHASE_MAX
     add(G_PASSED, W.passed_king_enemy, 8);
     add(G_PASSED, W.passed_king_own, 8);
     add(G_PASSED, W.passed_supported, 8);
     add(G_PASSED, &W.passed_rook_behind, 1);
     add(G_PASSED, &W.passed_unstoppable, 1);   // a max over the passers: linear while >= 0
-    G_PASSED.value = 4*39;              // passed_pawn_bonus(): v*(156-OW)/156, exact
+    G_PASSED.value = PHASE_MAX;         // every part divides by PHASE_MAX: exact
     for(const int* p : {&W.activity_pawn_attack, &W.activity_pawn_defend, &W.activity_pawn_blocked,
                         &W.activity_pawn_push_attack, &W.activity_pawn_push_defend,
-                        &W.activity_bishop_defend, &W.activity_bishop_attack, &W.activity_bishop_square,
-                        &W.activity_rook_defend, &W.activity_rook_attack, &W.activity_rook_square,
-                        &W.activity_knight_defend, &W.activity_knight_attack, &W.activity_knight_square,
+                        &W.activity_bishop_defend, &W.activity_bishop_attack,
+                        &W.activity_rook_defend, &W.activity_rook_attack,
+                        &W.activity_queen_defend, &W.activity_queen_attack,
+                        &W.activity_knight_defend, &W.activity_knight_attack,
                         &W.activity_king_defend, &W.activity_king_attack})
     add(G_ACTIVITY, p, 1);
-    G_ACTIVITY.value = 2;               // piece_activity_eval() halves the sum
+    add(G_ACTIVITY, W.mobility_knight_opening, 9);
+    add(G_ACTIVITY, W.mobility_knight_endgame, 9);
+    add(G_ACTIVITY, W.mobility_bishop_opening, 14);
+    add(G_ACTIVITY, W.mobility_bishop_endgame, 14);
+    add(G_ACTIVITY, W.mobility_rook_opening, 15);
+    add(G_ACTIVITY, W.mobility_rook_endgame, 15);
+    add(G_ACTIVITY, W.mobility_queen_opening, 28);
+    add(G_ACTIVITY, W.mobility_queen_endgame, 28);
+    G_ACTIVITY.value = PHASE_MAX;       // the mobility sum divides by PHASE_MAX: exact
     add(G_TEMPO, &W.tempo_opening, 1);
     add(G_TEMPO, &W.tempo_endgame, 1);
-    G_TEMPO.value = 2*39;               // tempo_eval(): /78, exact
+    G_TEMPO.value = PHASE_MAX;          // tempo_eval(): /PHASE_MAX, exact
     add(G_KS_ATTACK, W.ks_attacker_weight+1, 4);   // [0] and [5] are never read
     add(G_KS_ATTACK, &W.ks_hit, 1);
     add(G_KS_ATTACK, &W.ks_weak_ring_square, 1);
@@ -173,12 +183,12 @@ static void build_groups()
     add(G_KS_SHELTER, W.ks_storm, 8);
     G_KS_SHELTER.value = W.ks_storm_blocked_div*W.ks_full_piece_material;   // both divisions exact
 
+    for(int j : G_MATERIAL.params) param_den[j] = G_MATERIAL.value;
     for(int j : G_POSITIONAL.params) param_den[j] = 1;
     for(int j : G_PASSED.params) param_den[j] = G_PASSED.value;
     for(int j : G_ACTIVITY.params) param_den[j] = G_ACTIVITY.value;
     for(int j : G_TEMPO.params) param_den[j] = G_TEMPO.value;
     for(int j : G_KS_SHELTER.params) param_den[j] = G_KS_SHELTER.value;
-    param_den[flat(W, &W.mobility_value)] = 1;
 }
 
 static uint32_t lin_word(int j, int num)
@@ -193,13 +203,8 @@ static Pos make_pos(const BB& b, double result, std::vector<uint32_t>& words)
     Pos p{};
     p.off = words.size();
     p.r2 = (uint8_t)std::lround(2*result);
-    for(int i=0;i<5;i++)
-    {
-        p.d[i] = count(b.Board[i]) - count(b.Board[i+6]);
-        p.t[i] = count(b.Board[i]) + count(b.Board[i+6]);
-    }
-    // piecetable(): white pieces by black's material and vice versa
-    const int ow[2] = {enemy_material_left_39ths(&b, 0), enemy_material_left_39ths(&b, 1)};
+    // piecetable(): both sides by the one game phase
+    const int phase = game_phase(&b);
     for(int piece=0;piece<12;piece++)
     {
         uint64_t bb = b.Board[piece];
@@ -207,7 +212,7 @@ static Pos make_pos(const BB& b, double result, std::vector<uint32_t>& words)
         {
             const int sq = find_and_delete_trailling_1(bb);
             const bool black = piece>=6;
-            words.push_back((uint32_t)((piece%6)*64 + (black ? sq^56 : sq)) | (black ? 1u<<9 : 0) | (uint32_t)ow[!black] << 16);
+            words.push_back((uint32_t)((piece%6)*64 + (black ? sq^56 : sq)) | (black ? 1u<<9 : 0) | (uint32_t)phase << 16);
             p.n_tab++;
         }
     }
@@ -226,11 +231,11 @@ static Pos make_pos(const BB& b, double result, std::vector<uint32_t>& words)
             at(P, j) = 0;
         }
     };
+    probe(G_MATERIAL, [&]{ return material_eval(&b, P); });
     probe(G_POSITIONAL, [&]{ return positional_eval(&b, P); });
     probe(G_PASSED, [&]{ return passed_pawn_eval(&b, P); });
     probe(G_ACTIVITY, [&]{ return piece_activity_eval(&b, P); });
     probe(G_TEMPO, [&]{ return tempo_eval(&b, P); });
-    put(flat(W_FROM, &W_FROM.mobility_value), count(b.get_attacked_squares(1)) - count(b.get_attacked_squares(0)));
     // king safety: white = -(attack + shelter), black likewise, eval = white - black
     std::vector<uint32_t> ks[2];
     for(int j : G_KS_ATTACK.params) at(P, j) = 0;
@@ -270,31 +275,26 @@ static Pos make_pos(const BB& b, double result, std::vector<uint32_t>& words)
 static inline double model_eval(const Pos& p, const uint32_t* words, const double* th, double* grad, double g)
 {
     const uint32_t* w = words + p.off;
-    // material
-    double D = 0, ml = 2*th[flat(W_FROM, &W_FROM.piece_value[5])];
-    const int pv0 = flat(W_FROM, &W_FROM.piece_value[0]);
-    for(int i=0;i<5;i++) { D += th[pv0+i]*p.d[i]; ml += th[pv0+i]*p.t[i]; }
-    const double s = std::sqrt(std::max(1e-9, 2 - MATERIAL_C/ml));
-    double e = D*s;
+    double e = 0;
     // tables
     double tab = 0;
     for(int i=0;i<p.n_tab;i++, w++)
     {
-        const int idx = *w & 511, ow = *w >> 16 & 255;
+        const int idx = *w & 511, ph = *w >> 16 & 255;
         const double sign = *w & 512 ? -1.0 : 1.0;
-        tab += sign*(th[TO_BASE+idx]*ow + th[TE_BASE+idx]*(39-ow));
+        tab += sign*(th[TO_BASE+idx]*ph + th[TE_BASE+idx]*(PHASE_MAX-ph));
     }
-    e += tab/39;
+    e += tab/PHASE_MAX;
     // linear
     const uint32_t* lin = w;
     for(int i=0;i<p.n_lin;i++, w++)
-    e += th[*w & 1023]*(int16_t)(*w >> 16)/param_den[*w & 1023];
+    e += th[*w & PARAM_MASK]*(int16_t)(*w >> 16)/param_den[*w & PARAM_MASK];
     // king danger: white's lowers the eval, black's raises it
     const uint32_t* ks = w;
     double units[2] = {0, 0};
     for(int side=1;side>=0;side--)
     for(int i=0;i<p.n_ks[side];i++, w++)
-    units[side] += th[*w & 1023]*(int16_t)(*w >> 16);
+    units[side] += th[*w & PARAM_MASK]*(int16_t)(*w >> 16);
     const double div = th[flat(W_FROM, &W_FROM.ks_danger_div)];
     for(int side=0;side<2;side++)
     if(units[side]>0)
@@ -302,24 +302,21 @@ static inline double model_eval(const Pos& p, const uint32_t* words, const doubl
 
     if(grad)
     {
-        const double dml = D*(MATERIAL_C/(ml*ml))/(2*s);
-        for(int i=0;i<5;i++) grad[pv0+i] += g*(p.d[i]*s + dml*p.t[i]);
-        grad[pv0+5] += g*dml*2;
         w = words + p.off;
         for(int i=0;i<p.n_tab;i++, w++)
         {
-            const int idx = *w & 511, ow = *w >> 16 & 255;
-            const double gs = (*w & 512 ? -g : g)/39;
-            grad[TO_BASE+idx] += gs*ow;
-            grad[TE_BASE+idx] += gs*(39-ow);
+            const int idx = *w & 511, ph = *w >> 16 & 255;
+            const double gs = (*w & 512 ? -g : g)/PHASE_MAX;
+            grad[TO_BASE+idx] += gs*ph;
+            grad[TE_BASE+idx] += gs*(PHASE_MAX-ph);
         }
         for(int i=0;i<p.n_lin;i++)
-        grad[lin[i] & 1023] += g*(int16_t)(lin[i] >> 16)/param_den[lin[i] & 1023];
+        grad[lin[i] & PARAM_MASK] += g*(int16_t)(lin[i] >> 16)/param_den[lin[i] & PARAM_MASK];
         w = ks;
         for(int side=1;side>=0;side--)
         for(int i=0;i<p.n_ks[side];i++, w++)
         if(units[side]>0)
-        grad[*w & 1023] += g*(side ? -1 : 1)*2*units[side]/div*(int16_t)(*w >> 16);
+        grad[*w & PARAM_MASK] += g*(side ? -1 : 1)*2*units[side]/div*(int16_t)(*w >> 16);
     }
     return e;
 }

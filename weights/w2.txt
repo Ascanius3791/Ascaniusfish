@@ -7,8 +7,9 @@ data ccrl4040-3000-balanced
 tuner 4f1cb5b
 loss 0.125418
 
-# material_eval(): pawn rook knight bishop queen king
-piece_value 100 598 324 402 1142 377
+# material_eval(): pawn rook knight bishop queen king, with all pieces on (game_phase() 24) and with none
+piece_value 140 840 455 564 1604 377
+piece_value_endgame 136 811 439 545 1549 377
 
 # piecetable(): rank 8 first, files a..h, white's view; black reads it rank-flipped
 piece_table_value_opening pawn
@@ -124,12 +125,12 @@ piece_table_value_endgame king
 punishment_for_double_pawn 21
 punishment_for_trippled_pawn 35
 punishment_for_isolated_pawn 14
-pawn_supporting_value 2
 
-# passed_pawn_eval(): by relative rank, full with bare kings, half with all material
+# passed_pawn_eval(): by relative rank, with no pieces on and with all of them
 passed_pawn_value 0 15 8 41 93 172 245 0
+passed_pawn_value_opening 0 8 4 21 47 86 123 0
 
-# passed_pawn_eval()'s endgame modifiers (#90), by relative rank where 8 numbers, scaled to 0 with all material:
+# passed_pawn_eval()'s endgame modifiers (#90), by relative rank where 8 numbers, scaled to 0 with all pieces on:
 # nothing ahead; per square (max 5) of the enemy king's / our king's distance to the stop square;
 # an own pawn beside or protecting it; our rook behind it (+), theirs (-); unstoppable by the
 # rule of the square (not scaled, the side's best passer only)
@@ -140,29 +141,35 @@ passed_supported 0 0 0 0 0 0 0 0
 passed_rook_behind 0
 passed_unstoppable 0
 
-# basic_eval(): per attacked square
-mobility_value 3
+# piece_activity_eval(): added for the owner per piece hit
+activity_pawn_attack 72
+activity_pawn_defend 6
+activity_pawn_blocked -37
+activity_pawn_push_attack 21
+activity_pawn_push_defend -16
+activity_bishop_defend 17
+activity_bishop_attack -3
+activity_rook_defend 21
+activity_rook_attack 18
+activity_queen_defend 19
+activity_queen_attack 8
+activity_knight_defend 23
+activity_knight_attack 3
+activity_king_defend 8
+activity_king_attack 58
 
-# piece_activity_eval(): added for the owner per piece or square hit, halved at the end;
-# bishop = every diagonal, queens included, rook = every line
-activity_pawn_attack 144
-activity_pawn_defend 7
-activity_pawn_blocked -73
-activity_pawn_push_attack 42
-activity_pawn_push_defend -32
-activity_bishop_defend 5
-activity_bishop_attack -5
-activity_bishop_square 28
-activity_rook_defend 14
-activity_rook_attack 35
-activity_rook_square 27
-activity_knight_defend -1
-activity_knight_attack 5
-activity_knight_square 47
-activity_king_defend 15
-activity_king_attack 116
+# piece_activity_eval()'s mobility: by the number of squares the piece attacks that no own piece
+# stands on (0, 1, ...), with all pieces on and with none
+mobility_knight_opening 0 25 50 75 100 125 150 175 200
+mobility_knight_endgame 0 25 50 75 100 125 150 175 200
+mobility_bishop_opening 0 16 31 47 62 78 93 109 124 140 155 171 186 202
+mobility_bishop_endgame 0 16 31 47 62 78 93 109 124 140 155 171 186 202
+mobility_rook_opening 0 15 30 45 60 75 90 105 120 135 150 165 180 195 210
+mobility_rook_endgame 0 15 30 45 60 75 90 105 120 135 150 165 180 195 210
+mobility_queen_opening 0 15 31 46 61 76 92 107 122 137 153 168 183 198 214 229 244 259 275 290 305 320 336 351 366 381 397 412
+mobility_queen_endgame 0 15 31 46 61 76 92 107 122 137 153 168 183 198 214 229 244 259 275 290 305 320 336 351 366 381 397 412
 
-# tempo_eval(): the side to move's, with all and with no material
+# tempo_eval(): the side to move's, with all and with no pieces on
 tempo_opening -5
 tempo_endgame 2
 
@@ -179,9 +186,8 @@ ks_shelter 116 40 48 73 84 71 4 12
 ks_open_file 62
 ks_storm 7 0 -101 -27 68 19 -17 -12
 ks_storm_blocked_div 4
-ks_full_piece_material 31
-
-# fit report (loss = valid loss by the real eval)
+ks_full_piece_material 12
+# converted to eval version 4's terms (game phase, mobility tables, no halving; mobility_value spread at 0.5, see the commit that made set 5), not refitted
 # tools/tune 4f1cb5b: set 2 from set 1, /home/ascanius/Documents/Cpp/other_programms/Chess/data/tune
 # positions: train 1034763, valid 127374, test 127569
 # K 329.79 (fitted on set 1), lambda 1e-09, lr 2, epochs 1500, best epoch 1500 (valid, model 0.125411), 243 s

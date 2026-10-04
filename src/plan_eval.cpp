@@ -69,14 +69,18 @@ static void plan_avoid(const uint64_t* Board, uint64_t occ, bool white, uint64_t
 // ---- db without re-evaluating the board ------------------------------------
 // The gain of moving one piece s -> t is the difference of the three partial
 // evals, each computed exactly (the same integers, the same truncations):
-// - piecetable() is a sum in 39ths divided once, so only the piece's two
-//   table entries change the sum;
-// - pawn_struckture_eval_of_colour(): a push keeps the pawn's file, so only
-//   the "pawn supports a piece" counts at s and t change;
+// - piecetable() is a sum in PHASE_MAXths divided once, so only the piece's
+//   two table entries change the sum (no capture: the phase stays);
+// - pawn_struckture_eval_of_colour(): a push keeps the pawn's file, so it
+//   does not change;
 // - piece_activity_eval() is a sum of one term per piece role (a queen has a
-//   diagonal and an orthogonal one) divided by 2 at the end. The moved
-//   piece's roles are replaced by the same roles at t. Every other role's
-//   term is linear in the pieces inside its mask:
+//   diagonal and an orthogonal one, with the queen's weights), plus the
+//   mobility tables in PHASE_MAXths divided once. The mobility of a piece
+//   changes only when s or t is in its attacks (before or after): the moved
+//   piece, and the sliders and knights that attack s or t, whose mobility is
+//   recomputed (plan_mobility()). The moved piece's roles are replaced by the
+//   same roles at t. Every other role's term is linear in the pieces inside
+//   its mask:
 //   - a leaper's or pawn's mask is fixed, so a piece of colour c on x adds the
 //     same to it whatever else stands where. leaper_gain[c][x] sums that over
 //     all leaper roles, once per call; moving s -> t adds
@@ -92,27 +96,55 @@ static void plan_avoid(const uint64_t* Board, uint64_t occ, bool white, uint64_t
 // PLAN_OWN_ACT keeps only the moved piece's roles: no leaper_gain, slider_gain
 // or vacated sliders, and plan_setup() builds none of their tables.
 
-enum Plan_Role_Kind { ROLE_PAWN, ROLE_DIAG, ROLE_ORTH, ROLE_KNIGHT, ROLE_KING };
+// ROLE_QDIAG/QORTH: a queen's two halves, with the queen's weights (its
+// diagonal and orthogonal attacks never share a square, so the two add up to
+// piece_activity_eval()'s one queen term).
+enum Plan_Role_Kind { ROLE_PAWN, ROLE_DIAG, ROLE_ORTH, ROLE_KNIGHT, ROLE_KING, ROLE_QDIAG, ROLE_QORTH };
+
+static inline bool plan_is_slider(int kind) { return kind == ROLE_DIAG || kind == ROLE_ORTH || kind == ROLE_QDIAG || kind == ROLE_QORTH; }
+static inline bool plan_is_diag(int kind) { return kind == ROLE_DIAG || kind == ROLE_QDIAG; }
 
 // piece_activity_eval()'s weights, from the weight set (#85). A non-pawn role:
-// per piece of its own colour in its mask, per enemy piece in its mask, per
-// square of the mask. A pawn: per own/enemy piece it attacks, per own/enemy
-// piece it would attack after a push (single, or double from the start rank),
-// and any piece in front of it.
+// per piece of its own colour in its mask, per enemy piece in its mask. A
+// pawn: per own/enemy piece it attacks, per own/enemy piece it would attack
+// after a push (single, or double from the start rank), and any piece in
+// front of it.
 struct Plan_Weights
 {
-    int role[5][3];
+    int role[7][2];
     int pawn_att_own, pawn_att_enemy, pawn_push_own, pawn_push_enemy, pawn_blocked;
 };
 
 static inline Plan_Weights plan_weights(const WEIGHTS& W)
 {
-    return {{{0, 0, 0},
-             {W.activity_bishop_defend, W.activity_bishop_attack, W.activity_bishop_square},
-             {W.activity_rook_defend, W.activity_rook_attack, W.activity_rook_square},
-             {W.activity_knight_defend, W.activity_knight_attack, W.activity_knight_square},
-             {W.activity_king_defend, W.activity_king_attack, 0}},
+    return {{{0, 0},
+             {W.activity_bishop_defend, W.activity_bishop_attack},
+             {W.activity_rook_defend, W.activity_rook_attack},
+             {W.activity_knight_defend, W.activity_knight_attack},
+             {W.activity_king_defend, W.activity_king_attack},
+             {W.activity_queen_defend, W.activity_queen_attack},
+             {W.activity_queen_defend, W.activity_queen_attack}},
             W.activity_pawn_defend, W.activity_pawn_attack, W.activity_pawn_push_defend, W.activity_pawn_push_attack, W.activity_pawn_blocked};
+}
+
+// piece_activity_eval()'s mobility of a `type` piece (0..5) of colour `white`
+// on sq, white's view, in PHASE_MAXths: its table at the number of attacked
+// squares no piece of its own (`own`) stands on. Pawns and kings have none.
+static inline int plan_mobility(const WEIGHTS& W, int type, bool white, int sq, uint64_t occ, uint64_t own, int phase)
+{
+    uint64_t a;
+    const int *op, *eg;
+    switch(type)
+    {
+        case 1: a = get_rook_attacks(sq,occ); op = W.mobility_rook_opening; eg = W.mobility_rook_endgame; break;
+        case 2: a = Kn_template[sq]; op = W.mobility_knight_opening; eg = W.mobility_knight_endgame; break;
+        case 3: a = get_bishop_attacks(sq,occ); op = W.mobility_bishop_opening; eg = W.mobility_bishop_endgame; break;
+        case 4: a = get_bishop_attacks(sq,occ) | get_rook_attacks(sq,occ); op = W.mobility_queen_opening; eg = W.mobility_queen_endgame; break;
+        default: return 0;
+    }
+    const int m = count(a & ~own);
+    const int v = op[m]*phase + eg[m]*(PHASE_MAX-phase);
+    return white ? v : -v;
 }
 
 static inline uint64_t plan_pawn_att(bool white, int i)
@@ -130,7 +162,7 @@ static inline uint64_t plan_pawn_push_att(bool white, int i)
 static inline int plan_masked_term(const Plan_Weights& pw, int kind, bool white, uint64_t m, uint64_t own, uint64_t enemy)
 {
     const int* w = pw.role[kind];
-    const int t = w[0]*count(own & m) + w[1]*count(enemy & m) + w[2]*count(m);
+    const int t = w[0]*count(own & m) + w[1]*count(enemy & m);
     return white ? t : -t;
 }
 
@@ -153,8 +185,8 @@ static inline int plan_role_term(const Plan_Weights& pw, int kind, bool white, i
             t += pw.pawn_blocked;
             return white ? t : -t;
         }
-        case ROLE_DIAG: *mask = get_bishop_attacks(i,occ); break;
-        case ROLE_ORTH: *mask = get_rook_attacks(i,occ); break;
+        case ROLE_DIAG: case ROLE_QDIAG: *mask = get_bishop_attacks(i,occ); break;
+        case ROLE_ORTH: case ROLE_QORTH: *mask = get_rook_attacks(i,occ); break;
         case ROLE_KNIGHT: *mask = Kn_template[i]; break;
         default: *mask = K_template[i]; break;
     }
@@ -206,7 +238,7 @@ static inline int plan_roles_of(int type, int* kinds)
         case 1: kinds[0] = ROLE_ORTH; return 1;
         case 2: kinds[0] = ROLE_KNIGHT; return 1;
         case 3: kinds[0] = ROLE_DIAG; return 1;
-        case 4: kinds[0] = ROLE_DIAG; kinds[1] = ROLE_ORTH; return 2;
+        case 4: kinds[0] = ROLE_QDIAG; kinds[1] = ROLE_QORTH; return 2;
         default: kinds[0] = ROLE_KING; return 1;
     }
 }
@@ -244,7 +276,7 @@ static inline int plan_lost(const Plan_Weights& pw, int kind, bool rw, int sq, i
 {
     const int* w = pw.role[kind];
     const uint64_t lost = a & plan_beyond.sq[sq][x];
-    return w[0]*count(sides[rw] & lost) + w[1]*count(sides[!rw] & lost) + w[2]*count(lost);
+    return w[0]*count(sides[rw] & lost) + w[1]*count(sides[!rw] & lost);
 }
 
 // What a piece of colour c landing there adds to the role's term, white's view.
@@ -267,9 +299,13 @@ struct Plan_Ctx
     uint64_t side_pieces[2];// [1] = white
     uint64_t occupancy;
     uint64_t avoid[2][6];// plan_avoid(), [1] = white's pieces
-    int OW[2], EW[2];// piecetable()'s phase weights; [1] = white's: the enemy (black) material left
-    int pt39;// piecetable() in 39ths
-    int act;// piece_activity_eval() before its /2
+    int phase;// game_phase(): no planned move captures, so it stays
+    int pt24;// piecetable() in PHASE_MAXths
+    int act;// piece_activity_eval()'s role terms
+    int mob;// piece_activity_eval()'s mobility, in PHASE_MAXths
+    int ref_mob;// reference mode, PLAN_OWN_ACT: the mobility part of plan_ref_activity(), summed
+    int piece_at[64];// Board[] index of the piece on a square, -1 for none
+    int mob_at[64];// plan_mobility() of the piece on a square
     int term_at[64];// the role terms of the piece on a square
     int leaper_gain[2][64];// [colour of a piece on the square]: what the leaper roles gain from it
     int slider_gain[2][64];// plan_cut() of every slider seeing the square, by the colour landing there
@@ -292,10 +328,11 @@ static inline double plan_nne_white(const BB& b)
     return b.white_move ? c : -c;
 }
 
-// Reference for PLAN_OWN_ACT: the raw piece_activity_eval() terms (before its
-// /2, white's view) of the piece in Board[p] on sq, written from
-// piece_activity_eval() itself rather than from the role tables above.
-static int plan_ref_activity(const BB* const b, int p, int sq, const WEIGHTS& W)
+// Reference for PLAN_OWN_ACT: the piece_activity_eval() terms (white's view)
+// of the piece in Board[p] on sq, written from piece_activity_eval() itself
+// rather than from the role tables above; *mob gets its mobility, in
+// PHASE_MAXths.
+static int plan_ref_activity(const BB* const b, int p, int sq, const WEIGHTS& W, int* mob)
 {
     uint64_t white_pieces = 0, black_pieces = 0;
     for(int q=0;q<6;q++)
@@ -319,30 +356,39 @@ static int plan_ref_activity(const BB* const b, int p, int sq, const WEIGHTS& W)
         const uint64_t push_attacks = col ? (BP_template[sq]<<8 | (sq/8==1 ? BP_template[sq]<<16 : 0)) : (WP_template[sq]>>8 | (sq/8==6 ? WP_template[sq]>>16 : 0));
         score += sg*(count(enemy_pieces & push_attacks)*W.activity_pawn_push_attack + count(own_pieces & push_attacks)*W.activity_pawn_push_defend);
     }
-    if(type == 3 || type == 4)
+    *mob = 0;
+    if(type == 0)
+    return score;
+    const uint64_t a = type == 1 ? get_rook_attacks(sq,all_pieces) : type == 2 ? Kn_template[sq] : type == 3 ? get_bishop_attacks(sq,all_pieces)
+                     : type == 4 ? get_bishop_attacks(sq,all_pieces) | get_rook_attacks(sq,all_pieces) : K_template[sq];
+    const int defend = type == 1 ? W.activity_rook_defend : type == 2 ? W.activity_knight_defend : type == 3 ? W.activity_bishop_defend
+                     : type == 4 ? W.activity_queen_defend : W.activity_king_defend;
+    const int attack = type == 1 ? W.activity_rook_attack : type == 2 ? W.activity_knight_attack : type == 3 ? W.activity_bishop_attack
+                     : type == 4 ? W.activity_queen_attack : W.activity_king_attack;
+    score += sg*(count(own_pieces & a)*defend + count(enemy_pieces & a)*attack);
+    if(type <= 4)
     {
-        const uint64_t a = get_bishop_attacks(sq,all_pieces);
-        score += sg*(count(own_pieces & a)*W.activity_bishop_defend + count(enemy_pieces & a)*W.activity_bishop_attack + count(a)*W.activity_bishop_square);
+        const int phase = game_phase(b), m = count(a & ~own_pieces);
+        const int* op = type == 1 ? W.mobility_rook_opening : type == 2 ? W.mobility_knight_opening : type == 3 ? W.mobility_bishop_opening : W.mobility_queen_opening;
+        const int* eg = type == 1 ? W.mobility_rook_endgame : type == 2 ? W.mobility_knight_endgame : type == 3 ? W.mobility_bishop_endgame : W.mobility_queen_endgame;
+        *mob = sg*(op[m]*phase + eg[m]*(PHASE_MAX-phase));
     }
-    if(type == 1 || type == 4)
-    {
-        const uint64_t a = get_rook_attacks(sq,all_pieces);
-        score += sg*(count(own_pieces & a)*W.activity_rook_defend + count(enemy_pieces & a)*W.activity_rook_attack + count(a)*W.activity_rook_square);
-    }
-    if(type == 2)
-    score += sg*(count(own_pieces & Kn_template[sq])*W.activity_knight_defend + count(enemy_pieces & Kn_template[sq])*W.activity_knight_attack + count(Kn_template[sq])*W.activity_knight_square);
-    if(type == 5)
-    score += sg*(count(own_pieces & K_template[sq])*W.activity_king_defend + count(enemy_pieces & K_template[sq])*W.activity_king_attack);
     return score;
 }
 
-// The sum of plan_ref_activity() over all pieces: piece_activity_eval() before its /2.
-static int plan_ref_activity_all(const BB* const b, const WEIGHTS& W)
+// The sum of plan_ref_activity() over all pieces (*mob: of their mobility):
+// piece_activity_eval() is that + *mob/PHASE_MAX.
+static int plan_ref_activity_all(const BB* const b, const WEIGHTS& W, int* mob)
 {
     int sum = 0;
+    *mob = 0;
     for(int p=0;p<12;p++)
     for(uint64_t bb = b->Board[p]; bb; )
-    sum += plan_ref_activity(b, p, find_and_delete_trailling_1(bb), W);
+    {
+        int m;
+        sum += plan_ref_activity(b, p, find_and_delete_trailling_1(bb), W, &m);
+        *mob += m;
+    }
     return sum;
 }
 
@@ -364,13 +410,8 @@ static void plan_setup(Plan_Ctx& c, const BB* const original, const WEIGHTS& W)
     for(int col=0;col<2;col++)
     plan_avoid(Board, c.occupancy, col, c.avoid[col]);
 
-    for(int col=0;col<2;col++)
-    {
-        const int e = 6*col;// col 1 (white) counts black's Board[6..]
-        c.OW[col] = count(Board[0+e]) + 5*count(Board[1+e]) + 3*count(Board[2+e]) + 3*count(Board[3+e]) + 9*count(Board[4+e]);
-        c.EW[col] = 39 - c.OW[col];
-    }
-    c.pt39 = 0;
+    c.phase = game_phase(original);
+    c.pt24 = 0;
     for(int p=0;p<12;p++)
     {
         const bool white = p < 6;
@@ -379,14 +420,17 @@ static void plan_setup(Plan_Ctx& c, const BB* const original, const WEIGHTS& W)
         while(bb)
         {
             const int i = find_and_delete_trailling_1(bb);
-            const int v = W.piece_table_value_opening[row][i^flip]*c.OW[white] + W.piece_table_value_endgame[row][i^flip]*c.EW[white];
-            c.pt39 += white ? v : -v;
+            const int v = W.piece_table_value_opening[row][i^flip]*c.phase + W.piece_table_value_endgame[row][i^flip]*(PHASE_MAX-c.phase);
+            c.pt24 += white ? v : -v;
         }
     }
 
     // piece_activity_eval() by role: sliders one by one, leapers as a table
     c.act = 0;
+    c.mob = 0;
     c.n_sl = 0;
+    for(int i=0;i<64;i++)
+    c.piece_at[i] = -1;
     if(!PLAN_OWN_ACT)
     {
         std::memset(c.leaper_gain, 0, sizeof(c.leaper_gain));
@@ -402,6 +446,9 @@ static void plan_setup(Plan_Ctx& c, const BB* const original, const WEIGHTS& W)
         while(bb)
         {
             const int i = find_and_delete_trailling_1(bb);
+            c.piece_at[i] = p;
+            c.mob_at[i] = plan_mobility(W, p % 6, white, i, c.occupancy, c.side_pieces[white], c.phase);
+            c.mob += c.mob_at[i];
             c.term_at[i] = 0;
             c.sl_on[i] = 0;
             for(int k=0;k<nk;k++)
@@ -412,7 +459,7 @@ static void plan_setup(Plan_Ctx& c, const BB* const original, const WEIGHTS& W)
                 c.act += term;
                 if(PLAN_OWN_ACT)// the other pieces' roles are not needed
                 continue;
-                if(kinds[k] == ROLE_DIAG || kinds[k] == ROLE_ORTH)
+                if(plan_is_slider(kinds[k]))
                 {
                     const int r = c.n_sl++;
                     c.sl_kind[r] = kinds[k];
@@ -464,6 +511,7 @@ static Plan_Target plan_piece(Plan_Ctx& c, int p, int from, BB* scratch, Plan_Ca
     constexpr bool DIAG = TYPE == 3 || TYPE == 4;
     constexpr bool ORTH = TYPE == 1 || TYPE == 4;
     constexpr int LEAPER = TYPE == 0 ? ROLE_PAWN : TYPE == 2 ? ROLE_KNIGHT : ROLE_KING;
+    constexpr int DIAG_KIND = TYPE == 4 ? ROLE_QDIAG : ROLE_DIAG, ORTH_KIND = TYPE == 4 ? ROLE_QORTH : ROLE_ORTH;
     constexpr bool OWN = PLAN_OWN_ACT;
     const WEIGHTS& W = *c.W;
     const Plan_Weights& pw = c.pw;
@@ -475,15 +523,15 @@ static Plan_Target plan_piece(Plan_Ctx& c, int p, int from, BB* scratch, Plan_Ca
     const uint64_t allowed = ~c.occupancy & ~c.avoid[white][TYPE];
 
     // what does not depend on the target: the board with `from` empty
-    const int ow = c.OW[white], ew = c.EW[white];
-    const int pt_base = c.pt39 - sign*(W.piece_table_value_opening[row][from^flip]*ow + W.piece_table_value_endgame[row][from^flip]*ew);
-    const int pt_now = c.pt39/39, act_now = c.act/2;
-    const uint64_t* pawn_from = white ? WP_template : BP_template;// [x]: the squares an own pawn attacks x from
-    const uint64_t* pawn_to = white ? BP_template : WP_template;// [x]: the squares an own pawn on x attacks
-    const uint64_t other_pawns = c.original->Board[6*!white] & ~from_bb;
-    int ps_from = count(other_pawns & pawn_from[from]);
-    if(TYPE == 0)
-    ps_from += count(c.side_pieces[white] & pawn_to[from]);
+    const int ow = c.phase, ew = PHASE_MAX - c.phase;
+    const int pt_base = c.pt24 - sign*(W.piece_table_value_opening[row][from^flip]*ow + W.piece_table_value_endgame[row][from^flip]*ew);
+    const int pt_now = c.pt24/PHASE_MAX, act_now = c.act + c.mob/PHASE_MAX;
+    // mobility: the pieces that attack `from` (or see through it) change with
+    // every target; the moved piece's own is taken out
+    const uint64_t* B = c.original->Board;
+    const uint64_t diag_sl = B[3] | B[4] | B[9] | B[10], orth_sl = B[1] | B[4] | B[7] | B[10], knights = B[2] | B[8];
+    const uint64_t mob_from = OWN ? 0 : ((get_bishop_attacks(from,c.occupancy) & diag_sl) | (get_rook_attacks(from,c.occupancy) & orth_sl) | (Kn_template[from] & knights)) & ~from_bb;
+    const int mob_base = c.mob - c.mob_at[from];
     uint64_t sp[2] = {c.side_pieces[0], c.side_pieces[1]};
     sp[white] &= ~from_bb;
     const uint64_t own = sp[white], enemy = sp[!white];
@@ -509,14 +557,15 @@ static Plan_Target plan_piece(Plan_Ctx& c, int p, int from, BB* scratch, Plan_Ca
         {
             const int r = find_and_delete_trailling_1(v);
             const bool rw = c.sl_white[r];
-            const uint64_t a = c.sl_kind[r] == ROLE_DIAG ? get_bishop_attacks(c.sl_sq[r],others) : get_rook_attacks(c.sl_sq[r],others);
+            const uint64_t a = plan_is_diag(c.sl_kind[r]) ? get_bishop_attacks(c.sl_sq[r],others) : get_rook_attacks(c.sl_sq[r],others);
             vacate += plan_masked_term(pw, c.sl_kind[r], rw, a, sp[rw], sp[!rw]) - c.sl_term[r];
             vac_seen |= a;// a superset of sl_att0[r]
             c.sl_att[r] = a;
         }
     }
     // reference mode, OWN: the piece's own terms where it stands
-    const int ref_from = OWN && scratch ? plan_ref_activity(c.original, p, from, W) : 0;
+    int ref_from_mob = 0;
+    const int ref_from = OWN && scratch ? plan_ref_activity(c.original, p, from, W, &ref_from_mob) : 0;
 
     int b_to = -1, b_n = 0, b_db = 0, b_term = -1, b_key = 64;
     int s_to = -1, s_n = 0, s_db = 0, s_term = -1, s_key = 64;// KEEP_TWO: the runner-up
@@ -532,7 +581,7 @@ static Plan_Target plan_piece(Plan_Ctx& c, int p, int from, BB* scratch, Plan_Ca
         while(targets)
         {
             const int to = find_and_delete_trailling_1(targets);
-            // activity, before the /2
+            // activity: the role terms
             int delta = vacate;
             if(!OWN)
             delta += c.leaper_gain[white][to] + c.slider_gain[white][to];
@@ -544,9 +593,9 @@ static Plan_Target plan_piece(Plan_Ctx& c, int p, int from, BB* scratch, Plan_Ca
                 const uint64_t orth = ORTH ? get_rook_attacks(to,others) : 0;
                 next |= diag | orth;
                 if(DIAG)
-                delta += plan_masked_term(pw, ROLE_DIAG, white, diag, own, enemy);
+                delta += plan_masked_term(pw, DIAG_KIND, white, diag, own, enemy);
                 if(ORTH)
-                delta += plan_masked_term(pw, ROLE_ORTH, white, orth, own, enemy);
+                delta += plan_masked_term(pw, ORTH_KIND, white, orth, own, enemy);
                 if(!OWN)
                 for(int k = 0; k < (TYPE == 4 ? 2 : 1); k++)
                 {
@@ -577,6 +626,19 @@ static Plan_Target plan_piece(Plan_Ctx& c, int p, int from, BB* scratch, Plan_Ca
                 if(c.sl_att[r] >> to & 1)
                 delta += plan_cut(pw, c.sl_kind[r], rw, white, plan_lost(pw, c.sl_kind[r], rw, c.sl_sq[r], to, c.sl_att[r], sp));
             }
+            // activity: the mobility, the moved piece's and that of every piece
+            // attacking `from` or `to`, on the board after the move
+            const uint64_t to_bb = 1ULL << to;
+            const uint64_t occ_to = others | to_bb;
+            int mob_to = mob_base + plan_mobility(W, TYPE, white, to, occ_to, own | to_bb, c.phase);
+            uint64_t moved_sides[2] = {sp[0], sp[1]};
+            moved_sides[white] |= to_bb;
+            for(uint64_t a = OWN ? 0 : mob_from | (((get_bishop_attacks(to,c.occupancy) & diag_sl) | (get_rook_attacks(to,c.occupancy) & orth_sl) | (Kn_template[to] & knights)) & ~from_bb); a; )
+            {
+                const int y = find_and_delete_trailling_1(a);
+                const int q = c.piece_at[y];
+                mob_to += plan_mobility(W, q % 6, q < 6, y, occ_to, moved_sides[q < 6], c.phase) - c.mob_at[y];
+            }
             int db;
             if(scratch)
             {
@@ -584,8 +646,10 @@ static Plan_Target plan_piece(Plan_Ctx& c, int p, int from, BB* scratch, Plan_Ca
                 scratch->Board[p] ^= move;
                 if(OWN)// the others' activity frozen at the position's, the moved piece's own terms at `to`
                 {
-                    const int act_to = c.ref_act - ref_from + plan_ref_activity(scratch, p, to, W);
-                    db = sign * (piecetable(scratch,W) + positional_eval(scratch,W) - c.base + act_to/2 - c.ref_act/2);
+                    int mob_ref_to;
+                    const int act_role_to = c.ref_act - ref_from + plan_ref_activity(scratch, p, to, W, &mob_ref_to);
+                    const int act_to = act_role_to + (c.ref_mob - ref_from_mob + mob_ref_to)/PHASE_MAX;
+                    db = sign * (piecetable(scratch,W) + positional_eval(scratch,W) - c.base + act_to - (c.ref_act + c.ref_mob/PHASE_MAX));
                 }
                 else
                 db = sign * (plan_partial_eval(scratch,W) - c.base);
@@ -594,12 +658,8 @@ static Plan_Target plan_piece(Plan_Ctx& c, int p, int from, BB* scratch, Plan_Ca
             else
             {
                 const int pt_to = W.piece_table_value_opening[row][to^flip]*ow + W.piece_table_value_endgame[row][to^flip]*ew;
-                const int d = (pt_base + sign*pt_to)/39 - pt_now + (c.act + delta)/2 - act_now;
-                // pawn structure, the owner's own view
-                int ps_to = count(other_pawns & pawn_from[to]);
-                if(TYPE == 0)
-                ps_to += count(own & pawn_to[to]);
-                db = sign*d + W.pawn_supporting_value*(ps_to - ps_from);
+                const int d = (pt_base + sign*pt_to)/PHASE_MAX - pt_now + (c.act + delta) + mob_to/PHASE_MAX - act_now;
+                db = sign*d;// the pawn structure does not change
             }
             // with the net (#67): what its correction gains, owner's view, on
             // the board with just this piece moved (side to move unchanged)
@@ -850,7 +910,7 @@ static int plan_eval_impl(const BB* const original, const WEIGHTS& W, Plan_Targe
         BB scratch = *original;// only Board[] is read by the partial evals, so the lazy cache is left alone
         if(PLAN_OWN_ACT)
         {
-            c.ref_act = plan_ref_activity_all(&scratch, W);
+            c.ref_act = plan_ref_activity_all(&scratch, W, &c.ref_mob);
             c.base = piecetable(&scratch,W) + positional_eval(&scratch,W);
         }
         else

@@ -30,7 +30,8 @@ static int weight_fields(WEIGHTS& W, Weight_Field* out)
     {
         out[n++] = {key, values, count, section};
     };
-    add("piece_value", W.piece_value, 6, "material_eval(): pawn rook knight bishop queen king");
+    add("piece_value", W.piece_value, 6, "material_eval(): pawn rook knight bishop queen king, with all pieces on (game_phase() 24) and with none");
+    add("piece_value_endgame", W.piece_value_endgame, 6);
     for(int p=0;p<6;p++)
     add(std::string("piece_table_value_opening ") + PIECES[p], W.piece_table_value_opening[p], 64,
         p ? nullptr : "piecetable(): rank 8 first, files a..h, white's view; black reads it rank-flipped");
@@ -39,10 +40,10 @@ static int weight_fields(WEIGHTS& W, Weight_Field* out)
     add("punishment_for_double_pawn", &W.punishment_for_double_pawn, 1, "positional_eval()");
     add("punishment_for_trippled_pawn", &W.punishment_for_trippled_pawn, 1);
     add("punishment_for_isolated_pawn", &W.punishment_for_isolated_pawn, 1);
-    add("pawn_supporting_value", &W.pawn_supporting_value, 1);
-    add("passed_pawn_value", W.passed_pawn_value, 8, "passed_pawn_eval(): by relative rank, full with bare kings, half with all material");
+    add("passed_pawn_value", W.passed_pawn_value, 8, "passed_pawn_eval(): by relative rank, with no pieces on and with all of them");
+    add("passed_pawn_value_opening", W.passed_pawn_value_opening, 8);
     add("passed_free_path", W.passed_free_path, 8,
-        "passed_pawn_eval()'s endgame modifiers (#90), by relative rank where 8 numbers, scaled to 0 with all material:\n"
+        "passed_pawn_eval()'s endgame modifiers (#90), by relative rank where 8 numbers, scaled to 0 with all pieces on:\n"
         "# nothing ahead; per square (max 5) of the enemy king's / our king's distance to the stop square;\n"
         "# an own pawn beside or protecting it; our rook behind it (+), theirs (-); unstoppable by the\n"
         "# rule of the square (not scaled, the side's best passer only)");
@@ -51,26 +52,33 @@ static int weight_fields(WEIGHTS& W, Weight_Field* out)
     add("passed_supported", W.passed_supported, 8);
     add("passed_rook_behind", &W.passed_rook_behind, 1);
     add("passed_unstoppable", &W.passed_unstoppable, 1);
-    add("mobility_value", &W.mobility_value, 1, "basic_eval(): per attacked square");
     add("activity_pawn_attack", &W.activity_pawn_attack, 1,
-        "piece_activity_eval(): added for the owner per piece or square hit, halved at the end;\n"
-        "# bishop = every diagonal, queens included, rook = every line");
+        "piece_activity_eval(): added for the owner per piece hit");
     add("activity_pawn_defend", &W.activity_pawn_defend, 1);
     add("activity_pawn_blocked", &W.activity_pawn_blocked, 1);
     add("activity_pawn_push_attack", &W.activity_pawn_push_attack, 1);
     add("activity_pawn_push_defend", &W.activity_pawn_push_defend, 1);
     add("activity_bishop_defend", &W.activity_bishop_defend, 1);
     add("activity_bishop_attack", &W.activity_bishop_attack, 1);
-    add("activity_bishop_square", &W.activity_bishop_square, 1);
     add("activity_rook_defend", &W.activity_rook_defend, 1);
     add("activity_rook_attack", &W.activity_rook_attack, 1);
-    add("activity_rook_square", &W.activity_rook_square, 1);
+    add("activity_queen_defend", &W.activity_queen_defend, 1);
+    add("activity_queen_attack", &W.activity_queen_attack, 1);
     add("activity_knight_defend", &W.activity_knight_defend, 1);
     add("activity_knight_attack", &W.activity_knight_attack, 1);
-    add("activity_knight_square", &W.activity_knight_square, 1);
     add("activity_king_defend", &W.activity_king_defend, 1);
     add("activity_king_attack", &W.activity_king_attack, 1);
-    add("tempo_opening", &W.tempo_opening, 1, "tempo_eval(): the side to move's, with all and with no material");
+    add("mobility_knight_opening", W.mobility_knight_opening, 9,
+        "piece_activity_eval()'s mobility: by the number of squares the piece attacks that no own piece\n"
+        "# stands on (0, 1, ...), with all pieces on and with none");
+    add("mobility_knight_endgame", W.mobility_knight_endgame, 9);
+    add("mobility_bishop_opening", W.mobility_bishop_opening, 14);
+    add("mobility_bishop_endgame", W.mobility_bishop_endgame, 14);
+    add("mobility_rook_opening", W.mobility_rook_opening, 15);
+    add("mobility_rook_endgame", W.mobility_rook_endgame, 15);
+    add("mobility_queen_opening", W.mobility_queen_opening, 28);
+    add("mobility_queen_endgame", W.mobility_queen_endgame, 28);
+    add("tempo_opening", &W.tempo_opening, 1, "tempo_eval(): the side to move's, with all and with no pieces on");
     add("tempo_endgame", &W.tempo_endgame, 1);
     add("ks_attacker_weight", W.ks_attacker_weight, 6,
         "king_safety_eval() (src/king_safety.cpp); by piece: pawn rook knight bishop queen king");
@@ -89,7 +97,7 @@ static int weight_fields(WEIGHTS& W, Weight_Field* out)
     return n;
 }
 
-static const int MAX_WEIGHT_FIELDS = 64;
+static const int MAX_WEIGHT_FIELDS = 128;
 
 // A table's k-th number in the file (rank 8 first) is this square.
 static inline int weight_table_square(int k)

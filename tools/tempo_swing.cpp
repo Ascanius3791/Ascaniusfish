@@ -17,8 +17,8 @@
 // column 2; a line with one column is a FEN too), shuffled with `seed`, kept
 // when quiet at the root: not in check, and no capture with SEE >= 0
 // (lib/see.hpp's is_good_capture()) or queen promotion for the mover. They
-// are binned by phase: both sides' material in 39ths, 0..78, as piecetable()
-// counts it, in 6 bins of 13 (promoted material above 78 goes in the last).
+// are binned by phase: game_phase(), 0..PHASE_MAX = 24 (knight and bishop 1,
+// rook 2, queen 4, both sides), which tempo_eval() blends by, in 6 bins.
 // Each bin takes up to `per_bin`. At a depth d a position counts only when
 // s(d), s(d+1) and s(d+2) are all cp scores and |s(d) - s(d+2)| <= agree:
 // a root whose score is still moving says nothing about parity.
@@ -29,7 +29,7 @@
 // ucinewgame. After `minutes` no new position is started.
 //
 // Output, per phase bin and per depth: the median T̂ with its 95% CI (order
-// statistics) and n, then the fit T(p) = (T_o*p + T_e*(78-p))/78 over the bin
+// statistics) and n, then the fit T(p) = (T_o*p + T_e*(24-p))/24 over the bin
 // medians (weighted by n), which is what basic_eval()'s tempo term uses.
 // out= writes one line per position: fen, phase, s(1..dmax+2).
 #include "../lib/uci.hpp"
@@ -50,7 +50,6 @@
 #include <thread>
 
 static const int BINS = 6;
-static const int PHASE_MAX = 78;  // both sides' material in 39ths
 static const int NO_SCORE = INT_MIN;
 
 [[noreturn]] static void die(const std::string& msg)
@@ -61,11 +60,7 @@ static const int NO_SCORE = INT_MIN;
 
 static int phase_of(const BB& pos)
 {
-    int p = 0;
-    for(int side=0;side<2;side++)
-    p += 1*count(pos.Board[0+6*side]) + 5*count(pos.Board[1+6*side]) + 3*count(pos.Board[2+6*side])
-       + 3*count(pos.Board[3+6*side]) + 9*count(pos.Board[4+6*side]);
-    return p;
+    return game_phase(&pos);
 }
 
 static int bin_of(int phase)
@@ -362,7 +357,7 @@ int main(int argc, char** argv)
     std::printf("\n%d positions searched to depth %d in %.0f s, %d engines, UseNNE=false, agree=%d cp\n",
                 done.load(), max_depth, (now_ms()-started)/1000.0, jobs, agree);
     std::printf("median tempo bias T̂ in cp [95%% CI] (n); positive = the side that just moved gets too much\n\n");
-    std::printf("%-14s", "phase (0..78)");
+    std::printf("%-14s", ("phase (0.." + std::to_string(PHASE_MAX) + ")").c_str());
     for(int d : depths) std::printf("  %-24s", ("d=" + std::to_string(d)).c_str());
     std::printf("\n");
     auto cell = [](const Median& m)
@@ -390,7 +385,7 @@ int main(int argc, char** argv)
     for(size_t k=0;k<depths.size();k++) std::printf("  %-24s", cell(median_of(all[k])).c_str());
     std::printf("\n\n");
 
-    // T(p) = T_e + (T_o - T_e)*p/78, least squares over the bin medians at the
+    // T(p) = T_e + (T_o - T_e)*p/PHASE_MAX, least squares over the bin medians at the
     // bins' mean phase, weighted by n.
     for(size_t k=0;k<depths.size();k++)
     {
@@ -408,7 +403,7 @@ int main(int argc, char** argv)
         const double den = sw*sxx - sx*sx;
         if(sw==0 || std::fabs(den)<1e-12) continue;
         const double slope = (sw*sxy - sx*sy)/den, t_e = (sy - slope*sx)/sw;
-        std::printf("fit d=%d: T_o = %+.1f (full material), T_e = %+.1f (bare kings)\n", depths[k], t_e+slope, t_e);
+        std::printf("fit d=%d: T_o = %+.1f (all pieces), T_e = %+.1f (no pieces)\n", depths[k], t_e+slope, t_e);
     }
     return 0;
 }
