@@ -4,7 +4,7 @@
 // The total node count is a signature of search behaviour: it changes only
 // when the search itself changes, never with machine speed.
 //
-//   ./tools/bench [depth] [-q] [nne=<file>] [narrow=0|1|2] [epd=<file>]
+//   ./tools/bench [depth] [-q] [nne=<file>] [narrow=0|1|2] [deeper=0|1] [epd=<file>]
 // -q prints only the final "bench:" line (used by tools/speed_compare).
 // epd=<file> searches that suite's positions after the bench's own, e.g.
 // epd=tools/openings.epd for the 130 positions of #80/#81.
@@ -13,6 +13,7 @@
 // nne=<file> evaluates quiet leaves with that eval-correction net (UCI UseNNE,
 // #52); the node count is then a different signature.
 // narrow=n sets tt_narrowing (#65); only a -DTT_BOUNDS_NEVER_NARROW=0 build reads it.
+// deeper=1 sets tt_deeper_cuts (#93): a deeper stored bound cuts too.
 // The last line is always: bench: nodes <N> time_ms <T> nps <X>
 #include "../lib/uci.hpp"
 #include "bench_positions.hpp"
@@ -41,6 +42,7 @@ int main(int argc, char** argv)
             fens.insert(fens.end(), more.begin(), more.end());
         }
         else if(std::strncmp(argv[i], "narrow=", 7)==0) tt_narrowing = std::atoi(argv[i]+7);//#65, only a -DTT_BOUNDS_NEVER_NARROW=0 build reads it
+        else if(std::strncmp(argv[i], "deeper=", 7)==0) tt_deeper_cuts = std::atoi(argv[i]+7)!=0;//#93
         else depth = std::atoi(argv[i]);
     }
     if(nne_file)

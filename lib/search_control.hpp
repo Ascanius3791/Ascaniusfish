@@ -49,6 +49,10 @@ inline long long search_nodes = 0;
 // Set by UCI setoption while no search runs.
 inline int tt_narrowing = 0;
 
+// A stored bound from a deeper search cuts off too (#93, UCI TTDeeperCuts), not
+// only one of the same depth; it never narrows. Set while no search runs.
+inline bool tt_deeper_cuts = false;
+
 inline void poll_search_abort()
 {
     if((++search_nodes & 255)==0 && search_stop_requested())

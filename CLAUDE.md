@@ -377,6 +377,10 @@ set `tt_narrowing` (`lib/search_control.hpp`); `tools/bench narrow=0|1|2` does t
 The GUI asks its engine once at startup which build it is (`engine_build()`,
 `gui/engine_link.hpp`) and shows it, with both switches, in the gear.
 
+Separately, a bound cuts only when it was stored at exactly the node's depth. The UCI check
+option `TTDeeperCuts` (#93, default off, every build; `tt_deeper_cuts`, `tools/bench deeper=1`)
+lets a bound from a deeper search cut too, still without narrowing.
+
 #### Transposition table size: do not raise it
 `TT_EXPONENT` (default 18) and `TT_BUCKET_SIZE` (8) in `lib/Settings.hpp` give the
 regular TT `2^18 * 8 = 2097152` entries of 32 bytes, 64MB. The exponent is both the array dimension and the
