@@ -274,8 +274,9 @@ void WEIGHTS::clearFileExceptFirstLine(const std::string& filename)const {
 
 WEIGHTS::WEIGHTS()
 {
-    // Everything basic_eval() uses is the default weight set (#85): weights/w1.txt
-    // (WEIGHTS_DEFAULT_FILE), compiled in by lib/weights_default.hpp.
+    // Everything basic_eval() uses is the default weight set (#85): the weights/wN.txt
+    // the Makefile's WEIGHTS_DEFAULT names (WEIGHTS_DEFAULT_FILE), compiled in by
+    // lib/weights_default.hpp.
     Weight_Set_Info info;
     std::string error;
     if(!read_weight_set(WEIGHTS_DEFAULT_TEXT, *this, info, error))

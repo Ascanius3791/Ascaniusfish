@@ -380,6 +380,183 @@ inline Eval_Split split_passed(const BB* const original, const WEIGHTS& W)
     return s;
 }
 
+// The parts of #90's terms record the square they count, like the passers.
+inline void split_record(Eval_Part& p, int white, int from, int to)
+{
+    if(p.n_hits[white] < Eval_Part::MAX_HITS)
+    p.hits[white][p.n_hits[white]++] = (short)(from*64 + to);
+}
+
+inline std::string split_blend_info(int opening, int endgame, int phase)
+{
+    return std::to_string(opening) + " (opening) to " + std::to_string(endgame) + " (endgame), now "
+         + std::to_string((opening*phase + endgame*(PHASE_MAX-phase))/PHASE_MAX);
+}
+
+// pawn_shape_eval() (#90): backward pawns and phalanxes, in PHASE_MAXths.
+inline Eval_Split split_pawn_shape(const BB* const original, const WEIGHTS& W)
+{
+    Eval_Split s;
+    s.scale = PHASE_MAX;
+    const int phase = game_phase(original), endgame = PHASE_MAX-phase;
+    Eval_Part& backward = s.add("Backward", "own pawns on a neighbouring file, all ahead of it, and an enemy pawn attacks its stop square: "
+                                + split_blend_info(W.pawn_backward_opening, W.pawn_backward_endgame, phase));
+    Eval_Part& phalanx = s.add("Phalanx", "two own pawns side by side, by relative rank (counted at the left pawn)");
+    for(int white=0;white<2;white++)
+    {
+        const uint64_t pawns = original->Board[0+6*!white];
+        const uint64_t enemy_attacks = pawn_attacks(original->Board[0+6*white], !white);
+        uint64_t virtual_pawns = pawns;
+        while(virtual_pawns)
+        {
+            const int i = find_and_delete_trailling_1(virtual_pawns);
+            const int column = i%8, rank = i/8, r = white ? rank : 7-rank;
+            if(column<7 && (pawns >> (i+1) & 1))
+            {
+                phalanx.raw[white] += W.pawn_phalanx_opening[r]*phase + W.pawn_phalanx_endgame[r]*endgame;
+                phalanx.count[white]++;
+                split_record(phalanx, white, i, i+1);
+            }
+            uint64_t neighbours = 0;
+            if(column>0) neighbours |= mask_column[column-1];
+            if(column<7) neighbours |= mask_column[column+1];
+            const uint64_t level_or_behind = white ? (~0ULL >> (8*(7-rank))) : (~0ULL << (8*rank));
+            const int stop = white ? i+8 : i-8;
+            if((pawns & neighbours) && !(pawns & neighbours & level_or_behind) && (enemy_attacks >> stop & 1))
+            {
+                backward.raw[white] += W.pawn_backward_opening*phase + W.pawn_backward_endgame*endgame;
+                backward.count[white]++;
+                split_record(backward, white, i, i);
+            }
+        }
+    }
+    return s;
+}
+
+// placement_eval() (#90): the bishop pair, rooks on files and the 7th, outposts,
+// in PHASE_MAXths.
+inline Eval_Split split_placement(const BB* const original, const WEIGHTS& W)
+{
+    Eval_Split s;
+    s.scale = PHASE_MAX;
+    const uint64_t* B = original->Board;
+    const int phase = game_phase(original), endgame = PHASE_MAX-phase;
+    Eval_Part& pair = s.add("Bishop pair", "two bishops or more: " + split_blend_info(W.bishop_pair_opening, W.bishop_pair_endgame, phase));
+    Eval_Part& open = s.add("R open file", "no pawn on the rook's file: " + split_blend_info(W.rook_open_file_opening, W.rook_open_file_endgame, phase));
+    Eval_Part& semi = s.add("R half-open file", "no own pawn on the rook's file, an enemy one: "
+                            + split_blend_info(W.rook_semi_open_file_opening, W.rook_semi_open_file_endgame, phase));
+    Eval_Part& seventh_part = s.add("R on the 7th", "with enemy pawns on the 7th or the enemy king on the 8th: "
+                                    + split_blend_info(W.rook_seventh_opening, W.rook_seventh_endgame, phase));
+    Eval_Part& knight = s.add("N outpost", "ranks 4-6, protected by an own pawn, no enemy pawn left to attack it: "
+                              + split_blend_info(W.outpost_knight_opening, W.outpost_knight_endgame, phase));
+    Eval_Part& bishop = s.add("B outpost", "ranks 4-6, protected by an own pawn, no enemy pawn left to attack it: "
+                              + split_blend_info(W.outpost_bishop_opening, W.outpost_bishop_endgame, phase));
+    auto count_in = [&](Eval_Part& p, int white, int opening, int endgame_value, int sq)
+    {
+        p.raw[white] += opening*phase + endgame_value*endgame;
+        p.count[white]++;
+        split_record(p, white, sq, sq);
+    };
+    for(int white=0;white<2;white++)
+    {
+        const int own = 6*!white, enemy = 6*white;
+        const uint64_t own_pawns = B[0+own], enemy_pawns = B[0+enemy];
+        if(count(B[3+own])>=2)
+        {
+            pair.raw[white] = W.bishop_pair_opening*phase + W.bishop_pair_endgame*endgame;
+            pair.count[white] = 1;
+        }
+        const uint64_t seventh = mask_row[white ? 6 : 1], eighth = mask_row[white ? 7 : 0];
+        uint64_t rooks = B[1+own];
+        while(rooks)
+        {
+            const int i = find_and_delete_trailling_1(rooks);
+            const uint64_t file = mask_column[i%8];
+            if(!(file & (own_pawns|enemy_pawns)))
+            count_in(open, white, W.rook_open_file_opening, W.rook_open_file_endgame, i);
+            else if(!(file & own_pawns))
+            count_in(semi, white, W.rook_semi_open_file_opening, W.rook_semi_open_file_endgame, i);
+            if((seventh >> i & 1) && ((enemy_pawns & seventh) || (B[5+enemy] & eighth)))
+            count_in(seventh_part, white, W.rook_seventh_opening, W.rook_seventh_endgame, i);
+        }
+        uint64_t minors = (B[2+own] | B[3+own]) & pawn_attacks(own_pawns, white) & (white ? 0x0000FFFFFF000000ULL : 0x000000FFFFFF0000ULL);
+        while(minors)
+        {
+            const int i = find_and_delete_trailling_1(minors);
+            const int column = i%8, rank = i/8;
+            uint64_t neighbours = 0;
+            if(column>0) neighbours |= mask_column[column-1];
+            if(column<7) neighbours |= mask_column[column+1];
+            const uint64_t ahead = white ? (~0ULL << (8*(rank+1))) : ((1ULL << (8*rank))-1);
+            if(enemy_pawns & neighbours & ahead)
+            continue;
+            if(B[2+own] >> i & 1)
+            count_in(knight, white, W.outpost_knight_opening, W.outpost_knight_endgame, i);
+            else
+            count_in(bishop, white, W.outpost_bishop_opening, W.outpost_bishop_endgame, i);
+        }
+    }
+    return s;
+}
+
+// threat_eval() (#90): enemy pieces attacked by pawns, minors and rooks, by
+// the victim's type, and hanging ones. Not blended.
+inline Eval_Split split_threats(const BB* const original, const WEIGHTS& W)
+{
+    Eval_Split s;
+    const uint64_t* B = original->Board;
+    const uint64_t occupancy = original->get_occupancy();
+    auto by_type = [](const int* v)
+    {
+        return " (pawn " + std::to_string(v[0]) + ", rook " + std::to_string(v[1]) + ", knight " + std::to_string(v[2])
+             + ", bishop " + std::to_string(v[3]) + ", queen " + std::to_string(v[4]) + ")";
+    };
+    Eval_Part* part[4];
+    part[0] = &s.add("By pawns", "enemy pieces our pawns attack, by type" + by_type(W.threat_by_pawn));
+    part[1] = &s.add("By N/B", "enemy pieces our knights and bishops attack, by type" + by_type(W.threat_by_minor));
+    part[2] = &s.add("By rooks", "enemy pieces our rooks attack, by type" + by_type(W.threat_by_rook));
+    part[3] = &s.add("Hanging", "enemy pieces but the king that we attack and they do not defend: " + std::to_string(W.threat_hanging) + " each");
+    const int* weight[3] = {W.threat_by_pawn, W.threat_by_minor, W.threat_by_rook};
+    uint64_t by[2][3], attacks[2];
+    for(int white=0;white<2;white++)
+    {
+        const int own = 6*!white;
+        uint64_t minor = 0, rook = 0, other = 0, bb;
+        for(bb = B[2+own]; bb; ) minor |= Kn_template[find_and_delete_trailling_1(bb)];
+        for(bb = B[3+own]; bb; ) minor |= get_bishop_attacks(find_and_delete_trailling_1(bb), occupancy);
+        for(bb = B[1+own]; bb; ) rook |= get_rook_attacks(find_and_delete_trailling_1(bb), occupancy);
+        for(bb = B[4+own]; bb; )
+        {
+            const int i = find_and_delete_trailling_1(bb);
+            other |= get_bishop_attacks(i, occupancy) | get_rook_attacks(i, occupancy);
+        }
+        if(B[5+own])
+        other |= K_template[__builtin_ctzll(B[5+own])];
+        by[white][0] = pawn_attacks(B[0+own], white);
+        by[white][1] = minor;
+        by[white][2] = rook;
+        attacks[white] = by[white][0] | minor | rook | other;
+    }
+    for(int white=0;white<2;white++)
+    for(int type=0;type<5;type++)
+    {
+        const uint64_t victims = B[type+6*white];
+        for(int k=0;k<4;k++)
+        {
+            uint64_t hit = victims & (k<3 ? by[white][k] : attacks[white] & ~attacks[!white]);
+            const int n = count(hit);
+            part[k]->count[white] += n;
+            part[k]->raw[white] += n*(k<3 ? weight[k][type] : W.threat_hanging);
+            while(hit)
+            {
+                const int sq = find_and_delete_trailling_1(hit);
+                split_record(*part[k], white, sq, sq);
+            }
+        }
+    }
+    return s;
+}
+
 // tempo_eval() (#70): the side to move's tempo, from W.tempo_endgame with no
 // pieces to W.tempo_opening with all of them, blended by the phase.
 inline Eval_Split split_tempo(const BB* const original, const WEIGHTS& W)
@@ -408,7 +585,7 @@ struct Eval_Row
     Eval_Split split;
 };
 
-static const int EVAL_ROWS = 7;
+static const int EVAL_ROWS = 10;
 
 // Every term in basic_eval()'s order. `basic` is basic_eval() itself and
 // `real_sum` the real terms added up, so real_sum != basic means basic_eval()
@@ -441,8 +618,11 @@ inline Eval_Breakdown eval_breakdown(const BB* const pos, const WEIGHTS& W)
     set(2, "King safety",      "king_safety_eval()",    true,  king_safety_eval(pos, W),    split_king_safety(pos, W));
     set(3, "Pawn structure",   "positional_eval()",     true,  positional_eval(pos, W),     split_pawn_structure(pos, W));
     set(4, "Passed pawns",     "passed_pawn_eval()",    true,  passed_pawn_eval(pos, W),    split_passed(pos, W));
-    set(5, "Piece activity",   "piece_activity_eval()", true,  piece_activity_eval(pos, W), split_piece_activity(pos, W));
-    set(6, "Tempo",            "tempo_eval()",          true,  tempo_eval(pos, W),          split_tempo(pos, W));
+    set(5, "Pawn shape",       "pawn_shape_eval()",     true,  pawn_shape_eval(pos, W),     split_pawn_shape(pos, W));
+    set(6, "Piece placement",  "placement_eval()",      true,  placement_eval(pos, W),      split_placement(pos, W));
+    set(7, "Threats",          "threat_eval()",         true,  threat_eval(pos, W),         split_threats(pos, W));
+    set(8, "Piece activity",   "piece_activity_eval()", true,  piece_activity_eval(pos, W), split_piece_activity(pos, W));
+    set(9, "Tempo",            "tempo_eval()",          true,  tempo_eval(pos, W),          split_tempo(pos, W));
     b.basic = basic_eval(pos, W);
     return b;
 }

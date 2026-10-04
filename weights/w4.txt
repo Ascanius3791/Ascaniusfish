@@ -169,6 +169,39 @@ mobility_rook_endgame 0 15 30 45 60 75 90 105 120 135 150 165 180 195 210
 mobility_queen_opening 0 15 31 46 61 76 92 107 122 137 153 168 183 198 214 229 244 259 275 290 305 320 336 351 366 381 397 412
 mobility_queen_endgame 0 15 31 46 61 76 92 107 122 137 153 168 183 198 214 229 244 259 275 290 305 320 336 351 366 381 397 412
 
+# pawn_shape_eval() (#90), added for the owner, with all pieces on and with none: a backward pawn
+# (own pawns on a neighbouring file, all ahead of it, its stop square attacked by an enemy pawn);
+# two own pawns side by side, by relative rank
+pawn_backward_opening 0
+pawn_backward_endgame 0
+pawn_phalanx_opening 0 0 0 0 0 0 0 0
+pawn_phalanx_endgame 0 0 0 0 0 0 0 0
+
+# placement_eval() (#90), added for the owner, with all pieces on and with none: the bishop pair;
+# a rook on a file without pawns, without own pawns; a rook on the 7th with enemy pawns there or
+# the enemy king on the 8th; a knight or bishop on ranks 4-6, protected by a pawn, that no enemy
+# pawn can attack
+bishop_pair_opening 0
+bishop_pair_endgame 0
+rook_open_file_opening 0
+rook_open_file_endgame 0
+rook_semi_open_file_opening 0
+rook_semi_open_file_endgame 0
+rook_seventh_opening 0
+rook_seventh_endgame 0
+outpost_knight_opening 0
+outpost_knight_endgame 0
+outpost_bishop_opening 0
+outpost_bishop_endgame 0
+
+# threat_eval() (#90), added for the attacker: per enemy piece attacked by a pawn, a knight or
+# bishop, a rook, by its type (pawn rook knight bishop queen); per enemy piece but the king
+# attacked and not defended
+threat_by_pawn 0 0 0 0 0
+threat_by_minor 0 0 0 0 0
+threat_by_rook 0 0 0 0 0
+threat_hanging 0
+
 # tempo_eval(): the side to move's, with all and with no pieces on
 tempo_opening -6
 tempo_endgame 5

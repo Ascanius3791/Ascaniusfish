@@ -43,6 +43,13 @@ enum Passer_Part { PASSER_BASE, PASSER_PATH, PASSER_KING, PASSER_SUPPORT, PASSER
 void passed_pawn_parts(const BB* const original, bool white, int sq, int phase, const WEIGHTS& W, int part[PASSER_PARTS]);
 int passed_pawn_eval(const BB* const original, const WEIGHTS& W = WEIGHTS_OG);// white's view
 
+// #90's terms, white's view: backward and phalanx pawns; the bishop pair, rooks on open
+// files and the 7th, outposts; pieces attacked by pawns, minors and rooks, and hanging ones.
+uint64_t pawn_attacks(uint64_t pawns, bool white);// the squares these pawns attack
+int pawn_shape_eval(const BB* const original, const WEIGHTS& W = WEIGHTS_OG);
+int placement_eval(const BB* const original, const WEIGHTS& W = WEIGHTS_OG);
+int threat_eval(const BB* const original, const WEIGHTS& W = WEIGHTS_OG);
+
 int tempo_eval(const BB* const original, const WEIGHTS& W = WEIGHTS_OG);// the side to move's tempo, white's view (#70)
 
 int basic_eval(const BB*const original , const WEIGHTS& W = WEIGHTS_OG);// return the evaluation in centipawns

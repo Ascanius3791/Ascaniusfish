@@ -14,8 +14,9 @@
 // truncations: per position the pieces on the piece-square tables (with the game
 // phase, game_phase()), and the coefficient of every other tuned weight. Those
 // coefficients are taken from the real term functions (material_eval(),
-// positional_eval(), passed_pawn_eval(), piece_activity_eval(), tempo_eval(),
-// king_safety_detail()) with one weight set to a probe value and the rest of that
+// positional_eval(), passed_pawn_eval(), pawn_shape_eval(), placement_eval(),
+// threat_eval(), piece_activity_eval(), tempo_eval(), king_safety_detail()) with
+// one weight set to a probe value and the rest of that
 // term at 0, so the model cannot drift from the eval. Every term is linear in its
 // weights except king danger, which the model keeps in closed form, so the gradient
 // is exact: max(0, units)^2 / ks_danger_div, units linear in the ks_* weights.
@@ -33,6 +34,12 @@
 // with the lowest valid loss of the model is kept. The weights are rounded, and the
 // report gives train/valid/test loss of both sets by the real basic_eval(). It is
 // printed and written as '#' lines at the end of the new set.
+//
+// Memory: about 230 bytes per train or valid position (most of it the feature
+// words), 30 per test position. The words go into fixed blocks that never move,
+// rather than one array that would hold them twice while it grows, and the FENs
+// are dropped once the features are made: the real eval's losses at the end read
+// the files again, after the features are freed.
 #include "../lib/uci.hpp"
 #include "../lib/king_safety.hpp"
 #include "../lib/weight_set.hpp"
@@ -45,6 +52,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <memory>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -106,30 +114,38 @@ static void build_params(const WEIGHTS& from)
 
 // ---- one position as the model sees it
 
-// Feature words. A table piece: bits 0-8 piece*64 + square (white's view), bit 9 set
-// for black, bits 16-23 the game phase (0..PHASE_MAX, the endgame weight is
-// PHASE_MAX - phase). A linear or danger feature: bits 0-11 the parameter, bits 16-31
+// Feature words. The table pieces first, two to a word (16 bits each): bits 0-8
+// piece*64 + square (white's view), bit 9 set for black; they share the position's
+// game phase (0..PHASE_MAX, the endgame weight is PHASE_MAX - phase). Then the
+// linear and danger features, one to a word: bits 0-11 the parameter, bits 16-31
 // the numerator (int16).
 struct Pos
 {
-    uint32_t off;               // first feature word
+    const uint32_t* w;          // first feature word
     uint8_t n_tab, n_lin, n_ks[2];   // n_ks[1]: white king's danger units (gated in)
     uint8_t r2;                 // 2 * result
+    uint8_t phase;              // game_phase()
 };
+
+static const size_t BLOCK_WORDS = 1<<20;   // 4 MB
 
 struct Split
 {
     std::vector<Pos> pos;
-    std::vector<uint32_t> words;
+    std::vector<std::unique_ptr<uint32_t[]>> blocks;   // the words; a position's never straddle two
+    size_t n_words = 0;
     std::vector<int> base;      // basic_eval() with the from set
-    std::vector<std::string> fens;   // only while the features are made
+    std::string blob;           // every FEN, back to back
+    std::vector<uint32_t> fen_at{0};   // FEN i is blob[fen_at[i], fen_at[i+1])
+    size_t count() const { return fen_at.size()-1; }
+    std::string fen(size_t i) const { return blob.substr(fen_at[i], fen_at[i+1]-fen_at[i]); }
 };
 
 static WEIGHTS W_FROM;
 static int TO_BASE, TE_BASE;            // flat index of the tables' [0][0]
 
 struct Probe_Group { std::vector<int> params; int value; };
-static Probe_Group G_MATERIAL, G_POSITIONAL, G_PASSED, G_ACTIVITY, G_TEMPO, G_KS_ATTACK, G_KS_SHELTER;
+static Probe_Group G_MATERIAL, G_POSITIONAL, G_PASSED, G_SHAPE, G_PLACEMENT, G_THREAT, G_ACTIVITY, G_TEMPO, G_KS_ATTACK, G_KS_SHELTER;
 
 static void build_groups()
 {
@@ -151,6 +167,21 @@ static void build_groups()
     add(G_PASSED, &W.passed_rook_behind, 1);
     add(G_PASSED, &W.passed_unstoppable, 1);   // a max over the passers: linear while >= 0
     G_PASSED.value = PHASE_MAX;         // every part divides by PHASE_MAX: exact
+    add(G_SHAPE, &W.pawn_backward_opening, 1);
+    add(G_SHAPE, &W.pawn_backward_endgame, 1);
+    add(G_SHAPE, W.pawn_phalanx_opening, 8);
+    add(G_SHAPE, W.pawn_phalanx_endgame, 8);
+    G_SHAPE.value = PHASE_MAX;          // pawn_shape_eval(): /PHASE_MAX, exact
+    for(const int* p : {&W.bishop_pair_opening, &W.bishop_pair_endgame, &W.rook_open_file_opening, &W.rook_open_file_endgame,
+                        &W.rook_semi_open_file_opening, &W.rook_semi_open_file_endgame, &W.rook_seventh_opening, &W.rook_seventh_endgame,
+                        &W.outpost_knight_opening, &W.outpost_knight_endgame, &W.outpost_bishop_opening, &W.outpost_bishop_endgame})
+    add(G_PLACEMENT, p, 1);
+    G_PLACEMENT.value = PHASE_MAX;      // placement_eval(): /PHASE_MAX, exact
+    add(G_THREAT, W.threat_by_pawn, 5);
+    add(G_THREAT, W.threat_by_minor, 5);
+    add(G_THREAT, W.threat_by_rook, 5);
+    add(G_THREAT, &W.threat_hanging, 1);
+    G_THREAT.value = 1;                 // counts
     for(const int* p : {&W.activity_pawn_attack, &W.activity_pawn_defend, &W.activity_pawn_blocked,
                         &W.activity_pawn_push_attack, &W.activity_pawn_push_defend,
                         &W.activity_bishop_defend, &W.activity_bishop_attack,
@@ -186,6 +217,9 @@ static void build_groups()
     for(int j : G_MATERIAL.params) param_den[j] = G_MATERIAL.value;
     for(int j : G_POSITIONAL.params) param_den[j] = 1;
     for(int j : G_PASSED.params) param_den[j] = G_PASSED.value;
+    for(int j : G_SHAPE.params) param_den[j] = G_SHAPE.value;
+    for(int j : G_PLACEMENT.params) param_den[j] = G_PLACEMENT.value;
+    for(int j : G_THREAT.params) param_den[j] = G_THREAT.value;
     for(int j : G_ACTIVITY.params) param_den[j] = G_ACTIVITY.value;
     for(int j : G_TEMPO.params) param_den[j] = G_TEMPO.value;
     for(int j : G_KS_SHELTER.params) param_den[j] = G_KS_SHELTER.value;
@@ -201,10 +235,9 @@ static uint32_t lin_word(int j, int num)
 static Pos make_pos(const BB& b, double result, std::vector<uint32_t>& words)
 {
     Pos p{};
-    p.off = words.size();
     p.r2 = (uint8_t)std::lround(2*result);
     // piecetable(): both sides by the one game phase
-    const int phase = game_phase(&b);
+    p.phase = game_phase(&b);
     for(int piece=0;piece<12;piece++)
     {
         uint64_t bb = b.Board[piece];
@@ -212,7 +245,9 @@ static Pos make_pos(const BB& b, double result, std::vector<uint32_t>& words)
         {
             const int sq = find_and_delete_trailling_1(bb);
             const bool black = piece>=6;
-            words.push_back((uint32_t)((piece%6)*64 + (black ? sq^56 : sq)) | (black ? 1u<<9 : 0) | (uint32_t)phase << 16);
+            const uint32_t entry = (uint32_t)((piece%6)*64 + (black ? sq^56 : sq)) | (black ? 1u<<9 : 0);
+            if(p.n_tab%2==0) words.push_back(entry);
+            else words.back() |= entry << 16;
             p.n_tab++;
         }
     }
@@ -234,6 +269,9 @@ static Pos make_pos(const BB& b, double result, std::vector<uint32_t>& words)
     probe(G_MATERIAL, [&]{ return material_eval(&b, P); });
     probe(G_POSITIONAL, [&]{ return positional_eval(&b, P); });
     probe(G_PASSED, [&]{ return passed_pawn_eval(&b, P); });
+    probe(G_SHAPE, [&]{ return pawn_shape_eval(&b, P); });
+    probe(G_PLACEMENT, [&]{ return placement_eval(&b, P); });
+    probe(G_THREAT, [&]{ return threat_eval(&b, P); });
     probe(G_ACTIVITY, [&]{ return piece_activity_eval(&b, P); });
     probe(G_TEMPO, [&]{ return tempo_eval(&b, P); });
     // king safety: white = -(attack + shelter), black likewise, eval = white - black
@@ -259,8 +297,11 @@ static Pos make_pos(const BB& b, double result, std::vector<uint32_t>& words)
         }
         if(!gated_in) ks[side].clear();
     }
+    int n_lin = 0;
     for(int j : touched)
-    if(acc[j]) { words.push_back(lin_word(j, acc[j])); p.n_lin++; }
+    if(acc[j]) { words.push_back(lin_word(j, acc[j])); n_lin++; }
+    if(n_lin>255 || ks[0].size()>255 || ks[1].size()>255) { BB c = b; std::fprintf(stderr, "more than 255 features of one kind in %s\n", c.get_FEN().c_str()); std::exit(1); }
+    p.n_lin = n_lin;
     for(int side=1;side>=0;side--)
     {
         words.insert(words.end(), ks[side].begin(), ks[side].end());
@@ -272,19 +313,22 @@ static Pos make_pos(const BB& b, double result, std::vector<uint32_t>& words)
 // ---- the model
 
 // The model's eval of p at theta; with grad, adds g * d eval / d theta to grad.
-static inline double model_eval(const Pos& p, const uint32_t* words, const double* th, double* grad, double g)
+static inline double model_eval(const Pos& p, const double* th, double* grad, double g)
 {
-    const uint32_t* w = words + p.off;
+    const uint32_t* w = p.w;
+    const int n_tab_words = (p.n_tab+1)/2;
     double e = 0;
     // tables
-    double tab = 0;
-    for(int i=0;i<p.n_tab;i++, w++)
+    double opening = 0, endgame = 0;
+    for(int i=0;i<p.n_tab;i++)
     {
-        const int idx = *w & 511, ph = *w >> 16 & 255;
-        const double sign = *w & 512 ? -1.0 : 1.0;
-        tab += sign*(th[TO_BASE+idx]*ph + th[TE_BASE+idx]*(PHASE_MAX-ph));
+        const uint32_t entry = w[i>>1] >> (16*(i&1));
+        const int idx = entry & 511;
+        if(entry & 512) { opening -= th[TO_BASE+idx]; endgame -= th[TE_BASE+idx]; }
+        else            { opening += th[TO_BASE+idx]; endgame += th[TE_BASE+idx]; }
     }
-    e += tab/PHASE_MAX;
+    e += (opening*p.phase + endgame*(PHASE_MAX-p.phase))/PHASE_MAX;
+    w += n_tab_words;
     // linear
     const uint32_t* lin = w;
     for(int i=0;i<p.n_lin;i++, w++)
@@ -302,13 +346,13 @@ static inline double model_eval(const Pos& p, const uint32_t* words, const doubl
 
     if(grad)
     {
-        w = words + p.off;
-        for(int i=0;i<p.n_tab;i++, w++)
+        const double go = g*p.phase/PHASE_MAX, ge = g*(PHASE_MAX-p.phase)/PHASE_MAX;
+        for(int i=0;i<p.n_tab;i++)
         {
-            const int idx = *w & 511, ph = *w >> 16 & 255;
-            const double gs = (*w & 512 ? -g : g)/PHASE_MAX;
-            grad[TO_BASE+idx] += gs*ph;
-            grad[TE_BASE+idx] += gs*(PHASE_MAX-ph);
+            const uint32_t entry = p.w[i>>1] >> (16*(i&1));
+            const int idx = entry & 511;
+            if(entry & 512) { grad[TO_BASE+idx] -= go; grad[TE_BASE+idx] -= ge; }
+            else            { grad[TO_BASE+idx] += go; grad[TE_BASE+idx] += ge; }
         }
         for(int i=0;i<p.n_lin;i++)
         grad[lin[i] & PARAM_MASK] += g*(int16_t)(lin[i] >> 16)/param_den[lin[i] & PARAM_MASK];
@@ -339,10 +383,10 @@ static double model_loss(const Split& s, const double* th, double K, int jobs, d
         {
             const Pos& p = s.pos[i];
             const double r = p.r2*0.5;
-            const double e = model_eval(p, s.words.data(), th, nullptr, 0);
+            const double e = model_eval(p, th, nullptr, 0);
             const double q = sigmoid(e/K);
             sum += (q-r)*(q-r);
-            if(gt) model_eval(p, s.words.data(), th, gt, 2*(q-r)*q*(1-q)/K);
+            if(gt) model_eval(p, th, gt, 2*(q-r)*q*(1-q)/K);
         }
         part[t] = sum;
     });
@@ -374,48 +418,68 @@ static bool read_split(const std::string& path, Split& s)
         size_t a = line.find('\t'), b = line.find('\t', a+1), c = line.find('\t', b+1);
         size_t d = line.find('\t', c+1), e = line.find('\t', d+1), f = line.find('\t', e+1);
         if(f==std::string::npos) { std::fprintf(stderr, "%s: bad line %s\n", path.c_str(), line.c_str()); return false; }
-        s.fens.push_back(line.substr(b+1, c-b-1));
+        s.blob.append(line, b+1, c-b-1);
+        s.fen_at.push_back((uint32_t)s.blob.size());
         results.push_back(std::atof(line.substr(e+1, f-e-1).c_str()));
     }
-    s.pos.assign(s.fens.size(), Pos{});
-    s.base.assign(s.fens.size(), 0);
+    s.blob.shrink_to_fit();
+    s.fen_at.shrink_to_fit();
+    s.pos.assign(s.count(), Pos{});
+    s.base.assign(s.count(), 0);
     for(size_t i=0;i<results.size();i++) s.pos[i].r2 = (uint8_t)std::lround(2*results[i]);
-    return !s.fens.empty();
+    return s.count()>0;
 }
 
-// Features of every position of s, in jobs threads.
-static void make_features(Split& s, int jobs)
+// Features of every position of s, in jobs threads, each into blocks of its own;
+// with features false only basic_eval() (the test split needs nothing else).
+static void make_features(Split& s, int jobs, bool features)
 {
-    const size_t n = s.fens.size();
-    std::vector<std::vector<uint32_t>> words(jobs);
+    const size_t n = s.count();
+    std::vector<std::vector<std::unique_ptr<uint32_t[]>>> blocks(jobs);
+    std::vector<size_t> words_of(jobs, 0);
     std::vector<std::thread> pool;
     for(int t=0;t<jobs;t++)
     pool.emplace_back([&, t]
     {
+        std::vector<uint32_t> words;
+        size_t used = BLOCK_WORDS;
         for(size_t i=n*t/jobs;i<n*(t+1)/jobs;i++)
         {
             BB b;
-            if(!uci_parse_fen(s.fens[i], b)) { std::fprintf(stderr, "bad FEN %s\n", s.fens[i].c_str()); std::exit(1); }
-            const double r = s.pos[i].r2*0.5;
-            s.pos[i] = make_pos(b, r, words[t]);
+            const std::string fen = s.fen(i);
+            if(!uci_parse_fen(fen, b)) { std::fprintf(stderr, "bad FEN %s\n", fen.c_str()); std::exit(1); }
             s.base[i] = basic_eval(&b, W_FROM);
+            if(!features)
+            continue;
+            words.clear();
+            s.pos[i] = make_pos(b, s.pos[i].r2*0.5, words);
+            if(used + words.size() > BLOCK_WORDS)
+            {
+                blocks[t].emplace_back(new uint32_t[BLOCK_WORDS]);
+                used = 0;
+            }
+            uint32_t* at = blocks[t].back().get() + used;
+            std::copy(words.begin(), words.end(), at);
+            s.pos[i].w = at;
+            used += words.size();
+            words_of[t] += words.size();
         }
     });
     for(auto& th : pool) th.join();
-    size_t off = 0;
     for(int t=0;t<jobs;t++)
     {
-        for(size_t i=n*t/jobs;i<n*(t+1)/jobs;i++) s.pos[i].off += off;
-        off += words[t].size();
+        for(auto& b : blocks[t]) s.blocks.push_back(std::move(b));
+        s.n_words += words_of[t];
     }
-    s.words.reserve(off);
-    for(int t=0;t<jobs;t++) { s.words.insert(s.words.end(), words[t].begin(), words[t].end()); std::vector<uint32_t>().swap(words[t]); }
 }
 
-// Mean loss of the real basic_eval() with W over s.
-static double real_loss(const Split& s, const WEIGHTS& W, double K, int jobs)
+// Mean loss of the real basic_eval() with W over the split in `path`.
+static bool read_split(const std::string& path, Split& s);
+static double real_loss(const std::string& path, const WEIGHTS& W, double K, int jobs)
 {
-    const size_t n = s.fens.size();
+    Split s;
+    if(!read_split(path, s)) { std::fprintf(stderr, "cannot read %s again\n", path.c_str()); std::exit(1); }
+    const size_t n = s.count();
     std::vector<double> part(jobs, 0);
     std::vector<std::thread> pool;
     for(int t=0;t<jobs;t++)
@@ -425,7 +489,7 @@ static double real_loss(const Split& s, const WEIGHTS& W, double K, int jobs)
         for(size_t i=n*t/jobs;i<n*(t+1)/jobs;i++)
         {
             BB b;
-            uci_parse_fen(s.fens[i], b);
+            uci_parse_fen(s.fen(i), b);
             const double q = sigmoid(basic_eval(&b, W)/K), r = s.pos[i].r2*0.5;
             sum += (q-r)*(q-r);
         }
@@ -505,9 +569,10 @@ int main(int argc, char** argv)
     for(int s=0;s<3;s++)
     {
         if(!read_split(opt.data + "/" + names[s] + ".tsv", split[s])) { std::fprintf(stderr, "cannot read %s/%s.tsv\n", opt.data.c_str(), names[s]); return 1; }
-        make_features(split[s], opt.jobs);
-        std::printf("%s: %zu positions, %.1f features each (%.1f s)\n", names[s], split[s].pos.size(),
-                    (double)split[s].words.size()/split[s].pos.size(), secs());
+        make_features(split[s], opt.jobs, s<2);
+        std::string().swap(split[s].blob);   // fen() is gone from here on
+        std::printf("%s: %zu positions, %.1f words each (%.1f s)\n", names[s], split[s].pos.size(),
+                    (double)split[s].n_words/split[s].pos.size(), secs());
         std::fflush(stdout);
     }
 
@@ -520,7 +585,7 @@ int main(int argc, char** argv)
         const Split& s = split[0];
         for(size_t i=0;i<s.pos.size();i++)
         {
-            const double diff = std::fabs(model_eval(s.pos[i], s.words.data(), th0.data(), nullptr, 0) - s.base[i]);
+            const double diff = std::fabs(model_eval(s.pos[i], th0.data(), nullptr, 0) - s.base[i]);
             sum += diff;
             worst = std::max(worst, (int)std::ceil(diff));
         }
@@ -582,9 +647,11 @@ int main(int argc, char** argv)
     W_NEW.version = W_FROM.version+1;
     double loss[2][3];
     for(int s=0;s<3;s++)
+    std::vector<std::unique_ptr<uint32_t[]>>().swap(split[s].blocks);
+    for(int s=0;s<3;s++)
     {
         loss[0][s] = base_loss(split[s], K);
-        loss[1][s] = real_loss(split[s], W_NEW, K, opt.jobs);
+        loss[1][s] = real_loss(opt.data + "/" + names[s] + ".tsv", W_NEW, K, opt.jobs);
     }
 
     char line[512];

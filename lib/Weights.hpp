@@ -50,6 +50,20 @@ class WEIGHTS
         int mobility_bishop_opening[14], mobility_bishop_endgame[14];
         int mobility_rook_opening[15], mobility_rook_endgame[15];
         int mobility_queen_opening[28], mobility_queen_endgame[28];
+        // #90's new terms, each added for the owner, with all pieces on and with none (blended by game_phase())
+        // pawn_shape_eval():
+        int pawn_backward_opening, pawn_backward_endgame;//a pawn with own pawns on a neighbouring file, all of them ahead of it, and an enemy pawn attacking its stop square
+        int pawn_phalanx_opening[8], pawn_phalanx_endgame[8];//by relative rank, per two own pawns side by side
+        // placement_eval():
+        int bishop_pair_opening, bishop_pair_endgame;
+        int rook_open_file_opening, rook_open_file_endgame;//no pawn on the rook's file
+        int rook_semi_open_file_opening, rook_semi_open_file_endgame;//no own pawn on it, an enemy one
+        int rook_seventh_opening, rook_seventh_endgame;//on the relative 7th rank, with enemy pawns on it or the enemy king on the 8th
+        int outpost_knight_opening, outpost_knight_endgame;//relative rank 4-6, protected by an own pawn, no enemy pawn left that could attack it
+        int outpost_bishop_opening, outpost_bishop_endgame;
+        // threat_eval(), not blended: per enemy piece attacked, by its type (pawn rook knight bishop queen)
+        int threat_by_pawn[5], threat_by_minor[5], threat_by_rook[5];
+        int threat_hanging;//per enemy piece but the king that we attack and they do not defend
         // king_safety_eval() (src/king_safety.cpp, #42)
         int ks_attacker_weight[6];
         int ks_min_attackers;

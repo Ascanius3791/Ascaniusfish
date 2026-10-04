@@ -1668,12 +1668,15 @@ class Session
             "attacks on each king's ring and its pawn shelter (src/king_safety.cpp)",
             "doubled, tripled and isolated pawns",
             "a bonus per passed pawn by its rank, and what makes it more or less stoppable",
+            "backward pawns and pawns side by side",
+            "the bishop pair, rooks on open files and the 7th, knights and bishops on outposts",
+            "enemy pieces attacked by pawns, knights and bishops, rooks, and hanging ones",
             "what each piece attacks and defends, and its mobility",
             "the side to move's tempo, more with more pieces on the board",
         };
         // Which rows have sides of their own, and whether white − black is the total.
-        static const bool sides[EVAL_ROWS]      = { true,  false, true, true, true, false, true };
-        static const bool difference[EVAL_ROWS] = { false, false, true, true, true, false, true };
+        static const bool sides[EVAL_ROWS]      = { true,  false, true, true, true, true,  true,  true, false, true };
+        static const bool difference[EVAL_ROWS] = { false, false, true, true, true, false, false, true, false, true };
         const Eval_Breakdown b = eval_breakdown(&pos, W);
         o.obj();
         o.key("rows").arr();

@@ -78,6 +78,36 @@ static int weight_fields(WEIGHTS& W, Weight_Field* out)
     add("mobility_rook_endgame", W.mobility_rook_endgame, 15);
     add("mobility_queen_opening", W.mobility_queen_opening, 28);
     add("mobility_queen_endgame", W.mobility_queen_endgame, 28);
+    add("pawn_backward_opening", &W.pawn_backward_opening, 1,
+        "pawn_shape_eval() (#90), added for the owner, with all pieces on and with none: a backward pawn\n"
+        "# (own pawns on a neighbouring file, all ahead of it, its stop square attacked by an enemy pawn);\n"
+        "# two own pawns side by side, by relative rank");
+    add("pawn_backward_endgame", &W.pawn_backward_endgame, 1);
+    add("pawn_phalanx_opening", W.pawn_phalanx_opening, 8);
+    add("pawn_phalanx_endgame", W.pawn_phalanx_endgame, 8);
+    add("bishop_pair_opening", &W.bishop_pair_opening, 1,
+        "placement_eval() (#90), added for the owner, with all pieces on and with none: the bishop pair;\n"
+        "# a rook on a file without pawns, without own pawns; a rook on the 7th with enemy pawns there or\n"
+        "# the enemy king on the 8th; a knight or bishop on ranks 4-6, protected by a pawn, that no enemy\n"
+        "# pawn can attack");
+    add("bishop_pair_endgame", &W.bishop_pair_endgame, 1);
+    add("rook_open_file_opening", &W.rook_open_file_opening, 1);
+    add("rook_open_file_endgame", &W.rook_open_file_endgame, 1);
+    add("rook_semi_open_file_opening", &W.rook_semi_open_file_opening, 1);
+    add("rook_semi_open_file_endgame", &W.rook_semi_open_file_endgame, 1);
+    add("rook_seventh_opening", &W.rook_seventh_opening, 1);
+    add("rook_seventh_endgame", &W.rook_seventh_endgame, 1);
+    add("outpost_knight_opening", &W.outpost_knight_opening, 1);
+    add("outpost_knight_endgame", &W.outpost_knight_endgame, 1);
+    add("outpost_bishop_opening", &W.outpost_bishop_opening, 1);
+    add("outpost_bishop_endgame", &W.outpost_bishop_endgame, 1);
+    add("threat_by_pawn", W.threat_by_pawn, 5,
+        "threat_eval() (#90), added for the attacker: per enemy piece attacked by a pawn, a knight or\n"
+        "# bishop, a rook, by its type (pawn rook knight bishop queen); per enemy piece but the king\n"
+        "# attacked and not defended");
+    add("threat_by_minor", W.threat_by_minor, 5);
+    add("threat_by_rook", W.threat_by_rook, 5);
+    add("threat_hanging", &W.threat_hanging, 1);
     add("tempo_opening", &W.tempo_opening, 1, "tempo_eval(): the side to move's, with all and with no pieces on");
     add("tempo_endgame", &W.tempo_endgame, 1);
     add("ks_attacker_weight", W.ks_attacker_weight, 6,

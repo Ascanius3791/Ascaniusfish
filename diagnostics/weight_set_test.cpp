@@ -5,7 +5,7 @@
 //     stale copy, and WEIGHTS_OG is that set, every field;
 //  3. a table's numbers go to the squares the format says (a8 first, h1 last);
 //  4. a broken file is refused, naming what is wrong, and leaves W as it was;
-//  5. with every piece-square table scrambled (no longer rank-symmetric),
+//  5. with every piece-square table scrambled (no longer rank-symmetric) and #90's terms set,
 //     basic_eval() stays colour-symmetric: black reads the tables rank-flipped.
 // Exit code 1 on any failure.
 //
@@ -185,6 +185,12 @@ static void symmetry()
         W.piece_table_value_opening[p][sq] += (int)(rng>>16)%61 - 30;
         rng = rng*1103515245u + 12345u;
         W.piece_table_value_endgame[p][sq] += (int)(rng>>16)%61 - 30;
+    }
+    // and #90's terms (0 in sets 1-5), which lie in one block of ints in WEIGHTS
+    for(int* v = &W.pawn_backward_opening; v <= &W.threat_hanging; v++)
+    {
+        rng = rng*1103515245u + 12345u;
+        *v = (int)(rng>>16)%61 - 30;
     }
     std::ifstream epd("tools/openings.epd");
     std::string line;

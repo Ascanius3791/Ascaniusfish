@@ -125,6 +125,11 @@ and all but king danger are linear:*
 - *Passers have `passed_pawn_value_opening` beside the endgame `passed_pawn_value`.*
 - *`pawn_supporting_value` is gone (`activity_pawn_defend` counts the same thing).*
 - *The king shelter is scaled by the enemy's pieces in phase units.*
+- *Three new terms, each in its own function, which the dreamer does not copy (a pawn push
+  changes them): `pawn_shape_eval()` (backward pawns, phalanxes by rank), `placement_eval()`
+  (bishop pair, rook on an open or half-open file, rook on the 7th, knight and bishop
+  outposts), all blended by the phase, and `threat_eval()` (enemy pieces attacked by pawns,
+  minors and rooks, by type, and hanging ones). Sets 1-5 carry them at 0.*
 
 **Rank-folded piece-square tables.** Black's non-pawn pieces read white's table *at the same
 square, not the rank-flipped one* (`piecetable()`, also `gui/eval_split.hpp` and
@@ -153,7 +158,7 @@ parameters, nearly all linear.
 
 **Missing terms**: there is no passed-pawn, bishop-pair or rook-on-open-file term. Tuning
 can't create them, but once the tuner exists each one is a cheap addition: write the term
-and let the fit set its value.
+and let the fit set its value. *(#84 and #90 added them, see the note above.)*
 
 ## Versioned weights
 

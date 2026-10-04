@@ -63,5 +63,19 @@ int main(int argc, char** argv)
         std::printf("  %s\n", m.c_str());
         ok = ok && c.ok();
     }
+
+    // #90's terms are 0 in sets 1-5, so they are checked again with every one set
+    WEIGHTS W = WEIGHTS_OG;
+    unsigned rng = 90;
+    for(int* v = &W.pawn_backward_opening; v <= &W.threat_hanging; v++)
+    {
+        rng = rng*1103515245u + 12345u;
+        *v = (int)(rng>>16)%61 - 30;
+    }
+    const Eval_Check c = eval_self_check(pos, true, false, W);
+    std::printf("\nself-check with #90's terms set: %d positions, %.2f ms, %s\n", c.positions, c.ms, c.ok() ? "all match" : "MISMATCH");
+    for(const std::string& m : c.messages)
+    std::printf("  %s\n", m.c_str());
+    ok = ok && c.ok();
     return ok ? 0 : 1;
 }

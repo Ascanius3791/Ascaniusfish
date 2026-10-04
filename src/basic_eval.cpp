@@ -368,6 +368,143 @@ int passed_pawn_eval(const BB* const original, const WEIGHTS& W)
     return score;
 }
 
+uint64_t pawn_attacks(uint64_t pawns, bool white)
+{
+    return white ? ((pawns & ~mask_column[0]) << 7) | ((pawns & ~mask_column[7]) << 9)
+                 : ((pawns & ~mask_column[7]) >> 7) | ((pawns & ~mask_column[0]) >> 9);
+}
+
+// Backward and phalanx pawns (#90). Like piecetable(), summed in PHASE_MAXths and
+// divided once.
+int pawn_shape_eval(const BB* const original, const WEIGHTS& W)
+{
+    const int phase = game_phase(original), endgame = PHASE_MAX-phase;
+    int score=0;
+    for(int white=0;white<2;white++)
+    {
+        const int sign = white ? 1 : -1;
+        const uint64_t pawns = original->Board[0+6*!white];
+        const uint64_t enemy_attacks = pawn_attacks(original->Board[0+6*white], !white);
+        uint64_t virtual_pawns = pawns;
+        while(virtual_pawns)
+        {
+            const int i = find_and_delete_trailling_1(virtual_pawns);
+            const int column = i%8, rank = i/8, r = white ? rank : 7-rank;
+            // a pair side by side counts once, at its left pawn
+            if(column<7 && (pawns >> (i+1) & 1))
+            score += sign*(W.pawn_phalanx_opening[r]*phase + W.pawn_phalanx_endgame[r]*endgame);
+            // backward: not isolated, but every own pawn on a neighbouring file is ahead of it,
+            // so none can come to protect it, and an enemy pawn stops it
+            uint64_t neighbours = 0;
+            if(column>0) neighbours |= mask_column[column-1];
+            if(column<7) neighbours |= mask_column[column+1];
+            const uint64_t level_or_behind = white ? (~0ULL >> (8*(7-rank))) : (~0ULL << (8*rank));
+            const int stop = white ? i+8 : i-8;
+            if((pawns & neighbours) && !(pawns & neighbours & level_or_behind) && (enemy_attacks >> stop & 1))
+            score += sign*(W.pawn_backward_opening*phase + W.pawn_backward_endgame*endgame);
+        }
+    }
+    return score/PHASE_MAX;
+}
+
+// The bishop pair, rooks on open and half-open files and on the 7th, and knights and
+// bishops on outposts (#90). Summed in PHASE_MAXths and divided once.
+int placement_eval(const BB* const original, const WEIGHTS& W)
+{
+    const uint64_t* B = original->Board;
+    const int phase = game_phase(original), endgame = PHASE_MAX-phase;
+    int score=0;
+    for(int white=0;white<2;white++)
+    {
+        const int sign = white ? 1 : -1, own = 6*!white, enemy = 6*white;
+        const uint64_t own_pawns = B[0+own], enemy_pawns = B[0+enemy];
+        if(count(B[3+own])>=2)
+        score += sign*(W.bishop_pair_opening*phase + W.bishop_pair_endgame*endgame);
+
+        const uint64_t seventh = mask_row[white ? 6 : 1], eighth = mask_row[white ? 7 : 0];
+        uint64_t rooks = B[1+own];
+        while(rooks)
+        {
+            const int i = find_and_delete_trailling_1(rooks);
+            const uint64_t file = mask_column[i%8];
+            if(!(file & (own_pawns|enemy_pawns)))
+            score += sign*(W.rook_open_file_opening*phase + W.rook_open_file_endgame*endgame);
+            else if(!(file & own_pawns))
+            score += sign*(W.rook_semi_open_file_opening*phase + W.rook_semi_open_file_endgame*endgame);
+            if((seventh >> i & 1) && ((enemy_pawns & seventh) || (B[5+enemy] & eighth)))
+            score += sign*(W.rook_seventh_opening*phase + W.rook_seventh_endgame*endgame);
+        }
+
+        // an outpost: relative rank 4-6, protected by an own pawn, and no enemy pawn on a
+        // neighbouring file ahead of it, so none can ever attack it
+        uint64_t minors = (B[2+own] | B[3+own]) & pawn_attacks(own_pawns, white) & (white ? 0x0000FFFFFF000000ULL : 0x000000FFFFFF0000ULL);
+        while(minors)
+        {
+            const int i = find_and_delete_trailling_1(minors);
+            const int column = i%8, rank = i/8;
+            uint64_t neighbours = 0;
+            if(column>0) neighbours |= mask_column[column-1];
+            if(column<7) neighbours |= mask_column[column+1];
+            const uint64_t ahead = white ? (~0ULL << (8*(rank+1))) : ((1ULL << (8*rank))-1);
+            if(enemy_pawns & neighbours & ahead)
+            continue;
+            if(B[2+own] >> i & 1)
+            score += sign*(W.outpost_knight_opening*phase + W.outpost_knight_endgame*endgame);
+            else
+            score += sign*(W.outpost_bishop_opening*phase + W.outpost_bishop_endgame*endgame);
+        }
+    }
+    return score/PHASE_MAX;
+}
+
+// Enemy pieces attacked by pawns, by knights and bishops, and by rooks, by the victim's
+// type, and every enemy piece but the king attacked and not defended (#90).
+int threat_eval(const BB* const original, const WEIGHTS& W)
+{
+    const uint64_t* B = original->Board;
+    const uint64_t occupancy = original->get_occupancy();
+    uint64_t by_pawn[2], by_minor[2], by_rook[2], attacks[2];
+    for(int white=0;white<2;white++)
+    {
+        const int own = 6*!white;
+        uint64_t minor = 0, rook = 0, other = 0, bb;
+        bb = B[2+own];
+        while(bb) minor |= Kn_template[find_and_delete_trailling_1(bb)];
+        bb = B[3+own];
+        while(bb) minor |= get_bishop_attacks(find_and_delete_trailling_1(bb), occupancy);
+        bb = B[1+own];
+        while(bb) rook |= get_rook_attacks(find_and_delete_trailling_1(bb), occupancy);
+        bb = B[4+own];
+        while(bb)
+        {
+            const int i = find_and_delete_trailling_1(bb);
+            other |= get_bishop_attacks(i, occupancy) | get_rook_attacks(i, occupancy);
+        }
+        if(B[5+own])
+        other |= K_template[__builtin_ctzll(B[5+own])];
+        by_pawn[white] = pawn_attacks(B[0+own], white);
+        by_minor[white] = minor;
+        by_rook[white] = rook;
+        attacks[white] = by_pawn[white] | minor | rook | other;
+    }
+    int score=0;
+    for(int white=0;white<2;white++)
+    {
+        const int enemy = 6*white;
+        int side = 0;
+        for(int type=0;type<5;type++)
+        {
+            const uint64_t victims = B[type+enemy];
+            side += count(victims & by_pawn[white])*W.threat_by_pawn[type]
+                  + count(victims & by_minor[white])*W.threat_by_minor[type]
+                  + count(victims & by_rook[white])*W.threat_by_rook[type]
+                  + count(victims & attacks[white] & ~attacks[!white])*W.threat_hanging;
+        }
+        score += white ? side : -side;
+    }
+    return score;
+}
+
 // The side to move is worth a tempo (#70). Without it the eval gave the side
 // that just moved too much: tools/tempo_swing measures that as half the odd/even
 // swing of the root score (net off), from W.tempo_endgame with bare kings
@@ -392,8 +529,11 @@ int basic_eval(const BB*const original , const WEIGHTS& W)// return the evaluati
 
     score += positional_eval(original,W);
     score += passed_pawn_eval(original,W);
+    score += pawn_shape_eval(original,W);
+    score += placement_eval(original,W);
+    score += threat_eval(original,W);
 
-    
+
     score += piece_activity_eval(original,W);
 
     score += tempo_eval(original,W);
