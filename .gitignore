@@ -20,6 +20,7 @@ tools/gui_match
 tools/tt_stats
 tools/nne_data
 tools/tune_data
+tools/tune
 tools/nne_train
 tools/tempo_swing
 tools/wdl_fit

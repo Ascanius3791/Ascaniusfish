@@ -7,12 +7,15 @@
 //     side to move swapped) scores exactly the negated king_safety_eval() and
 //     basic_eval(), over the opening suite and positions played on from it;
 //  4. the Italian from the issue: O-O scores above Ke2, Kd2, Kf1 and Rh1-f1.
-// Exit code 1 on any failure.
+// Exit code 1 on any failure. With a weight set as argv[1] (lib/weight_set.hpp)
+// every check runs with it instead of WEIGHTS_OG: the symmetry check must hold for
+// any set (#87), the others test set 1's shape.
 //
 // Build from the repo root:
 //   g++ -O3 -mpopcnt -Wall -Wno-unknown-pragmas -Wno-parentheses -Wno-unused-variable -DNDEBUG -o diagnostics/king_safety_test diagnostics/king_safety_test.cpp
 #include "../lib/uci.hpp"
 #include "../lib/king_safety.hpp"
+#include "../lib/weight_set.hpp"
 
 #include <cctype>
 #include <cstdio>
@@ -22,6 +25,7 @@
 #include <vector>
 
 static int failures = 0;
+static WEIGHTS TEST_W = WEIGHTS_OG;
 
 static void expect(bool ok, const std::string& what)
 {
@@ -78,12 +82,12 @@ static std::string mirror_fen(const std::string& fen)
     return out + " " + (side == "w" ? "b" : "w") + " " + c + " " + ep + " 0 1";
 }
 
-static int basic(const BB& pos) { return basic_eval(&pos, WEIGHTS_OG); }
+static int basic(const BB& pos) { return basic_eval(&pos, TEST_W); }
 
 static King_Safety_Detail detail(const std::string& fen, bool white)
 {
     BB pos = from_fen(fen);
-    return king_safety_detail(&pos, white);
+    return king_safety_detail(&pos, white, TEST_W);
 }
 
 static void attack_cases()
@@ -179,11 +183,11 @@ static void symmetry_cases()
     {
         BB copy = pos;
         BB m = from_fen(mirror_fen(copy.get_FEN()));
-        if(king_safety_eval(&m) != -king_safety_eval(&pos))
+        if(king_safety_eval(&m, TEST_W) != -king_safety_eval(&pos, TEST_W))
         ks_bad++;
         if(basic(m) + basic(pos) != 0)
         eval_bad++;
-        if(king_safety_detail(&pos, true).attack_penalty || king_safety_detail(&pos, false).attack_penalty)
+        if(king_safety_detail(&pos, true, TEST_W).attack_penalty || king_safety_detail(&pos, false, TEST_W).attack_penalty)
         attacked++;
     }
     std::string n = std::to_string(positions.size());
@@ -213,8 +217,19 @@ static void italian_case()
            + moves[i] + " (" + std::to_string(score[i]) + ")");
 }
 
-int main()
+int main(int argc, char** argv)
 {
+    if(argc>1)
+    {
+        Weight_Set_Info info;
+        std::string error;
+        if(!load_weight_set(argv[1], TEST_W, info, error))
+        {
+            std::printf("%s\n", error.c_str());
+            return 2;
+        }
+        std::printf("weight set %d (%s)\n", TEST_W.version, argv[1]);
+    }
     Zobrist zobrist_keys;
     initialize_rand();
     init_magics();
