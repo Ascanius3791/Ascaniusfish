@@ -411,7 +411,7 @@ PV_Line minimax(const BB*const original ,BB* const wfh ,int depth = 0, const WEI
                 {
                     if(readout.pv_line.bound_type==0)//exact
                     return readout.pv_line;
-                    else if(depth==readout.pv_line.depth || (!tt_bounds_never_narrow && tt_narrowing>=2))//only on exact depth a bound can cut off
+                    else if(depth==readout.pv_line.depth || tt_deeper_cuts || (!tt_bounds_never_narrow && tt_narrowing>=2))//only on exact depth a bound can cut off, or on a deeper one with TTDeeperCuts (#93)
                     {
                         //a bound only cuts, it never narrows alpha and beta (#64): a node searched in a
                         //narrowed window returns bounds its parent reads as exact scores
