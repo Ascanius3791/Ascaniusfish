@@ -15,6 +15,7 @@ tools/bench
 tools/speed_compare
 tools/match
 tools/make_openings
+tools/make_ccrl_openings
 tools/make_endgames
 tools/gui_match
 tools/tt_stats

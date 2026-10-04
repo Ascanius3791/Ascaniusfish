@@ -23,6 +23,9 @@ DEPTH ?=
 TC ?=
 CONCURRENCY ?=
 PAIRS ?=
+SPRT ?=
+TIME ?=
+OPENINGS ?=
 MOVETIME ?= 10000
 GAMES ?=
 MOVETIME_TT ?=
@@ -33,7 +36,7 @@ GUI_BIND ?=
 GUI_TUNNEL ?=
 SYZYGY_PATH ?= $(HOME)/syzygy-nr
 SYZYGY_RANDOM ?=
-TOOL_TARGETS := tools/perft tools/bench tools/speed_compare tools/match tools/make_openings tools/make_endgames tools/gui_match tools/tt_stats tools/syzygy_reference tools/tb_suite tools/tb_trade_suite tools/nne_data tools/tune_data tools/tune tools/wdl_fit tools/tempo_swing tools/gaviota_reference tools/mate_suite tools/ptt_seed tools/watch_tt
+TOOL_TARGETS := tools/perft tools/bench tools/speed_compare tools/match tools/make_openings tools/make_ccrl_openings tools/make_endgames tools/gui_match tools/tt_stats tools/syzygy_reference tools/tb_suite tools/tb_trade_suite tools/nne_data tools/tune_data tools/tune tools/wdl_fit tools/tempo_swing tools/gaviota_reference tools/mate_suite tools/ptt_seed tools/watch_tt
 PROFILE_CXXFLAGS ?= -O2 -mpopcnt -g -pg -Wall -Wno-unknown-pragmas -Wno-parentheses -Wno-unused-variable
 
 .PHONY: all run play asm tests debug profile-startpos perft bench speed-compare match gui-match gui tt-stats tempo-swing syzygy-test gaviota-test nne-test nne-retrain tb-suite tb-trade-suite mate-suite ptt-seed clean rebuild
@@ -127,6 +130,10 @@ tools/gui_match: tools/gui_match.cpp tools/game_rules.hpp tools/uci_engine.hpp $
 
 tools/make_openings: tools/make_openings.cpp tools/game_rules.hpp $(HEADERS) $(SOURCES)
 	$(CXX) $(CXXFLAGS) -pthread -o $@ tools/make_openings.cpp
+
+# The SPRT's opening suite from CCRL games (#92): no search, so the TT is minimal.
+tools/make_ccrl_openings: tools/make_ccrl_openings.cpp tools/game_rules.hpp $(HEADERS) $(SOURCES)
+	$(CXX) $(CXXFLAGS) -DTT_EXPONENT=10 -o $@ tools/make_ccrl_openings.cpp
 
 tools/make_endgames: tools/make_endgames.cpp tools/game_rules.hpp tools/uci_engine.hpp $(HEADERS) $(SOURCES)
 	$(CXX) $(CXXFLAGS) -pthread -o $@ tools/make_endgames.cpp
@@ -274,8 +281,8 @@ speed-compare: tools/speed_compare
 
 # Elo match of two engines (git refs or UCI binaries): make match A=main B=.
 match: tools/match
-	@test -n "$(A)" -a -n "$(B)" || (echo "usage: make match A=<ref|binary> B=<ref|binary> [DEPTH=3] [TC=10+0.1] [CONCURRENCY=n] [PAIRS=n] [OPTIONS_A=Name=Value,...] [OPTIONS_B=...]"; exit 2)
-	./tools/match $(A) $(B) depth=$(DEPTH) tc=$(TC) concurrency=$(CONCURRENCY) pairs=$(PAIRS) optionsA="$(OPTIONS_A)" optionsB="$(OPTIONS_B)"
+	@test -n "$(A)" -a -n "$(B)" || (echo "usage: make match A=<ref|binary> B=<ref|binary> [DEPTH=3] [TC=10+0.1] [CONCURRENCY=n] [PAIRS=n] [SPRT=0,10] [TIME=10] [OPENINGS=file] [OPTIONS_A=Name=Value,...] [OPTIONS_B=...]"; exit 2)
+	./tools/match $(A) $(B) depth=$(DEPTH) tc=$(TC) concurrency=$(CONCURRENCY) pairs=$(PAIRS) sprt=$(SPRT) time=$(TIME) openings=$(OPENINGS) optionsA="$(OPTIONS_A)" optionsB="$(OPTIONS_B)"
 
 # One game of two UCI binaries at MOVETIME ms per move, shown in display_board.py
 gui-match: tools/gui_match

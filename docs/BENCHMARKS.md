@@ -9,7 +9,7 @@ tools in `tools/` and don't touch the engine binaries.
 | `make perft` | move generation against known node counts | ~40–55 s (`PERFT_DEPTH=4`: 1 s) |
 | `make bench` | search signature (total nodes) and nps | ~12–17 s |
 | `make speed-compare A=<ref> B=<ref>` | whether B is faster than A | ~5 min |
-| `make match A=<ref> B=<ref>` | whether B is stronger than A, in Elo | ~27 min (depth 3) |
+| `make match A=<ref> B=<ref> SPRT=0,10 TC=5+0.05` | whether B gains 10 Elo (the standard test) | ≤ 10 min (`TIME=`) |
 | `make gui-match A=<bin> B=<bin>` | one watchable game, depth per move | ~20 min (10 s/move) |
 
 ## `make perft`
@@ -68,7 +68,8 @@ and sequential.
 
 ## `make match A=<ref> B=<ref>`
 
-Answers "is B stronger than A, and by how much?"
+Answers "is B stronger than A, and by how much?" With `SPRT=0,10` it is the
+standard strength test (`docs/WORKFLOW.md`, "Measuring strength").
 
 - A and B are git refs (built like in `speed-compare`, `.` = working tree)
   or paths to UCI binaries. A ref is built as `ascaniusfish_uci` with
@@ -104,6 +105,27 @@ Answers "is B stronger than A, and by how much?"
 - All games go to `match.pgn` (`pgn=` in `tools/match`), with the engine's
   score and depth as a comment after each move, and with `TC=` also the
   time the move took: `{+0.35/3 1.21s}`.
+- `TIME=<min>` (`time=`, default 10) is the wall-time budget, counted from
+  after the builds: once it is used up no new pair starts, the running ones
+  finish and count, and the result is what was reached. More than 10 min only
+  when Ascanius approves it.
+- `SPRT=elo0,elo1` (`sprt=`) makes the match a sequential probability ratio
+  test of H1 "B−A = elo1" against H0 "B−A = elo0", logistic Elo, α = β = 0.05,
+  so the LLR bounds are ±2.94. The LLR is fishtest's generalized SPRT: for each
+  hypothesis the pentanomial distribution nearest the observed one (maximum
+  likelihood) whose mean pair score is s = 1/(1+10^(−Elo/400)), and
+  LLR = Σ nₖ·log(p1ₖ/p0ₖ) over the five cells; an empty cell counts 1e-3 pairs.
+  Not the normal approximation n·(s1−s0)·(2m−s0−s1)/(2v) of cutechess and
+  fastchess: it agrees on ordinary data, but with few pairs v is next to nothing
+  and it accepted H1 after a single 2–0 pair (+378 after ten), where this one
+  needs ~100 straight 2–0 pairs. Every pair's line ends with the LLR. At a bound it
+  says `H1 accepted` or `H0 accepted`, hands out no new pair and counts the
+  running ones; when the budget runs out first it says `no decision` with the
+  LLR, Elo ± CI and games reached. At 5+0.05 with 6 games in parallel 10 min
+  are ~145 pairs: enough for clear gains (~+30 Elo) or losses, while a small
+  real gain mostly ends undecided, and the last line says so.
+- With `SPRT=` the suite is `tools/openings_ccrl.epd` (below), so a run never
+  plays an opening twice; `OPENINGS=<file>` (`openings=`) picks another.
 
 At a fixed depth the engine is deterministic, so identical engines play
 identical games from both colours. Every pair then scores exactly 1 point
@@ -119,6 +141,21 @@ Each one has a Lichess cloud eval of |cp| ≤ 30 at depth ≥ 29 (`ce`, from the
 to move; `acd` = depth). `tools/make_openings.cpp` builds it:
 `./tools/make_openings tools/openings.epd 100 a.tsv b.tsv c.tsv d.tsv e.tsv`
 (needs curl and network access, ~5 min due to the API's rate limit).
+
+`tools/openings_ccrl.epd` is the SPRT's suite (#92), built from finished CCRL
+40/15 games only: no engine's eval goes into it, Lichess cloud evals included.
+`tools/make_ccrl_openings data/ccrl/ccrl4040.pgn` (the unpacked archive, see
+`docs/TUNING_PLAN.md`) takes every game's positions after 12–16 plies (the book
+part), groups them by position and keeps those reached by ≥ 20 games
+(`min_games=`) in which white scored 50% ± 10% (`max_dev=`). A kept position
+that a game reached through another kept one is dropped, so no opening is
+there twice, not even as a continuation of another. The suite is shuffled
+(`seed=`), so a run that stops early has played a random sample of it. Each
+line names the opening of the first game that reached it (`c0`), that game's
+moves (`c1`), and `games`/`wscore`. The tool also prints how many positions
+other `min_games`/`max_dev` would keep. The committed suite has 10677 positions
+from 2.44M games (13.5 min, 300 MB); `docs/measurements/sprt_2026-10-05.md` has
+the table.
 
 ## `make gui-match A=<white> B=<black>`
 

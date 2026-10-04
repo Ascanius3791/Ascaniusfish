@@ -10,6 +10,13 @@
 // view: W/D/L, score, and Elo B-A with a 95% CI from the pentanomial
 // statistics of the game pairs. All games are written to a PGN file.
 //
+// With sprt=elo0,elo1 (the standard strength test: sprt=0,10, docs/WORKFLOW.md)
+// the match is a sequential probability ratio test of H1 "B-A is elo1" against
+// H0 "B-A is elo0" (logistic Elo, alpha = beta = 0.05), on the CCRL suite
+// (tools/openings_ccrl.epd) unless openings= says otherwise. It prints the LLR
+// with every pair and stops at a bound. Every match stops at its wall-time
+// budget (time=, minutes): no new pairs start, running ones finish and count.
+//
 // Options:
 //   depth=3            fixed depth for both engines (depthA=, depthB= per engine)
 //   tc=<s>[+<inc>]     clock per game instead of a fixed depth, e.g. tc=10+0.1
@@ -17,6 +24,9 @@
 //   pairs=<n>          only the first n openings
 //   openings=<file>    EPD suite (default tools/openings.epd)
 //   pgn=<file>         game output (default match.pgn)
+//   sprt=<elo0>,<elo1> SPRT instead of a fixed number of pairs, e.g. sprt=0,10
+//   time=<min>         wall-time budget, counted from after the builds (default 10;
+//                      more only when Ascanius approves it)
 //   tt=<n>             TT exponent for engines built from refs (default 17, 32MB)
 //   optionsA=<n=v,...> UCI options for engine A (optionsB= for B), e.g.
 //                      optionsA="UCI_LimitStrength=true,UCI_Elo=1500" for a
@@ -313,6 +323,50 @@ struct Stats
         half = 1.96*std::sqrt(var/std::max(n, 1));
     }
 
+    // Log-likelihood ratio of H1 (B-A = elo1) against H0 (B-A = elo0), logistic
+    // Elo (s = 1/(1+10^(-elo/400)) is the expected game score), the generalized
+    // SPRT of fishtest: for each hypothesis the pentanomial distribution nearest
+    // the observed one (maximum likelihood) whose mean pair score is s_i, then
+    // LLR = sum over the cells of n_k log(p1_k/p0_k). That nearest distribution is
+    // q_k = p_k / (1 + lambda (a_k - s)), a_k = k/4 the pair score, lambda the root
+    // of sum q_k (a_k - s) = 0. An empty cell counts 1e-3 pairs. The normal
+    // approximation n (s1-s0)(2m-s0-s1)/(2v) of cutechess and fastchess agrees on
+    // ordinary data, but with one or a few pairs v is next to nothing and it
+    // accepted H1 after a single 2-0 pair; this needs ~100 of them.
+    double llr(double elo0, double elo1) const
+    {
+        int n = pairs();
+        if(n==0)
+        return 0;
+        double p[5], total = 0;
+        for(int k=0;k<5;k++)
+        {
+            p[k] = penta[k] ? penta[k] : 1e-3;
+            total += p[k];
+        }
+        for(int k=0;k<5;k++) p[k] /= total;
+        // log(q_k/p_k) of the distribution nearest p with mean s
+        auto nearest = [&](double s, double log_ratio[5])
+        {
+            double lo = -1/(1-s), hi = 1/s;  // where 1 + lambda (a - s) > 0 for every a in [0, 1]
+            for(int it=0;it<200;it++)
+            {
+                double mid = (lo+hi)/2, f = 0;  // f falls from +inf at lo to -inf at hi
+                for(int k=0;k<5;k++) f += p[k]*(k/4.0-s)/(1+mid*(k/4.0-s));
+                (f>0 ? lo : hi) = mid;
+            }
+            double lambda = (lo+hi)/2;
+            for(int k=0;k<5;k++) log_ratio[k] = -std::log1p(lambda*(k/4.0-s));
+        };
+        auto expected = [](double elo) { return 1/(1+std::pow(10.0, -elo/400)); };
+        double l0[5], l1[5];
+        nearest(expected(elo0), l0);
+        nearest(expected(elo1), l1);
+        double sum = 0;
+        for(int k=0;k<5;k++) sum += p[k]*(l1[k]-l0[k]);
+        return n*sum;
+    }
+
     std::string elo_string() const
     {
         double s, half;
@@ -399,6 +453,7 @@ int main(int argc, char** argv)
     {
         std::fprintf(stderr, "usage: %s <A> <B> [depth=3] [depthA=n] [depthB=n] [tc=s+inc] [concurrency=n] [pairs=n]\n"
                              "       [openings=tools/openings.epd] [pgn=match.pgn] [tt=17] [optionsA=Name=Value,...] [optionsB=...]\n"
+                             "       [sprt=elo0,elo1] [time=10 (minutes)]\n"
                              "  A, B: UCI engine binary, or git ref to build (\".\" = working tree)\n", argv[0]);
         return 2;
     }
@@ -414,7 +469,7 @@ int main(int argc, char** argv)
     }
     auto get = [&](const std::string& k, const std::string& def) { return opt.count(k) ? opt[k] : def; };
     for(auto& [k, v] : opt)
-    if(std::string(" depth depthA depthB tc concurrency pairs openings pgn tt optionsA optionsB ").find(" " + k + " ")==std::string::npos)
+    if(std::string(" depth depthA depthB tc concurrency pairs openings pgn tt optionsA optionsB sprt time ").find(" " + k + " ")==std::string::npos)
     die("unknown option " + k);
 
     Limits clock;
@@ -432,6 +487,22 @@ int main(int argc, char** argv)
     if((!depth_a || !depth_b) && !clock.base_ms)
     die("each engine needs a depth or a tc");
 
+    bool sprt = opt.count("sprt");
+    double elo0 = 0, elo1 = 0;
+    if(sprt)
+    {
+        std::string bounds = opt["sprt"];
+        size_t comma = bounds.find(',');
+        if(comma==std::string::npos) die("expected sprt=elo0,elo1, got sprt=" + bounds);
+        elo0 = std::atof(bounds.substr(0, comma).c_str());
+        elo1 = std::atof(bounds.substr(comma+1).c_str());
+        if(!(elo1>elo0)) die("sprt needs elo0 < elo1, got sprt=" + bounds);
+    }
+    const double ALPHA = 0.05, BETA = 0.05;
+    const double llr_lower = std::log(BETA/(1-ALPHA)), llr_upper = std::log((1-BETA)/ALPHA);  // -+2.94
+    double minutes = std::atof(get("time", "10").c_str());
+    if(!(minutes>0)) die("time must be a positive number of minutes");
+
     Zobrist zobrist_keys;
     init_magics();
     init_sliders_attacks(1);//bishop
@@ -439,7 +510,10 @@ int main(int argc, char** argv)
     signal(SIGPIPE, SIG_IGN);
 
     std::string root = repo_root();
-    std::vector<Opening> openings = load_openings(get("openings", root.empty() ? "tools/openings.epd" : root + "/tools/openings.epd"));
+    std::string suite = sprt ? "tools/openings_ccrl.epd" : "tools/openings.epd";
+    if(sprt && !opt.count("openings") && access((root.empty() ? suite : root + "/" + suite).c_str(), R_OK)!=0)
+    die(suite + " is missing; build it with tools/make_ccrl_openings (docs/BENCHMARKS.md)");
+    std::vector<Opening> openings = load_openings(get("openings", root.empty() ? suite : root + "/" + suite));
     int pairs = std::min((int)openings.size(), std::atoi(get("pairs", std::to_string(openings.size())).c_str()));
     if(pairs<1) die("no openings");
 
@@ -487,8 +561,13 @@ int main(int argc, char** argv)
     if(!pgn_file) die("cannot write " + pgn_path);
 
     std::printf("A: %s\nB: %s\n", pa.label.c_str(), pb.label.c_str());
-    std::printf("%d openings x 2 colours = %d games, %s, %d in parallel (engines %ld MB per pair)\n\n",
-                pairs, 2*pairs, clock.base_ms ? ("tc " + tc_string(clock)).c_str() : ("depth " + std::to_string(depth_a) + (depth_a!=depth_b ? "/" + std::to_string(depth_b) : "")).c_str(),
+    if(sprt)
+    std::printf("SPRT elo0 %g elo1 %g (logistic, alpha = beta = %g, LLR bounds %+.2f %+.2f), %g min budget\n",
+                elo0, elo1, ALPHA, llr_lower, llr_upper, minutes);
+    else
+    std::printf("%g min budget\n", minutes);
+    std::printf("%s%d openings x 2 colours = %d games, %s, %d in parallel (engines %ld MB per pair)\n\n",
+                sprt ? "up to " : "", pairs, 2*pairs, clock.base_ms ? ("tc " + tc_string(clock)).c_str() : ("depth " + std::to_string(depth_a) + (depth_a!=depth_b ? "/" + std::to_string(depth_b) : "")).c_str(),
                 concurrency, pair_kb/1024);
     std::fflush(stdout);
 
@@ -498,6 +577,10 @@ int main(int argc, char** argv)
     std::atomic<int> next_pair(0);
     int done = 0;
     long long start_ms = now_ms();
+    long long deadline_ms = start_ms + (long long)(minutes*60000);
+    std::atomic<bool> stop_new(false);  // a decision: no new pairs
+    std::atomic<bool> time_up(false);
+    int decision = 0, decided_at = 0;   // +1 H1, -1 H0, at that many pairs
     ea.resize(concurrency);
     eb.resize(concurrency);
 
@@ -513,8 +596,17 @@ int main(int argc, char** argv)
             B.options = b.options;
             if(!A.start() || !B.start()) die("engines do not start");
         }
-        for(int p; (p = next_pair++) < pairs; )
+        for(int p; ; )
         {
+            if(stop_new)
+            break;
+            if(now_ms()>=deadline_ms)
+            {
+                time_up = true;
+                break;
+            }
+            if((p = next_pair++) >= pairs)
+            break;
             const Opening& o = openings[p];
             Game_Record g1 = play_game(A, B, pa, pb, false, o, std::to_string(p+1) + ".1");
             Game_Record g2 = play_game(B, A, pb, pa, true, o, std::to_string(p+1) + ".2");
@@ -533,8 +625,24 @@ int main(int argc, char** argv)
             stats.penta[g1.b_points2+g2.b_points2]++;
             done++;
             auto pts = [](int p2) { return p2==2 ? "1" : p2==1 ? "½" : "0"; };
-            std::printf("[%3d/%d] B %s %s  %-48.48s  W%d D%d L%d  Elo %s\n", done, pairs, pts(g1.b_points2), pts(g2.b_points2),
-                        o.name.c_str(), stats.wins, stats.draws, stats.losses, stats.elo_string().c_str());
+            std::string llr_text;
+            if(sprt)
+            {
+                double llr = stats.llr(elo0, elo1);
+                char buf[32];
+                std::snprintf(buf, sizeof buf, "  LLR %+.2f", llr);
+                llr_text = buf;
+                if(!decision && (llr>=llr_upper || llr<=llr_lower))
+                {
+                    decision = llr>=llr_upper ? 1 : -1;
+                    decided_at = done;
+                    stop_new = true;
+                }
+            }
+            std::printf("[%3d/%d] B %s %s  %-48.48s  W%d D%d L%d  Elo %s%s\n", done, pairs, pts(g1.b_points2), pts(g2.b_points2),
+                        o.name.c_str(), stats.wins, stats.draws, stats.losses, stats.elo_string().c_str(), llr_text.c_str());
+            if(decided_at==done && decision)
+            std::printf("%s accepted; the pairs still running finish and count\n", decision>0 ? "H1" : "H0");
             std::fflush(stdout);
         }
         A.stop();
@@ -558,6 +666,28 @@ int main(int argc, char** argv)
     std::printf("pairs (B points 0/0.5/1/1.5/2): %d %d %d %d %d\n", stats.penta[0], stats.penta[1], stats.penta[2], stats.penta[3], stats.penta[4]);
     std::printf("Elo B-A: %s  (95%% CI [%+.1f, %+.1f], LOS %.1f%%) -> %s\n", stats.elo_string().c_str(), lo, hi, 100*los,
                 s-half>0.5 ? "B is stronger" : s+half<0.5 ? "B is weaker" : "no significant difference");
+    int played = stats.pairs();
+    if(sprt)
+    {
+        std::printf("SPRT [%g, %g]: LLR %+.2f (bounds %+.2f %+.2f), %d pairs\n", elo0, elo1, stats.llr(elo0, elo1),
+                    llr_lower, llr_upper, played);
+        if(decision>0)
+        std::printf("H1 accepted after %d pairs: B is stronger than A (B-A nearer %g than %g Elo)\n", decided_at, elo1, elo0);
+        else if(decision<0)
+        std::printf("H0 accepted after %d pairs: B does not gain %g Elo over A (B-A nearer %g than %g)\n", decided_at, elo1, elo0, elo1);
+        else
+        {
+            char why[64];
+            if(time_up) std::snprintf(why, sizeof why, "the %g min budget is used up", minutes);
+            else std::snprintf(why, sizeof why, "the openings are used up");
+            std::printf("no decision, %s: LLR %+.2f, Elo %s, %d games. A budget this size decides only "
+                        "differences well beyond that CI; a smaller real gain mostly ends here undecided "
+                        "(the change is dropped, or Ascanius decides)\n",
+                        why, stats.llr(elo0, elo1), stats.elo_string().c_str(), games);
+        }
+    }
+    else if(time_up && played<pairs)
+    std::printf("time budget of %g min used up after %d of %d pairs\n", minutes, played, pairs);
 
     for(Side* side : {&a, &b})
     {
