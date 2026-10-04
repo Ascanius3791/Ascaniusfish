@@ -53,6 +53,11 @@ Co-Authored-By: ...
 - Don't mix Ascanius-approved edits to Ascanius-owned files with other changes.
 - Commit to the issue's branch `issue/N`, in its worktree (see below). It lands on `main` only when Ascanius says the issue is done; an experiment that does not meet the issue is deleted instead.
 
+## Measuring strength
+
+- **The standard test is an SPRT**: logistic Elo bounds [0, +10], α = β = 0.05 (LLR ±2.94), on the pentanomial game-pair statistics of `tools/match` (`sprt=0,10`, #92). A change is stronger once H1 is accepted; fixed 200–400 game matches (±30–40 Elo) no longer decide. A faster proxy may pre-screen, never replace it.
+- **No Stockfish evaluations.** We don't clone Stockfish: no engine's eval, best move or MultiPV (Lichess cloud evals included) as a label, tuning target, test reference or filter. Finished games and their results are fine (CCRL, Lichess dumps, matches against Stockfish for a rating).
+
 ## Issue worktrees
 
 Every issue gets its own git worktree, so sessions on different issues never share files, builds or a checked-out branch. Issue N lives in `.claude/worktrees/issue-N` on branch `issue/N`. `tools/issue_worktree.sh N` finds it, or creates it from the local `main`. `tools/issue_worktree.sh list` shows them all, with ahead/behind `main` and uncommitted changes.
