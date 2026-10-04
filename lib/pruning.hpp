@@ -63,4 +63,33 @@ inline int lmp_clamp(bool white_move, int result, int alpha_0, int beta_0)
     return result;
 }
 
+// Delta pruning (#75): out of check, a capture in minimax_tactical() whose
+// victim, taken for free, still leaves the stand pat short of alpha (white;
+// above beta for black) by more than DELTA_MARGIN is not searched. The victim
+// is valued as material_eval() values it at the current game phase, since a
+// piece is worth more as material comes off. Never for a promotion, and not
+// below DELTA_MIN_PHASE, where a single capture can decide the ending. The
+// caller keeps it off the forced-move path and out of check.
+constexpr bool ENABLE_DELTA_PRUNING = 1;
+constexpr int DELTA_MARGIN = 200;     // cp; covers the positional swing and the net's correction
+constexpr int DELTA_MIN_PHASE = 4;    // game_phase(): a queen, or two rooks, or ~4 minors
+
+inline bool delta_prunable(const BB* const pos, const Move& m, int stand_pat, int alpha, int beta, const WEIGHTS& W)
+{
+    if(!ENABLE_DELTA_PRUNING || m.promotion_piece_type != -1) return false;
+    const int phase = game_phase(pos);
+    if(phase < DELTA_MIN_PHASE) return false;
+    int victim = 0;   // en passant: a pawn, not on m.to
+    if(!m.is_en_passant)
+    {
+        const int enemy = pos->white_move ? 6 : 0;
+        for(int p = 0; p < 5; p++)
+            if(pos->Board[p + enemy] & (1ULL << m.to)) { victim = p; break; }
+    }
+    const long long gain = ((long long)W.piece_value[victim] * phase
+                          + (long long)W.piece_value_endgame[victim] * (PHASE_MAX - phase)) / PHASE_MAX
+                          + DELTA_MARGIN;
+    return pos->white_move ? stand_pat + gain <= alpha : stand_pat - gain >= beta;
+}
+
 #endif // PRUNING_HPP

@@ -254,12 +254,15 @@ PV_Line minimax_tactical(const BB* const original, BB* const wfh, const WEIGHTS&
             beta=min(beta,stand_pat);
         }
     }
+    const int stand_pat_eval = pv_line.eval;//the stand pat, before any capture improves it (#75)
     order_tactical_moves(original, moves.moves, tactical_order, number_of_tactical_moves);
     bool searched_a_move = false;
     bool skipped_a_move = false;
     for(int k=0; k<number_of_tactical_moves; k++)
     {
         const int idx = tactical_order[k];
+        if(!in_check && !is_forced_move && delta_prunable(original, moves[idx], stand_pat_eval, alpha, beta, W))
+        continue;//this capture, taken for free, still can't reach alpha/beta (#75)
         make_move(original, moves[idx], wfh);//the child is built only now that it is searched
         if(in_check && forced_moves_left==0 && wfh->get_in_check() && is_quiet_move(original, moves[idx]))
         {
@@ -304,7 +307,7 @@ PV_Line minimax_tactical(const BB* const original, BB* const wfh, const WEIGHTS&
     const bool mated = original->white_move ? pv_line.eval <= INT_MIN + max_mating_seq : pv_line.eval >= INT_MAX - max_mating_seq;
     if(searched_a_move && skipped_a_move && mated && mate_confirmed(original, wfh, pv_line.eval))
     return pv_line;//the mate search proved it with the skipped evasion too, eval now that mate's length (#78)
-    if(!searched_a_move || (skipped_a_move && mated))
+    if((!searched_a_move && in_check) || (skipped_a_move && mated))
     {
         // Every evasion was skipped, or every one searched got mated while a
         // skipped one checks back: scored as the perpetual it most likely is,
