@@ -33,7 +33,7 @@ GUI_BIND ?=
 GUI_TUNNEL ?=
 SYZYGY_PATH ?= $(HOME)/syzygy-nr
 SYZYGY_RANDOM ?=
-TOOL_TARGETS := tools/perft tools/bench tools/speed_compare tools/match tools/make_openings tools/make_endgames tools/gui_match tools/tt_stats tools/syzygy_reference tools/tb_suite tools/tb_trade_suite tools/nne_data tools/wdl_fit tools/tempo_swing tools/gaviota_reference tools/mate_suite tools/ptt_seed
+TOOL_TARGETS := tools/perft tools/bench tools/speed_compare tools/match tools/make_openings tools/make_endgames tools/gui_match tools/tt_stats tools/syzygy_reference tools/tb_suite tools/tb_trade_suite tools/nne_data tools/tune_data tools/wdl_fit tools/tempo_swing tools/gaviota_reference tools/mate_suite tools/ptt_seed
 PROFILE_CXXFLAGS ?= -O2 -mpopcnt -g -pg -Wall -Wno-unknown-pragmas -Wno-parentheses -Wno-unused-variable
 
 .PHONY: all run play asm tests debug profile-startpos perft bench speed-compare match gui-match gui tt-stats tempo-swing syzygy-test gaviota-test nne-test nne-retrain tb-suite tb-trade-suite mate-suite ptt-seed clean rebuild
@@ -126,6 +126,10 @@ tools/make_endgames: tools/make_endgames.cpp tools/game_rules.hpp tools/uci_engi
 NNE_TT ?= 16
 tools/nne_data: tools/nne_data.cpp gui/move_tree.hpp tools/game_rules.hpp $(HEADERS) $(SOURCES)
 	$(CXX) $(CXXFLAGS) -DTT_EXPONENT=$(NNE_TT) -pthread -o $@ tools/nne_data.cpp
+
+# The tuner's position set from the CCRL archive (#86): no search, so the TT is minimal.
+tools/tune_data: tools/tune_data.cpp gui/move_tree.hpp tools/game_rules.hpp $(HEADERS) $(SOURCES)
+	$(CXX) $(CXXFLAGS) -DTT_EXPONENT=10 -pthread -o $@ tools/tune_data.cpp
 
 # Stockfish's win/draw/loss curve fitted to tools/match PGN (#54).
 tools/wdl_fit: tools/wdl_fit.cpp
