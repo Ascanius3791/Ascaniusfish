@@ -539,6 +539,7 @@ class Session
     {
         PTT_Eval e;
         e.eval_version = engine_build().eval_version;
+        e.weights = engine_build().weights;
         e.nne = nne_on && !engine_build().net_hash.empty() ? engine_build().net_hash : "off";
         return e;
     }
@@ -1807,6 +1808,7 @@ class Session
         {
             o.key("provenance").obj();
             o.key("evalVersion").num(v.prov.eval_version);
+            o.key("weights").num(v.prov.weights);
             o.key("nne").str(v.prov.nne);
             o.key("syzygy").num(v.prov.syzygy);
             o.key("gaviota").num(v.prov.gaviota);

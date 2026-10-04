@@ -27,14 +27,10 @@
 // while(bb){...find_and_delete_trailling_1}, a no-op on an empty bitboard
 // rather than UB.
 //
-// WEIGHTS only stores 7 distinct rows (piece_table_value_opening[7][64]):
-// white pawn, rook, knight, bishop, queen, king/black-king (shared, row 5 is
-// used unflipped for both colours), and black pawn. Non-pawn black pieces are
-// NOT a mirrored copy of the white table - piecetable() in basic_eval.cpp
-// indexes black pieces with the same unflipped square index as white, so
-// e.g. a black knight on e5 is scored with the literal [2][e5] entry, not a
-// rank-flipped one. This viewer follows that: it cycles the 7 stored rows,
-// not 12 piece/colour combinations.
+// WEIGHTS stores one table per piece type (piece_table_value_opening[6][64]),
+// in white's view; black reads it rank-flipped (piecetable(), #85), so e.g. a
+// black knight on e5 is scored with the [2][e4] entry. This viewer shows the
+// 6 stored tables as white sees them.
 //
 // Build (from repo root, per CLAUDE.md's diagnostics/ convention):
 //   g++ -O3 -Wall -Wno-unknown-pragmas -Wno-parentheses -Wno-unused-variable \
@@ -57,18 +53,17 @@ struct Row_Info {
     const char* label;
 };
 
-static const Row_Info ROWS[7] = {
-    {0, 'P', true,  "White Pawn   (row 0)"},
-    {1, 'R', true,  "Rook         (row 1, shared W/B table)"},
-    {2, 'N', true,  "Knight       (row 2, shared W/B table)"},
-    {3, 'B', true,  "Bishop       (row 3, shared W/B table)"},
-    {4, 'Q', true,  "Queen        (row 4, shared W/B table)"},
-    {5, 'K', true,  "King         (row 5, shared W/B table)"},
-    {6, 'p', false, "Black Pawn   (row 6)"},
+static const Row_Info ROWS[6] = {
+    {0, 'P', true,  "Pawn         (row 0, black reads it rank-flipped)"},
+    {1, 'R', true,  "Rook         (row 1, black reads it rank-flipped)"},
+    {2, 'N', true,  "Knight       (row 2, black reads it rank-flipped)"},
+    {3, 'B', true,  "Bishop       (row 3, black reads it rank-flipped)"},
+    {4, 'Q', true,  "Queen        (row 4, black reads it rank-flipped)"},
+    {5, 'K', true,  "King         (row 5, black reads it rank-flipped)"},
 };
 
 bool pawn_edge_square(const Row_Info& row, int sq) {
-    return (row.index == 0 || row.index == 6) && (sq < 8 || sq >= 56); // pawns can't stand on rank 1/8
+    return row.index == 0 && (sq < 8 || sq >= 56); // pawns can't stand on rank 1/8
 }
 
 // piecetable() blends opening/endgame by material left on the board, which
@@ -156,14 +151,14 @@ int main() {
         char c = 0;
         if (read(STDIN_FILENO, &c, 1) != 1) break;
         if (c == 'q') break;
-        if (c == 'n' || c == 'l') row_i = (row_i + 1) % 7;
-        else if (c == 'p' || c == 'h') row_i = (row_i + 6) % 7;
+        if (c == 'n' || c == 'l') row_i = (row_i + 1) % 6;
+        else if (c == 'p' || c == 'h') row_i = (row_i + 5) % 6;
         else if (c == 't') opening = !opening;
         else if (c == 27) {
             char seq[2];
             if (read(STDIN_FILENO, &seq[0], 1) == 1 && read(STDIN_FILENO, &seq[1], 1) == 1) {
-                if (seq[0] == '[' && seq[1] == 'C') row_i = (row_i + 1) % 7;      // Right
-                else if (seq[0] == '[' && seq[1] == 'D') row_i = (row_i + 6) % 7; // Left
+                if (seq[0] == '[' && seq[1] == 'C') row_i = (row_i + 1) % 6;      // Right
+                else if (seq[0] == '[' && seq[1] == 'D') row_i = (row_i + 5) % 6; // Left
             } else {
                 break; // bare Esc
             }

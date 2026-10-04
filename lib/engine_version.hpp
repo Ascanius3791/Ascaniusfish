@@ -5,11 +5,12 @@
 // older and never seeds a search or plays a move.
 //
 // Bump EVAL_VERSION with any commit that changes what a search scores a
-// position: eval() or basic_eval() terms, WEIGHTS_OG, the NNE format or how the
-// net enters the eval, and search changes that move scores (pruning, extensions,
-// mate or draw handling). Not for speedups that leave `make bench`'s scores
-// alone, and not for a retrained net: entries carry the net's own hash, which
-// the GUI compares as well. docs/WORKFLOW.md says the same.
+// position: eval() or basic_eval() terms, WEIGHTS_OG (the default weight set,
+// weights/wN.txt, #85), the NNE format or how the net enters the eval, and
+// search changes that move scores (pruning, extensions, mate or draw handling).
+// Not for speedups that leave `make bench`'s scores alone, and not for a
+// retrained net: entries carry the net's own hash, which the GUI compares as
+// well. docs/WORKFLOW.md says the same.
 #ifndef ENGINE_VERSION_HPP
 #define ENGINE_VERSION_HPP
 

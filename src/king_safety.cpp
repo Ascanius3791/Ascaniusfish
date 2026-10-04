@@ -2,25 +2,9 @@
 #ifndef KING_SAFETY_CPP
 #define KING_SAFETY_CPP
 #include "../lib/king_safety.hpp"
-
-// Attack half. Danger units per attacker by piece index (pawn, rook, knight,
-// bishop, queen, king); a queen is mostly counted through its checks instead.
-constexpr int KS_ATTACKER_WEIGHT[6] = {0, 44, 81, 52, 10, 0};
-constexpr int KS_MIN_ATTACKERS = 2;       // fewer ring attackers than this: no attack danger
-constexpr int KS_HIT = 69;                // per attack on a square next to the king
-constexpr int KS_WEAK_RING_SQUARE = 185;  // ring square attacked by them, covered by us at most by king/queen
-constexpr int KS_SAFE_CHECK[6] = {0, 1080, 790, 635, 780, 0};
-constexpr int KS_UNSAFE_CHECK = 148;      // a check the enemy has, but onto a square we cover
-constexpr int KS_NO_QUEEN = 873;          // taken off the danger when the enemy has no queen
-constexpr int KS_DANGER_DIV = 5000;       // penalty = danger^2 / this, in centipawns
-
-// Shelter half, per file of the three in front of the king, by the relative rank
-// (2..7) of the rearmost own pawn on or ahead of the king's rank; index 0 = none.
-constexpr int KS_SHELTER[8] = {40, 40, 0, 12, 28, 38, 38, 38};
-constexpr int KS_OPEN_FILE = 20;          // no pawn of either colour on it
-constexpr int KS_STORM[8] = {0, 0, 0, 30, 15, 6, 0, 0};  // enemy pawn at this relative rank
-constexpr int KS_STORM_BLOCKED_DIV = 4;   // storm pawn stopped right in front of our pawn
-constexpr int KS_FULL_PIECE_MATERIAL = 2*3 + 2*3 + 2*5 + 9;  // N, B, R, Q in pawns
+// The numbers are the weight set's ks_* fields (lib/Weights.hpp, weights/w1.txt): the attack
+// half's danger units per attacker, hit, weak ring square and check, its gate and divisor;
+// the shelter half's cover and storm by relative rank (index 0 = no pawn), all in centipawns.
 
 struct KS_Maps
 {
@@ -28,7 +12,7 @@ struct KS_Maps
     uint64_t twice[2] = {0, 0};   // attacked at least twice
     uint64_t by_type[2][6] = {};  // by piece index
     int attackers[2] = {0, 0};    // on the ring of [c]'s king
-    int weight[2] = {0, 0};       // their summed KS_ATTACKER_WEIGHT
+    int weight[2] = {0, 0};       // their summed W.ks_attacker_weight
     int hits[2] = {0, 0};         // their attacks on squares next to [c]'s king
 };
 
@@ -47,7 +31,7 @@ static inline uint64_t ks_ring(int ksq)
     return K_template[centre] | 1ULL << centre;
 }
 
-static void ks_attack_maps(const BB* const original, KS_Maps& m, const int ksq[2], const uint64_t ring[2])
+static void ks_attack_maps(const BB* const original, KS_Maps& m, const int ksq[2], const uint64_t ring[2], const WEIGHTS& W)
 {
     const uint64_t* B = original->Board;
     uint64_t occ = original->get_occupancy();
@@ -79,7 +63,7 @@ static void ks_attack_maps(const BB* const original, KS_Maps& m, const int ksq[2
                 if(a & ring[e])
                 {
                     m.attackers[e]++;
-                    m.weight[e] += KS_ATTACKER_WEIGHT[piece];
+                    m.weight[e] += W.ks_attacker_weight[piece];
                     m.hits[e] += count(a & enemy_king_adjacent);
                 }
             }
@@ -90,18 +74,18 @@ static void ks_attack_maps(const BB* const original, KS_Maps& m, const int ksq[2
 }
 
 // Attack penalty for side `d`'s king, once the maps are complete.
-static int ks_attack_penalty(const BB* const original, const KS_Maps& m, int d, int ksq, uint64_t ring, int& units_out)
+static int ks_attack_penalty(const BB* const original, const KS_Maps& m, int d, int ksq, uint64_t ring, int& units_out, const WEIGHTS& W)
 {
     const uint64_t* B = original->Board;
     int t = !d;
     // The attacker count times their summed weight: it is the joining that makes an attack.
-    int units = m.attackers[d] * m.weight[d] + KS_HIT * m.hits[d];
+    int units = m.attackers[d] * m.weight[d] + W.ks_hit * m.hits[d];
     units_out = units;
-    if(m.attackers[d] < KS_MIN_ATTACKERS)
+    if(m.attackers[d] < W.ks_min_attackers)
     return 0;
 
     uint64_t weak = m.all[t] & ~m.twice[d] & (~m.all[d] | m.by_type[d][5] | m.by_type[d][4]);
-    units += KS_WEAK_RING_SQUARE * count(ring & weak);
+    units += W.ks_weak_ring_square * count(ring & weak);
 
     uint64_t their_pieces = original->get_pieces_of_colour(t);
     uint64_t safe = ~their_pieces & (~m.all[d] | (weak & m.twice[t]));
@@ -113,21 +97,21 @@ static int ks_attack_penalty(const BB* const original, const KS_Maps& m, int d, 
     {
         uint64_t from = checks[piece] & m.by_type[t][piece] & ~their_pieces;
         if(from & safe)
-        units += KS_SAFE_CHECK[piece];
+        units += W.ks_safe_check[piece];
         else if(from)
-        units += KS_UNSAFE_CHECK;
+        units += W.ks_unsafe_check;
     }
     if(!B[4 + 6 * !t])
-    units -= KS_NO_QUEEN;
+    units -= W.ks_no_queen;
 
     units_out = units;
     if(units <= 0)
     return 0;
-    return units * units / KS_DANGER_DIV;
+    return units * units / W.ks_danger_div;
 }
 
 // Shelter penalty for side `d`'s king, scaled by the enemy's piece material.
-static int ks_shelter_penalty(const BB* const original, int d, int ksq)
+static int ks_shelter_penalty(const BB* const original, int d, int ksq, const WEIGHTS& W)
 {
     const uint64_t* B = original->Board;
     int off = 6 * !d, enemy_off = 6 * d;
@@ -153,60 +137,60 @@ static int ks_shelter_penalty(const BB* const original, int d, int ksq)
         if(their)
         their_rank = d ? __builtin_ctzll(their) / 8 + 1 : 8 - (63 - __builtin_clzll(their)) / 8;
 
-        penalty += KS_SHELTER[own_rank];
+        penalty += W.ks_shelter[own_rank];
         if(!(all_pawns & mask_column[f]))
-        penalty += KS_OPEN_FILE;
-        int storm = KS_STORM[their_rank];
+        penalty += W.ks_open_file;
+        int storm = W.ks_storm[their_rank];
         if(own_rank && own_rank == their_rank - 1)
-        storm /= KS_STORM_BLOCKED_DIV;
+        storm /= W.ks_storm_blocked_div;
         penalty += storm;
     }
 
     int material = 3 * count(B[2 + enemy_off]) + 3 * count(B[3 + enemy_off])
                  + 5 * count(B[1 + enemy_off]) + 9 * count(B[4 + enemy_off]);
-    if(material > KS_FULL_PIECE_MATERIAL)
-    material = KS_FULL_PIECE_MATERIAL;
-    return penalty * material / KS_FULL_PIECE_MATERIAL;
+    if(material > W.ks_full_piece_material)
+    material = W.ks_full_piece_material;
+    return penalty * material / W.ks_full_piece_material;
 }
 
-static void ks_prepare(const BB* const original, KS_Maps& m, int ksq[2], uint64_t ring[2])
+static void ks_prepare(const BB* const original, KS_Maps& m, int ksq[2], uint64_t ring[2], const WEIGHTS& W)
 {
     ksq[1] = __builtin_ctzll(original->Board[5]);
     ksq[0] = __builtin_ctzll(original->Board[11]);
     ring[1] = ks_ring(ksq[1]);
     ring[0] = ks_ring(ksq[0]);
-    ks_attack_maps(original, m, ksq, ring);
+    ks_attack_maps(original, m, ksq, ring, W);
 }
 
-King_Safety_Detail king_safety_detail(const BB* const original, bool white)
+King_Safety_Detail king_safety_detail(const BB* const original, bool white, const WEIGHTS& W)
 {
     KS_Maps m;
     int ksq[2];
     uint64_t ring[2];
-    ks_prepare(original, m, ksq, ring);
+    ks_prepare(original, m, ksq, ring, W);
     King_Safety_Detail r;
     int d = white;
     r.attackers = m.attackers[d];
-    r.attack_penalty = ks_attack_penalty(original, m, d, ksq[d], ring[d], r.danger_units);
-    r.shelter_penalty = ks_shelter_penalty(original, d, ksq[d]);
+    r.attack_penalty = ks_attack_penalty(original, m, d, ksq[d], ring[d], r.danger_units, W);
+    r.shelter_penalty = ks_shelter_penalty(original, d, ksq[d], W);
     return r;
 }
 
-void king_safety_of_both(const BB* const original, int& white, int& black)
+void king_safety_of_both(const BB* const original, int& white, int& black, const WEIGHTS& W)
 {
     KS_Maps m;
     int ksq[2];
     uint64_t ring[2];
-    ks_prepare(original, m, ksq, ring);
+    ks_prepare(original, m, ksq, ring, W);
     int units;
-    white = -(ks_attack_penalty(original, m, 1, ksq[1], ring[1], units) + ks_shelter_penalty(original, 1, ksq[1]));
-    black = -(ks_attack_penalty(original, m, 0, ksq[0], ring[0], units) + ks_shelter_penalty(original, 0, ksq[0]));
+    white = -(ks_attack_penalty(original, m, 1, ksq[1], ring[1], units, W) + ks_shelter_penalty(original, 1, ksq[1], W));
+    black = -(ks_attack_penalty(original, m, 0, ksq[0], ring[0], units, W) + ks_shelter_penalty(original, 0, ksq[0], W));
 }
 
-int king_safety_eval(const BB* const original)
+int king_safety_eval(const BB* const original, const WEIGHTS& W)
 {
     int white, black;
-    king_safety_of_both(original, white, black);
+    king_safety_of_both(original, white, black, W);
     return white - black;
 }
 

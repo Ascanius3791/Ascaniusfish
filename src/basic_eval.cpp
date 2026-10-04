@@ -77,8 +77,7 @@ int piecetable(const BB* const original , const WEIGHTS& W)
         else
         {
             piece-=6;
-            int black_table_index = (piece==0) ? 6 : piece; // only pawns get a dedicated black row; other pieces share the white row (see WEIGHTS::piece_table_value_opening[7][64])
-            score -= W.piece_table_value_opening[black_table_index][i]*OW[0]+W.piece_table_value_endgame[black_table_index][i]*EW[0];
+            score -= W.piece_table_value_opening[piece][i^56]*OW[0]+W.piece_table_value_endgame[piece][i^56]*EW[0];// black reads white's table rank-flipped (#85)
         }
     }
 
@@ -101,21 +100,21 @@ int piece_activity_eval(const BB* const original, const WEIGHTS& W)
         {
             int i=find_and_delete_trailling_1(own_pawns);
             if(col)
-            score+=count(enemy_pieces & BP_template[i])*30+count(own_pieces & BP_template[i])*15;//*W.piece_activity_value[0];
+            score+=count(enemy_pieces & BP_template[i])*W.activity_pawn_attack+count(own_pieces & BP_template[i])*W.activity_pawn_defend;
             if(!col)
-            score-=count(enemy_pieces & WP_template[i])*30+count(own_pieces & WP_template[i])*15;//*W.piece_activity_value[0];
+            score-=count(enemy_pieces & WP_template[i])*W.activity_pawn_attack+count(own_pieces & WP_template[i])*W.activity_pawn_defend;
 
             if(col && all_pieces & 1ULL << i+8)
-            score-=20;
+            score+=W.activity_pawn_blocked;
             if(!col && all_pieces & 1ULL << i >> 8)
-            score+=20;
+            score-=W.activity_pawn_blocked;
             
             //possible attacks, if pushed need to be awarded (from the starting rank also after the double push)
             uint64_t push_attacks = col ? (BP_template[i]<<8 | (i/8==1 ? BP_template[i]<<16 : 0)) : (WP_template[i]>>8 | (i/8==6 ? WP_template[i]>>16 : 0));
             if(col)
-            score+=count(enemy_pieces & push_attacks)*20+count(own_pieces & push_attacks)*10;//*W.piece_activity_value[0];
+            score+=count(enemy_pieces & push_attacks)*W.activity_pawn_push_attack+count(own_pieces & push_attacks)*W.activity_pawn_push_defend;
             else
-            score-=count(enemy_pieces & push_attacks)*20+count(own_pieces & push_attacks)*10;//*W.piece_activity_value[0];
+            score-=count(enemy_pieces & push_attacks)*W.activity_pawn_push_attack+count(own_pieces & push_attacks)*W.activity_pawn_push_defend;
         }
         
         uint64_t own_bishops = original->Board[3+6*!col]|original->Board[4+6*!col];
@@ -123,33 +122,33 @@ int piece_activity_eval(const BB* const original, const WEIGHTS& W)
         {
             int i=find_and_delete_trailling_1(own_bishops);
             uint64_t bishop_attacks = get_bishop_attacks(i,all_pieces);
-            score+=count(own_pieces & bishop_attacks)*10*(1-2*!col);//*W.piece_activity_value[3];
-            score+=count(enemy_pieces & bishop_attacks)*40*(1-2*!col);//*W.piece_activity_value[3];
-            score+=count(bishop_attacks)*(1-2*!col)*5;
+            score+=count(own_pieces & bishop_attacks)*W.activity_bishop_defend*(1-2*!col);
+            score+=count(enemy_pieces & bishop_attacks)*W.activity_bishop_attack*(1-2*!col);
+            score+=count(bishop_attacks)*(1-2*!col)*W.activity_bishop_square;
         }
         uint64_t own_rooks = original->Board[1+6*!col]|original->Board[4+6*!col];
         while(own_rooks)
         {
             int i=find_and_delete_trailling_1(own_rooks);
             uint64_t rook_attacks = get_rook_attacks(i,all_pieces);
-            score-=count(own_pieces & rook_attacks)*(1-2*!col)*10;//*W.piece_activity_value[1];
-            score+=count(enemy_pieces & rook_attacks)*(1-2*!col)*40;//*W.piece_activity_value[1];
-            score+=count(rook_attacks)*(1-2*!col)*7;
+            score+=count(own_pieces & rook_attacks)*(1-2*!col)*W.activity_rook_defend;
+            score+=count(enemy_pieces & rook_attacks)*(1-2*!col)*W.activity_rook_attack;
+            score+=count(rook_attacks)*(1-2*!col)*W.activity_rook_square;
         }
         uint64_t own_knights = original->Board[2+6*!col];
         while(own_knights)
         {
             int i=find_and_delete_trailling_1(own_knights);
-            score-=count(own_pieces & (Kn_template[i]))*(1-2*!col)*10;//*W.piece_activity_value[2];
-            score+=count(enemy_pieces & (Kn_template[i]))*(1-2*!col)*10;//*W.piece_activity_value[2];
-            score+=count(Kn_template[i])*(1-2*!col)*5;
+            score+=count(own_pieces & (Kn_template[i]))*(1-2*!col)*W.activity_knight_defend;
+            score+=count(enemy_pieces & (Kn_template[i]))*(1-2*!col)*W.activity_knight_attack;
+            score+=count(Kn_template[i])*(1-2*!col)*W.activity_knight_square;
         }
         uint64_t own_king = original->Board[5+6*!col];
         while(own_king)
         {
             int i=find_and_delete_trailling_1(own_king);
-            score+=count(own_pieces & (K_template[i]))*(1-2*!col)*15;//*W.piece_activity_value[5];
-            score+=count(enemy_pieces & (K_template[i]))*(1-2*!col)*20;//*W.piece_activity_value[5];
+            score+=count(own_pieces & (K_template[i]))*(1-2*!col)*W.activity_king_defend;
+            score+=count(enemy_pieces & (K_template[i]))*(1-2*!col)*W.activity_king_attack;
         }
 
     }
@@ -337,13 +336,12 @@ int passed_pawn_eval(const BB* const original, const WEIGHTS& W)
 
 // The side to move is worth a tempo (#70). Without it the eval gave the side
 // that just moved too much: tools/tempo_swing measures that as half the odd/even
-// swing of the root score (net off), from TEMPO_ENDGAME with bare kings
-// to TEMPO_OPENING with all material on the board.
-static const int TEMPO_OPENING = 24, TEMPO_ENDGAME = 9;
-int tempo_eval(const BB* const original)
+// swing of the root score (net off), from W.tempo_endgame with bare kings
+// to W.tempo_opening with all material on the board.
+int tempo_eval(const BB* const original, const WEIGHTS& W)
 {
     int OW = std::min(enemy_material_left_39ths(original,1)+enemy_material_left_39ths(original,0), 2*MATERIAL_MAX);//both sides' material, 0..78
-    int tempo = (TEMPO_OPENING*OW + TEMPO_ENDGAME*(2*MATERIAL_MAX-OW))/(2*MATERIAL_MAX);
+    int tempo = (W.tempo_opening*OW + W.tempo_endgame*(2*MATERIAL_MAX-OW))/(2*MATERIAL_MAX);
     return original->white_move ? tempo : -tempo;
 }
 
@@ -354,7 +352,7 @@ int basic_eval(const BB*const original , const WEIGHTS& W)// return the evaluati
     score += material_eval(original,W);
     score += piecetable(original,W);
     
-    score += king_safety_eval(original);
+    score += king_safety_eval(original,W);
     //return score;
     //score=score*0.1; //games get fun, when they DO NOT CARE ABOUT MATERIAL
 
@@ -362,11 +360,11 @@ int basic_eval(const BB*const original , const WEIGHTS& W)// return the evaluati
     score += passed_pawn_eval(original,W);
 
     
-    score+= 5*(count(original->get_attacked_squares(1))-count(original->get_attacked_squares(0)));
+    score+= W.mobility_value*(count(original->get_attacked_squares(1))-count(original->get_attacked_squares(0)));
     
     score += piece_activity_eval(original,W);
 
-    score += tempo_eval(original);
+    score += tempo_eval(original,W);
 
     return score;
 }
@@ -478,7 +476,7 @@ int sorting_eval(const BB* const original, const WEIGHTS& W )// accelerates prun
     // king_safety_of_colour(white) and (black) computed once here and reused below for
     // tactical_potential, instead of each being computed twice more inside it.
     int king_safety_white, king_safety_black;// <= 0 each, 0 = safe (#42)
-    king_safety_of_both(original,king_safety_white,king_safety_black);
+    king_safety_of_both(original,king_safety_white,king_safety_black,W);
     int king_s = original->white_move ? king_safety_black : king_safety_white;//king_safety_of_colour(!original->white_move)
     if(king_s<=0)//if the king may be in danger, we must attack!//is this even quicker? in a queen vs king endgame with gave 30% more pruning
     score -= W.value_of_king_safety_for_sorting*king_s*(1-2*!original->white_move);

@@ -32,7 +32,7 @@ uint64_t passed_pawns_of_colour(const BB* const original, bool white);
 int passed_pawn_bonus(int relative_rank, int OW, const WEIGHTS& W = WEIGHTS_OG);// cp for one passer, OW = both sides' material in 39ths, 0..78
 int passed_pawn_eval(const BB* const original, const WEIGHTS& W = WEIGHTS_OG);// white's view
 
-int tempo_eval(const BB* const original);// the side to move's tempo, white's view (#70)
+int tempo_eval(const BB* const original, const WEIGHTS& W = WEIGHTS_OG);// the side to move's tempo, white's view (#70)
 
 int basic_eval(const BB*const original , const WEIGHTS& W = WEIGHTS_OG);// return the evaluation in centipawns
 

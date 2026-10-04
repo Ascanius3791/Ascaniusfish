@@ -32,6 +32,7 @@ struct Search_Line
 struct Search_Provenance
 {
     int eval_version = 0;
+    int weights = 1;           // the weight set's version (#85); an engine that does not say searched with set 1
     std::string nne = "off";   // the net's file hash, or "off"
     int syzygy = 0, gaviota = 0;   // pieces each tablebase answered for, 0 = none
     std::string commit;
@@ -47,6 +48,7 @@ inline bool parse_provenance(const std::string& line, Search_Provenance& out)
     while(in >> key)
     {
         if(key=="evalversion") in >> p.eval_version;
+        else if(key=="weights") in >> p.weights;
         else if(key=="nne") in >> p.nne;
         else if(key=="syzygy") in >> p.syzygy;
         else if(key=="gaviota") in >> p.gaviota;

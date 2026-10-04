@@ -18,7 +18,7 @@
 #include <thread>
 
 // UCI front end. Implements uci, isready, ucinewgame, position, go, stop,
-// quit (setoption handles SyzygyPath, SyzygyProbeLimit, GaviotaTbPath, GaviotaTbCache, NNEFile, UseNNE and MultiPV, debug/register/ponderhit are accepted and ignored), plus
+// quit (setoption handles SyzygyPath, SyzygyProbeLimit, GaviotaTbPath, GaviotaTbCache, NNEFile, UseNNE, WeightsFile and MultiPV, debug/register/ponderhit are accepted and ignored), plus
 // the non-standard "go perft N" for checking move generation from any FEN, and
 // the non-standard "hint depth D pv <moves>" (#79): a line found earlier for
 // the position just set, seeded into the TT before the next "go" (see seed_hint()).
@@ -57,7 +57,7 @@ long long perft(const BB* pos, int depth, BB* buf);
 // best first for the side to move, with distinct first moves. 1 = the plain
 // minimax() call. Throws search_aborted like minimax().
 std::vector<PV_Line> multipv_search(const BB& root, BB* wfh, int depth, lookup_table* table, BB* path_history, int ply,
-                                    const CuckooCycleTable* cycle_table, int lines_wanted);
+                                    const CuckooCycleTable* cycle_table, int lines_wanted, const WEIGHTS& W = WEIGHTS_OG);
 
 // "cp N" or "mate N", from the side to move's point of view.
 std::string uci_score(int eval, bool white_to_move);
@@ -104,6 +104,8 @@ class UCI_Engine
     std::string nne_file = "nets/nne_d6.bin";  // NNEFile
     bool use_nne = true;                       // UseNNE; nne::enabled says whether it is in effect
     bool nne_applied = false;                  // apply_nne() has run; the default is applied on the first isready/go
+    WEIGHTS weights = WEIGHTS_OG;              // WeightsFile (#85): the weight set every search uses, default the compiled-in one
+    void apply_weights(const std::string& file);
     int multipv = 1;                           // MultiPV (#69): lines per depth, best first; 1 = the plain search
     bool narrow = false, narrow_deeper = false; // TTNarrowing, TTNarrowingDeeper (#65); the second only counts with the first
     void apply_nne();

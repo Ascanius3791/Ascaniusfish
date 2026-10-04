@@ -1188,7 +1188,7 @@ function provenanceText(ev) {
   const tables = [p.syzygy ? `Syzygy ${p.syzygy}` : '', p.gaviota ? `Gaviota ${p.gaviota}` : ''].filter(Boolean).join(', ');
   return [
     `Kept from a search of ${(ev.time / 1000).toFixed(1)} s on ${when}`,
-    `eval version ${p.evalVersion}` + (ev.older ? ' (not the current eval: never seeds a search or a move)' : ''),
+    `eval version ${p.evalVersion}, weights ${p.weights}` + (ev.older ? ' (not the current eval: never seeds a search or a move)' : ''),
     `net: ${p.nne === 'off' ? 'off' : p.nne}`,
     `tablebases: ${tables || 'none'}`,
     `engine commit ${p.commit || 'unknown'}`,

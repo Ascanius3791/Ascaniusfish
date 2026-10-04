@@ -57,11 +57,12 @@ struct PTT_Entry
 struct PTT_Eval
 {
     int eval_version = 0;
+    int weights = 1;// the weight set (#85)
     std::string nne = "off";
 
     bool matches(const Search_Provenance& p) const
     {
-        return eval_version>0 && p.eval_version==eval_version && p.nne==nne;
+        return eval_version>0 && p.eval_version==eval_version && p.weights==weights && p.nne==nne;
     }
 };
 
@@ -141,14 +142,15 @@ class PTT
 
     // Whether `fresh` should replace `kept` for the same position: a newer
     // eval version wins over an older one and never the other way round; within
-    // one version and net the deeper search wins (an equal one does not); a
-    // search with another net of the same version is the newer opinion.
+    // one version, weight set and net the deeper search wins (an equal one does
+    // not); a search with another net or weight set of the same version is the
+    // newer opinion.
     static bool better(const PTT_Entry& fresh, const PTT_Entry& kept)
     {
         const Search_Provenance &f = fresh.info.prov, &k = kept.info.prov;
         if(f.eval_version!=k.eval_version)
         return f.eval_version>k.eval_version;
-        if(f.nne!=k.nne)
+        if(f.nne!=k.nne || f.weights!=k.weights)
         return true;
         return fresh.info.depth>kept.info.depth;
     }
@@ -163,7 +165,7 @@ class PTT
              + "\tscore=" + s.score_kind + " " + s.score_value
              + "\tnodes=" + std::to_string(s.nodes) + "\ttime=" + std::to_string(s.time_ms)
              + "\tpv=" + pv
-             + "\teval=" + std::to_string(s.prov.eval_version) + "\tnne=" + s.prov.nne
+             + "\teval=" + std::to_string(s.prov.eval_version) + "\tweights=" + std::to_string(s.prov.weights) + "\tnne=" + s.prov.nne
              + "\tsyzygy=" + std::to_string(s.prov.syzygy) + "\tgaviota=" + std::to_string(s.prov.gaviota)
              + "\tcommit=" + s.prov.commit + "\tat=" + std::to_string(e.stored_at) + "\n";
     }
@@ -198,6 +200,7 @@ class PTT
                 e.info.pv.push_back(m);
             }
             else if(k=="eval") e.info.prov.eval_version = std::atoi(v.c_str());
+            else if(k=="weights") e.info.prov.weights = std::atoi(v.c_str());// none: before #85, set 1
             else if(k=="nne") e.info.prov.nne = v;
             else if(k=="syzygy") e.info.prov.syzygy = std::atoi(v.c_str());
             else if(k=="gaviota") e.info.prov.gaviota = std::atoi(v.c_str());

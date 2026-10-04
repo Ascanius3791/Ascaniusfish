@@ -49,7 +49,7 @@ Co-Authored-By: ...
 - One logical change per commit. The build (`make`) must succeed.
 - If the change affects strength or speed, add the measurement to the body, e.g. `nps 1.21M → 1.34M`.
 - Commits touching search, eval or move ordering put `bench: <nodes>` (from `make bench`) in the body; commits touching move generation must pass `make perft`. See `docs/BENCHMARKS.md`.
-- A commit that changes what a search scores a position bumps `EVAL_VERSION` in `lib/engine_version.hpp` and says `eval version N` in the body: eval or `basic_eval()` terms, `WEIGHTS_OG`, the NNE format or how the net enters the eval, and search changes that move scores (pruning, extensions, mate or draw handling). Not a speedup with the same `bench` scores, and not a retrained net (PTT entries carry the net's hash). An older version's PTT entries are then shown as older and never trusted (#79).
+- A commit that changes what a search scores a position bumps `EVAL_VERSION` in `lib/engine_version.hpp` and says `eval version N` in the body: eval or `basic_eval()` terms, `WEIGHTS_OG` (the default weight set, `WEIGHTS_DEFAULT` in the Makefile), the NNE format or how the net enters the eval, and search changes that move scores (pruning, extensions, mate or draw handling). Not a speedup with the same `bench` scores, and not a retrained net (PTT entries carry the net's hash). An older version's PTT entries are then shown as older and never trusted (#79).
 - Don't mix Ascanius-approved edits to Ascanius-owned files with other changes.
 - Commit to the issue's branch `issue/N`, in its worktree (see below). It lands on `main` only when Ascanius says the issue is done; an experiment that does not meet the issue is deleted instead.
 

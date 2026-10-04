@@ -73,7 +73,7 @@ inline double net_correction_white(const BB& pos)
 
 struct Eval_Part
 {
-    const char* name;
+    std::string name;
     int raw[2] = {0, 0};        // [1] = white, [0] = black, own view, unscaled
     int count[2] = {0, 0};      // what was counted (squares, pieces), for the tooltip
     std::string info;
@@ -95,7 +95,7 @@ struct Eval_Split
     bool has_fixed = false;
     int fixed = 0;
 
-    Eval_Part& add(const char* name, const std::string& info)
+    Eval_Part& add(const std::string& name, const std::string& info)
     {
         Eval_Part& p = parts[n++];
         p.name = name;
@@ -132,13 +132,13 @@ inline Eval_Split split_piecetable(const BB* const original, const WEIGHTS& W)
         Eval_Part& p = s.add(names[type], "");
         for(int white=0;white<2;white++)
         {
-            const int table = white ? type : (type==0 ? 6 : type);
+            const int flip = white ? 0 : 56;// black reads the table rank-flipped
             uint64_t bb = original->Board[type + 6*!white];
             while(bb)
             {
                 int i = find_and_delete_trailling_1(bb);
-                opening[white] += W.piece_table_value_opening[table][i]*OW[white];
-                endgame[white] += W.piece_table_value_endgame[table][i]*EW[white];
+                opening[white] += W.piece_table_value_opening[type][i^flip]*OW[white];
+                endgame[white] += W.piece_table_value_endgame[type][i^flip]*EW[white];
                 p.count[white]++;
             }
             p.raw[white] = opening[white] + endgame[white];
@@ -155,30 +155,31 @@ inline Eval_Split split_piecetable(const BB* const original, const WEIGHTS& W)
 // colour on a square the piece hits (occupancy-aware for sliders); queens count
 // both as a bishop and as a rook, as in the original. The names carry the "/2"
 // the original divides its whole sum by, so count × weight / 2 is the cp shown.
-inline Eval_Split split_piece_activity(const BB* const original)
+inline Eval_Split split_piece_activity(const BB* const original, const WEIGHTS& W)
 {
     Eval_Split s;
     s.scale = 2;
     enum { P_HIT, P_DEF, P_BLOCKED, P_PUSH_HIT, P_PUSH_DEF, D_OWN, D_ENEMY, D_MOB, S_OWN, S_ENEMY, S_MOB, N_OWN, N_ENEMY, N_MOB, K_OWN, K_ENEMY };
     struct { const char* name; int weight; const char* info; } spec[] = {
-        {"P attacks ×30/2",          30, "enemy pieces on the pawn's capture squares"},
-        {"P defends ×15/2",          15, "own pieces on the pawn's capture squares"},
-        {"P blocked −20/2",         -20, "a piece right in front of the pawn"},
-        {"P attacks after push ×20/2", 20, "enemy pieces on the squares the pawn would capture on after one push (or two, from the starting rank)"},
-        {"P defends after push ×10/2", 10, "own pieces on the squares the pawn would capture on after one push (or two, from the starting rank)"},
-        {"B/Q defends ×10/2",        10, "own pieces a bishop or queen sees diagonally"},
-        {"B/Q attacks ×40/2",        40, "enemy pieces a bishop or queen sees diagonally"},
-        {"B/Q diagonals ×5/2",        5, "squares a bishop or queen sees diagonally"},
-        {"R/Q defends −10/2",       -10, "own pieces a rook or queen sees on lines (a penalty)"},
-        {"R/Q attacks ×40/2",        40, "enemy pieces a rook or queen sees on lines"},
-        {"R/Q lines ×7/2",            7, "squares a rook or queen sees on lines"},
-        {"N defends −10/2",         -10, "own pieces a knight covers (a penalty)"},
-        {"N attacks ×10/2",          10, "enemy pieces a knight covers"},
-        {"N squares ×5/2",            5, "squares a knight covers, empty board"},
-        {"K defends ×15/2",          15, "own pieces next to the king"},
-        {"K attacks ×20/2",          20, "enemy pieces next to the king"},
+        {"P attacks",            W.activity_pawn_attack, "enemy pieces on the pawn's capture squares"},
+        {"P defends",            W.activity_pawn_defend, "own pieces on the pawn's capture squares"},
+        {"P blocked",            W.activity_pawn_blocked, "a piece right in front of the pawn"},
+        {"P attacks after push", W.activity_pawn_push_attack, "enemy pieces on the squares the pawn would capture on after one push (or two, from the starting rank)"},
+        {"P defends after push", W.activity_pawn_push_defend, "own pieces on the squares the pawn would capture on after one push (or two, from the starting rank)"},
+        {"B/Q defends",          W.activity_bishop_defend, "own pieces a bishop or queen sees diagonally"},
+        {"B/Q attacks",          W.activity_bishop_attack, "enemy pieces a bishop or queen sees diagonally"},
+        {"B/Q diagonals",        W.activity_bishop_square, "squares a bishop or queen sees diagonally"},
+        {"R/Q defends",          W.activity_rook_defend, "own pieces a rook or queen sees on lines"},
+        {"R/Q attacks",          W.activity_rook_attack, "enemy pieces a rook or queen sees on lines"},
+        {"R/Q lines",            W.activity_rook_square, "squares a rook or queen sees on lines"},
+        {"N defends",            W.activity_knight_defend, "own pieces a knight covers"},
+        {"N attacks",            W.activity_knight_attack, "enemy pieces a knight covers"},
+        {"N squares",            W.activity_knight_square, "squares a knight covers, empty board"},
+        {"K defends",            W.activity_king_defend, "own pieces next to the king"},
+        {"K attacks",            W.activity_king_attack, "enemy pieces next to the king"},
     };
-    for(const auto& sp : spec) s.add(sp.name, sp.info);
+    for(const auto& sp : spec)// "P attacks ×30/2", "P blocked −20/2"
+    s.add(std::string(sp.name) + (sp.weight<0 ? " −" : " ×") + std::to_string(std::abs(sp.weight)) + "/2", sp.info);
 
     uint64_t all_black_pieces = original->Board[6]|original->Board[7]|original->Board[8]|original->Board[9]|original->Board[10]|original->Board[11];
     uint64_t all_white_pieces = original->Board[0]|original->Board[1]|original->Board[2]|original->Board[3]|original->Board[4]|original->Board[5];
@@ -271,10 +272,10 @@ inline Eval_Split split_material(const BB* const original, const WEIGHTS& W)
 
 // king_safety_eval() (src/king_safety.cpp): each king's attack and shelter
 // penalty, as king_safety_detail() gives them, own view (<= 0).
-inline Eval_Split split_king_safety(const BB* const original)
+inline Eval_Split split_king_safety(const BB* const original, const WEIGHTS& W)
 {
     Eval_Split s;
-    const King_Safety_Detail d[2] = { king_safety_detail(original, false), king_safety_detail(original, true) };
+    const King_Safety_Detail d[2] = { king_safety_detail(original, false, W), king_safety_detail(original, true, W) };
     Eval_Part& attack = s.add("Attack on the king", "enemy pieces reaching the king ring: white's king "
         + std::to_string(d[1].attackers) + " attackers / " + std::to_string(d[1].danger_units) + " danger units, black's king "
         + std::to_string(d[0].attackers) + " / " + std::to_string(d[0].danger_units));
@@ -370,22 +371,23 @@ inline Eval_Split split_passed(const BB* const original, const WEIGHTS& W)
     return s;
 }
 
-// basic_eval()'s inline line 5*(attacked squares of white - of black).
-inline Eval_Split split_attacked(const BB* const original)
+// basic_eval()'s inline line W.mobility_value*(attacked squares of white - of black).
+inline Eval_Split split_attacked(const BB* const original, const WEIGHTS& W)
 {
     Eval_Split s;
-    Eval_Part& p = s.add("Attacked squares ×5", "squares the side attacks, 5 each");
+    const std::string w = std::to_string(W.mobility_value);
+    Eval_Part& p = s.add("Attacked squares ×" + w, "squares the side attacks, " + w + " each");
     for(int white=0;white<2;white++)
     {
         p.count[white] = count(original->get_attacked_squares(white));
-        p.raw[white] = 5*p.count[white];
+        p.raw[white] = W.mobility_value*p.count[white];
     }
     return s;
 }
 
-// tempo_eval() (#70): the side to move's tempo, from TEMPO_ENDGAME with bare
-// kings to TEMPO_OPENING with all material, blended by both sides' material.
-inline Eval_Split split_tempo(const BB* const original)
+// tempo_eval() (#70): the side to move's tempo, from W.tempo_endgame with bare
+// kings to W.tempo_opening with all material, blended by both sides' material.
+inline Eval_Split split_tempo(const BB* const original, const WEIGHTS& W)
 {
     Eval_Split s;
     int phase = 0;
@@ -393,11 +395,11 @@ inline Eval_Split split_tempo(const BB* const original)
     phase += 1*count(original->Board[0+6*side]) + 5*count(original->Board[1+6*side]) + 3*count(original->Board[2+6*side])
            + 3*count(original->Board[3+6*side]) + 9*count(original->Board[4+6*side]);
     phase = std::min(phase, 2*MATERIAL_MAX);
-    Eval_Part& p = s.add("Side to move", "the mover's tempo: " + std::to_string(TEMPO_ENDGAME) + " cp with bare kings to "
-                         + std::to_string(TEMPO_OPENING) + " with all material; material here " + std::to_string(phase) + "/78");
+    Eval_Part& p = s.add("Side to move", "the mover's tempo: " + std::to_string(W.tempo_endgame) + " cp with bare kings to "
+                         + std::to_string(W.tempo_opening) + " with all material; material here " + std::to_string(phase) + "/78");
     const int mover = original->white_move;
     p.count[mover] = 1;
-    p.raw[mover] = (TEMPO_OPENING*phase + TEMPO_ENDGAME*(2*MATERIAL_MAX-phase))/(2*MATERIAL_MAX);
+    p.raw[mover] = (W.tempo_opening*phase + W.tempo_endgame*(2*MATERIAL_MAX-phase))/(2*MATERIAL_MAX);
     return s;
 }
 
@@ -445,12 +447,12 @@ inline Eval_Breakdown eval_breakdown(const BB* const pos, const WEIGHTS& W)
     };
     set(0, "Material",         "material_eval()",       true,  material_eval(pos, W),       split_material(pos, W));
     set(1, "Piece tables",     "piecetable()",          true,  piecetable(pos, W),          split_piecetable(pos, W));
-    set(2, "King safety",      "king_safety_eval()",    true,  king_safety_eval(pos),       split_king_safety(pos));
+    set(2, "King safety",      "king_safety_eval()",    true,  king_safety_eval(pos, W),    split_king_safety(pos, W));
     set(3, "Pawn structure",   "positional_eval()",     true,  positional_eval(pos, W),     split_pawn_structure(pos, W));
     set(4, "Passed pawns",     "passed_pawn_eval()",    true,  passed_pawn_eval(pos, W),    split_passed(pos, W));
-    set(5, "Attacked squares", "basic_eval()'s 5*(attacked squares) line", false, 0,     split_attacked(pos));
-    set(6, "Piece activity",   "piece_activity_eval()", true,  piece_activity_eval(pos, W), split_piece_activity(pos));
-    set(7, "Tempo",            "tempo_eval()",          true,  tempo_eval(pos),             split_tempo(pos));
+    set(5, "Attacked squares", "basic_eval()'s mobility_value*(attacked squares) line", false, 0, split_attacked(pos, W));
+    set(6, "Piece activity",   "piece_activity_eval()", true,  piece_activity_eval(pos, W), split_piece_activity(pos, W));
+    set(7, "Tempo",            "tempo_eval()",          true,  tempo_eval(pos, W),          split_tempo(pos, W));
     b.basic = basic_eval(pos, W);
     return b;
 }

@@ -60,7 +60,7 @@ constexpr int TM_LAMBDA_HISTORY = 10;  // moves of raw λ kept to normalize the 
 // while a stripped-down or already-decided position gives less, so its
 // share of the remaining clock isn't diluted by moves that are unlikely to
 // be played. Floored at TM_MIN_MOVES_LEFT.
-int expected_moves_left(const BB& pos);
+int expected_moves_left(const BB& pos, const WEIGHTS& W = WEIGHTS_OG);
 
 // λ from the PVs of iterations 1..deepest: pv[d] holds len[d] moves of iteration d.
 // 1 if fewer than two iterations are known.
@@ -88,7 +88,7 @@ class TimeManager
     public:
     // time_ms/inc_ms: clock and increment of the side to move; movestogo 0 = none.
     // history: the game's Lambda_History, shared across moves; must outlive this TimeManager.
-    TimeManager(const BB& root, long long time_ms, long long inc_ms, int movestogo, Lambda_History& history);
+    TimeManager(const BB& root, long long time_ms, long long inc_ms, int movestogo, Lambda_History& history, const WEIGHTS& W = WEIGHTS_OG);
 
     long long hard_ms() const { return hard; }
     long long soft_ms() const;

@@ -94,14 +94,26 @@ static void plan_avoid(const uint64_t* Board, uint64_t occ, bool white, uint64_t
 
 enum Plan_Role_Kind { ROLE_PAWN, ROLE_DIAG, ROLE_ORTH, ROLE_KNIGHT, ROLE_KING };
 
-// piece_activity_eval()'s weights. A non-pawn role: per piece of its own
-// colour in its mask, per enemy piece in its mask, per square of the mask.
-constexpr int PLAN_ROLE_W[5][3] = {{0,0,0}, {10,40,5}, {-10,40,7}, {-10,10,5}, {15,20,0}};
-// A pawn: per own/enemy piece it attacks, per own/enemy piece it would attack
-// after a push (single, or double from the start rank), and any piece in front of it.
-constexpr int PLAN_PAWN_ATT_OWN = 15, PLAN_PAWN_ATT_ENEMY = 30;
-constexpr int PLAN_PAWN_PUSH_OWN = 10, PLAN_PAWN_PUSH_ENEMY = 20;
-constexpr int PLAN_PAWN_BLOCKED = -20;
+// piece_activity_eval()'s weights, from the weight set (#85). A non-pawn role:
+// per piece of its own colour in its mask, per enemy piece in its mask, per
+// square of the mask. A pawn: per own/enemy piece it attacks, per own/enemy
+// piece it would attack after a push (single, or double from the start rank),
+// and any piece in front of it.
+struct Plan_Weights
+{
+    int role[5][3];
+    int pawn_att_own, pawn_att_enemy, pawn_push_own, pawn_push_enemy, pawn_blocked;
+};
+
+static inline Plan_Weights plan_weights(const WEIGHTS& W)
+{
+    return {{{0, 0, 0},
+             {W.activity_bishop_defend, W.activity_bishop_attack, W.activity_bishop_square},
+             {W.activity_rook_defend, W.activity_rook_attack, W.activity_rook_square},
+             {W.activity_knight_defend, W.activity_knight_attack, W.activity_knight_square},
+             {W.activity_king_defend, W.activity_king_attack, 0}},
+            W.activity_pawn_defend, W.activity_pawn_attack, W.activity_pawn_push_defend, W.activity_pawn_push_attack, W.activity_pawn_blocked};
+}
 
 static inline uint64_t plan_pawn_att(bool white, int i)
 {
@@ -115,15 +127,15 @@ static inline uint64_t plan_pawn_push_att(bool white, int i)
 }
 
 // A non-pawn role's term with mask m, white's view.
-static inline int plan_masked_term(int kind, bool white, uint64_t m, uint64_t own, uint64_t enemy)
+static inline int plan_masked_term(const Plan_Weights& pw, int kind, bool white, uint64_t m, uint64_t own, uint64_t enemy)
 {
-    const int* w = PLAN_ROLE_W[kind];
+    const int* w = pw.role[kind];
     const int t = w[0]*count(own & m) + w[1]*count(enemy & m) + w[2]*count(m);
     return white ? t : -t;
 }
 
 // One role's piece_activity_eval() term, white's view; *mask gets what it reads.
-static inline int plan_role_term(int kind, bool white, int i, uint64_t occ, uint64_t white_pieces, uint64_t black_pieces, uint64_t* mask)
+static inline int plan_role_term(const Plan_Weights& pw, int kind, bool white, int i, uint64_t occ, uint64_t white_pieces, uint64_t black_pieces, uint64_t* mask)
 {
     const uint64_t own = white ? white_pieces : black_pieces;
     const uint64_t enemy = white ? black_pieces : white_pieces;
@@ -135,10 +147,10 @@ static inline int plan_role_term(int kind, bool white, int i, uint64_t occ, uint
             const uint64_t front = white ? 1ULL << i+8 : 1ULL << i >> 8;
             const uint64_t side = plan_pawn_push_att(white,i);
             *mask = att | front | side;
-            int t = count(enemy & att)*PLAN_PAWN_ATT_ENEMY + count(own & att)*PLAN_PAWN_ATT_OWN
-                  + count(enemy & side)*PLAN_PAWN_PUSH_ENEMY + count(own & side)*PLAN_PAWN_PUSH_OWN;
+            int t = count(enemy & att)*pw.pawn_att_enemy + count(own & att)*pw.pawn_att_own
+                  + count(enemy & side)*pw.pawn_push_enemy + count(own & side)*pw.pawn_push_own;
             if(occ & front)
-            t += PLAN_PAWN_BLOCKED;
+            t += pw.pawn_blocked;
             return white ? t : -t;
         }
         case ROLE_DIAG: *mask = get_bishop_attacks(i,occ); break;
@@ -146,12 +158,12 @@ static inline int plan_role_term(int kind, bool white, int i, uint64_t occ, uint
         case ROLE_KNIGHT: *mask = Kn_template[i]; break;
         default: *mask = K_template[i]; break;
     }
-    return plan_masked_term(kind, white, *mask, own, enemy);
+    return plan_masked_term(pw, kind, white, *mask, own, enemy);
 }
 
 // Adds f times what a piece on each square of a leaper role's mask adds to
 // that role's term (white's view) to gain[colour of the piece][square].
-static inline void plan_add_leaper(int (*gain)[64], int kind, bool white, int i, int f)
+static inline void plan_add_leaper(const Plan_Weights& pw, int (*gain)[64], int kind, bool white, int i, int f)
 {
     const int sg = white ? f : -f;
     if(kind == ROLE_PAWN)
@@ -160,22 +172,22 @@ static inline void plan_add_leaper(int (*gain)[64], int kind, bool white, int i,
         while(m)
         {
             const int x = find_and_delete_trailling_1(m);
-            gain[white][x] += sg*PLAN_PAWN_ATT_OWN;
-            gain[!white][x] += sg*PLAN_PAWN_ATT_ENEMY;
+            gain[white][x] += sg*pw.pawn_att_own;
+            gain[!white][x] += sg*pw.pawn_att_enemy;
         }
         m = plan_pawn_push_att(white,i);
         while(m)
         {
             const int x = find_and_delete_trailling_1(m);
-            gain[white][x] += sg*PLAN_PAWN_PUSH_OWN;
-            gain[!white][x] += sg*PLAN_PAWN_PUSH_ENEMY;
+            gain[white][x] += sg*pw.pawn_push_own;
+            gain[!white][x] += sg*pw.pawn_push_enemy;
         }
         const int x = white ? i+8 : i-8;
-        gain[0][x] += sg*PLAN_PAWN_BLOCKED;
-        gain[1][x] += sg*PLAN_PAWN_BLOCKED;
+        gain[0][x] += sg*pw.pawn_blocked;
+        gain[1][x] += sg*pw.pawn_blocked;
         return;
     }
-    const int* w = PLAN_ROLE_W[kind];
+    const int* w = pw.role[kind];
     uint64_t m = kind == ROLE_KNIGHT ? Kn_template[i] : K_template[i];
     while(m)
     {
@@ -228,17 +240,17 @@ static constexpr Plan_Beyond plan_beyond = plan_make_beyond();
 // A slider role (on sq, attacks a) sees the empty square x. What its term
 // (its own view) loses when a piece lands on x and it no longer sees past it.
 // sides[1] = white's pieces.
-static inline int plan_lost(int kind, bool rw, int sq, int x, uint64_t a, const uint64_t* sides)
+static inline int plan_lost(const Plan_Weights& pw, int kind, bool rw, int sq, int x, uint64_t a, const uint64_t* sides)
 {
-    const int* w = PLAN_ROLE_W[kind];
+    const int* w = pw.role[kind];
     const uint64_t lost = a & plan_beyond.sq[sq][x];
     return w[0]*count(sides[rw] & lost) + w[1]*count(sides[!rw] & lost) + w[2]*count(lost);
 }
 
 // What a piece of colour c landing there adds to the role's term, white's view.
-static inline int plan_cut(int kind, bool rw, bool c, int lost)
+static inline int plan_cut(const Plan_Weights& pw, int kind, bool rw, bool c, int lost)
 {
-    const int g = (rw == c ? PLAN_ROLE_W[kind][0] : PLAN_ROLE_W[kind][1]) - lost;
+    const int g = (rw == c ? pw.role[kind][0] : pw.role[kind][1]) - lost;
     return rw ? g : -g;
 }
 
@@ -249,6 +261,7 @@ struct Plan_Ctx
 {
     const BB* original;
     const WEIGHTS* W;
+    Plan_Weights pw;// piece_activity_eval()'s weights, from *W
     int base;// reference mode: plan_partial_eval() of the position (PLAN_OWN_ACT: without the activity)
     int ref_act;// reference mode, PLAN_OWN_ACT: plan_ref_activity() of every piece, summed
     uint64_t side_pieces[2];// [1] = white
@@ -282,7 +295,7 @@ static inline double plan_nne_white(const BB& b)
 // Reference for PLAN_OWN_ACT: the raw piece_activity_eval() terms (before its
 // /2, white's view) of the piece in Board[p] on sq, written from
 // piece_activity_eval() itself rather than from the role tables above.
-static int plan_ref_activity(const BB* const b, int p, int sq)
+static int plan_ref_activity(const BB* const b, int p, int sq, const WEIGHTS& W)
 {
     uint64_t white_pieces = 0, black_pieces = 0;
     for(int q=0;q<6;q++)
@@ -300,36 +313,36 @@ static int plan_ref_activity(const BB* const b, int p, int sq)
     if(type == 0)
     {
         const uint64_t att = col ? BP_template[sq] : WP_template[sq];
-        score += sg*(count(enemy_pieces & att)*30 + count(own_pieces & att)*15);
+        score += sg*(count(enemy_pieces & att)*W.activity_pawn_attack + count(own_pieces & att)*W.activity_pawn_defend);
         if(all_pieces & (col ? 1ULL << sq+8 : 1ULL << sq >> 8))
-        score -= sg*20;
+        score += sg*W.activity_pawn_blocked;
         const uint64_t push_attacks = col ? (BP_template[sq]<<8 | (sq/8==1 ? BP_template[sq]<<16 : 0)) : (WP_template[sq]>>8 | (sq/8==6 ? WP_template[sq]>>16 : 0));
-        score += sg*(count(enemy_pieces & push_attacks)*20 + count(own_pieces & push_attacks)*10);
+        score += sg*(count(enemy_pieces & push_attacks)*W.activity_pawn_push_attack + count(own_pieces & push_attacks)*W.activity_pawn_push_defend);
     }
     if(type == 3 || type == 4)
     {
         const uint64_t a = get_bishop_attacks(sq,all_pieces);
-        score += sg*(count(own_pieces & a)*10 + count(enemy_pieces & a)*40 + count(a)*5);
+        score += sg*(count(own_pieces & a)*W.activity_bishop_defend + count(enemy_pieces & a)*W.activity_bishop_attack + count(a)*W.activity_bishop_square);
     }
     if(type == 1 || type == 4)
     {
         const uint64_t a = get_rook_attacks(sq,all_pieces);
-        score += sg*(-count(own_pieces & a)*10 + count(enemy_pieces & a)*40 + count(a)*7);
+        score += sg*(count(own_pieces & a)*W.activity_rook_defend + count(enemy_pieces & a)*W.activity_rook_attack + count(a)*W.activity_rook_square);
     }
     if(type == 2)
-    score += sg*(-count(own_pieces & Kn_template[sq])*10 + count(enemy_pieces & Kn_template[sq])*10 + count(Kn_template[sq])*5);
+    score += sg*(count(own_pieces & Kn_template[sq])*W.activity_knight_defend + count(enemy_pieces & Kn_template[sq])*W.activity_knight_attack + count(Kn_template[sq])*W.activity_knight_square);
     if(type == 5)
-    score += sg*(count(own_pieces & K_template[sq])*15 + count(enemy_pieces & K_template[sq])*20);
+    score += sg*(count(own_pieces & K_template[sq])*W.activity_king_defend + count(enemy_pieces & K_template[sq])*W.activity_king_attack);
     return score;
 }
 
 // The sum of plan_ref_activity() over all pieces: piece_activity_eval() before its /2.
-static int plan_ref_activity_all(const BB* const b)
+static int plan_ref_activity_all(const BB* const b, const WEIGHTS& W)
 {
     int sum = 0;
     for(int p=0;p<12;p++)
     for(uint64_t bb = b->Board[p]; bb; )
-    sum += plan_ref_activity(b, p, find_and_delete_trailling_1(bb));
+    sum += plan_ref_activity(b, p, find_and_delete_trailling_1(bb), W);
     return sum;
 }
 
@@ -338,6 +351,8 @@ static void plan_setup(Plan_Ctx& c, const BB* const original, const WEIGHTS& W)
     const uint64_t* Board = original->Board;
     c.original = original;
     c.W = &W;
+    c.pw = plan_weights(W);
+    const Plan_Weights& pw = c.pw;
     c.base = 0;
     c.side_pieces[0] = c.side_pieces[1] = 0;
     for(int p=0;p<6;p++)
@@ -359,12 +374,12 @@ static void plan_setup(Plan_Ctx& c, const BB* const original, const WEIGHTS& W)
     for(int p=0;p<12;p++)
     {
         const bool white = p < 6;
-        const int row = white ? p : (p==6 ? 6 : p-6);
+        const int row = p % 6, flip = white ? 0 : 56;// black reads the table rank-flipped
         uint64_t bb = Board[p];
         while(bb)
         {
             const int i = find_and_delete_trailling_1(bb);
-            const int v = W.piece_table_value_opening[row][i]*c.OW[white] + W.piece_table_value_endgame[row][i]*c.EW[white];
+            const int v = W.piece_table_value_opening[row][i^flip]*c.OW[white] + W.piece_table_value_endgame[row][i^flip]*c.EW[white];
             c.pt39 += white ? v : -v;
         }
     }
@@ -392,7 +407,7 @@ static void plan_setup(Plan_Ctx& c, const BB* const original, const WEIGHTS& W)
             for(int k=0;k<nk;k++)
             {
                 uint64_t mask;
-                const int term = plan_role_term(kinds[k], white, i, c.occupancy, c.side_pieces[1], c.side_pieces[0], &mask);
+                const int term = plan_role_term(pw, kinds[k], white, i, c.occupancy, c.side_pieces[1], c.side_pieces[0], &mask);
                 c.term_at[i] += term;
                 c.act += term;
                 if(PLAN_OWN_ACT)// the other pieces' roles are not needed
@@ -412,13 +427,13 @@ static void plan_setup(Plan_Ctx& c, const BB* const original, const WEIGHTS& W)
                     {
                         const int x = find_and_delete_trailling_1(m);
                         c.sl_seeing[x] |= 1ULL << r;
-                        const int lost = c.sl_lost[r][x] = plan_lost(kinds[k], white, i, x, mask, c.side_pieces);
-                        c.slider_gain[0][x] += plan_cut(kinds[k], white, false, lost);
-                        c.slider_gain[1][x] += plan_cut(kinds[k], white, true, lost);
+                        const int lost = c.sl_lost[r][x] = plan_lost(pw, kinds[k], white, i, x, mask, c.side_pieces);
+                        c.slider_gain[0][x] += plan_cut(pw, kinds[k], white, false, lost);
+                        c.slider_gain[1][x] += plan_cut(pw, kinds[k], white, true, lost);
                     }
                 }
                 else
-                plan_add_leaper(c.leaper_gain, kinds[k], white, i, 1);
+                plan_add_leaper(pw, c.leaper_gain, kinds[k], white, i, 1);
             }
         }
     }
@@ -451,16 +466,17 @@ static Plan_Target plan_piece(Plan_Ctx& c, int p, int from, BB* scratch, Plan_Ca
     constexpr int LEAPER = TYPE == 0 ? ROLE_PAWN : TYPE == 2 ? ROLE_KNIGHT : ROLE_KING;
     constexpr bool OWN = PLAN_OWN_ACT;
     const WEIGHTS& W = *c.W;
+    const Plan_Weights& pw = c.pw;
     const bool white = p < 6;
     const int sign = white ? 1 : -1;
-    const int row = white ? p : (p==6 ? 6 : p-6);
+    const int row = p % 6, flip = white ? 0 : 56;// black reads the table rank-flipped
     const uint64_t from_bb = 1ULL << from;
     const uint64_t others = c.occupancy & ~from_bb;
     const uint64_t allowed = ~c.occupancy & ~c.avoid[white][TYPE];
 
     // what does not depend on the target: the board with `from` empty
     const int ow = c.OW[white], ew = c.EW[white];
-    const int pt_base = c.pt39 - sign*(W.piece_table_value_opening[row][from]*ow + W.piece_table_value_endgame[row][from]*ew);
+    const int pt_base = c.pt39 - sign*(W.piece_table_value_opening[row][from^flip]*ow + W.piece_table_value_endgame[row][from^flip]*ew);
     const int pt_now = c.pt39/39, act_now = c.act/2;
     const uint64_t* pawn_from = white ? WP_template : BP_template;// [x]: the squares an own pawn attacks x from
     const uint64_t* pawn_to = white ? BP_template : WP_template;// [x]: the squares an own pawn on x attacks
@@ -475,7 +491,7 @@ static Plan_Target plan_piece(Plan_Ctx& c, int p, int from, BB* scratch, Plan_Ca
     // its mask never holds `from`, and holds a target only for a knight or king
     // one move away (an own piece there) or the square in front of a pawn
     const uint64_t own_mask = OWN ? 0 : TYPE == 0 ? (white ? from_bb << 8 : from_bb >> 8) : TYPE == 2 ? Kn_template[from] : TYPE == 5 ? K_template[from] : 0;
-    const int own_w = TYPE == 0 ? PLAN_PAWN_BLOCKED : PLAN_ROLE_W[LEAPER][0];
+    const int own_w = TYPE == 0 ? pw.pawn_blocked : pw.role[LEAPER][0];
     const int own_gain = white ? own_w : -own_w;
     int vacate = -c.term_at[from];
     // slider_gain[] is right for every target except through the piece's own
@@ -494,13 +510,13 @@ static Plan_Target plan_piece(Plan_Ctx& c, int p, int from, BB* scratch, Plan_Ca
             const int r = find_and_delete_trailling_1(v);
             const bool rw = c.sl_white[r];
             const uint64_t a = c.sl_kind[r] == ROLE_DIAG ? get_bishop_attacks(c.sl_sq[r],others) : get_rook_attacks(c.sl_sq[r],others);
-            vacate += plan_masked_term(c.sl_kind[r], rw, a, sp[rw], sp[!rw]) - c.sl_term[r];
+            vacate += plan_masked_term(pw, c.sl_kind[r], rw, a, sp[rw], sp[!rw]) - c.sl_term[r];
             vac_seen |= a;// a superset of sl_att0[r]
             c.sl_att[r] = a;
         }
     }
     // reference mode, OWN: the piece's own terms where it stands
-    const int ref_from = OWN && scratch ? plan_ref_activity(c.original, p, from) : 0;
+    const int ref_from = OWN && scratch ? plan_ref_activity(c.original, p, from, W) : 0;
 
     int b_to = -1, b_n = 0, b_db = 0, b_term = -1, b_key = 64;
     int s_to = -1, s_n = 0, s_db = 0, s_term = -1, s_key = 64;// KEEP_TWO: the runner-up
@@ -528,28 +544,28 @@ static Plan_Target plan_piece(Plan_Ctx& c, int p, int from, BB* scratch, Plan_Ca
                 const uint64_t orth = ORTH ? get_rook_attacks(to,others) : 0;
                 next |= diag | orth;
                 if(DIAG)
-                delta += plan_masked_term(ROLE_DIAG, white, diag, own, enemy);
+                delta += plan_masked_term(pw, ROLE_DIAG, white, diag, own, enemy);
                 if(ORTH)
-                delta += plan_masked_term(ROLE_ORTH, white, orth, own, enemy);
+                delta += plan_masked_term(pw, ROLE_ORTH, white, orth, own, enemy);
                 if(!OWN)
                 for(int k = 0; k < (TYPE == 4 ? 2 : 1); k++)
                 {
                     const int r = own_r[k];
                     if(c.sl_att0[r] >> to & 1)
-                    delta -= plan_cut(c.sl_kind[r], white, white, c.sl_lost[r][to]);
+                    delta -= plan_cut(pw, c.sl_kind[r], white, white, c.sl_lost[r][to]);
                 }
             }
             else if(TYPE == 0)
             {
                 next |= plan_step(0, white, to, others);
                 uint64_t unused;
-                delta += plan_role_term(ROLE_PAWN, white, to, others, sp[1], sp[0], &unused);
+                delta += plan_role_term(pw, ROLE_PAWN, white, to, others, sp[1], sp[0], &unused);
             }
             else
             {
                 const uint64_t m = TYPE == 2 ? Kn_template[to] : K_template[to];
                 next |= m;
-                delta += plan_masked_term(LEAPER, white, m, own, enemy);
+                delta += plan_masked_term(pw, LEAPER, white, m, own, enemy);
             }
             if(!OWN && vac_seen >> to & 1)
             for(uint64_t v = vac_sl; v; )
@@ -557,9 +573,9 @@ static Plan_Target plan_piece(Plan_Ctx& c, int p, int from, BB* scratch, Plan_Ca
                 const int r = find_and_delete_trailling_1(v);
                 const bool rw = c.sl_white[r];
                 if(c.sl_att0[r] >> to & 1)
-                delta -= plan_cut(c.sl_kind[r], rw, white, c.sl_lost[r][to]);
+                delta -= plan_cut(pw, c.sl_kind[r], rw, white, c.sl_lost[r][to]);
                 if(c.sl_att[r] >> to & 1)
-                delta += plan_cut(c.sl_kind[r], rw, white, plan_lost(c.sl_kind[r], rw, c.sl_sq[r], to, c.sl_att[r], sp));
+                delta += plan_cut(pw, c.sl_kind[r], rw, white, plan_lost(pw, c.sl_kind[r], rw, c.sl_sq[r], to, c.sl_att[r], sp));
             }
             int db;
             if(scratch)
@@ -568,7 +584,7 @@ static Plan_Target plan_piece(Plan_Ctx& c, int p, int from, BB* scratch, Plan_Ca
                 scratch->Board[p] ^= move;
                 if(OWN)// the others' activity frozen at the position's, the moved piece's own terms at `to`
                 {
-                    const int act_to = c.ref_act - ref_from + plan_ref_activity(scratch, p, to);
+                    const int act_to = c.ref_act - ref_from + plan_ref_activity(scratch, p, to, W);
                     db = sign * (piecetable(scratch,W) + positional_eval(scratch,W) - c.base + act_to/2 - c.ref_act/2);
                 }
                 else
@@ -577,7 +593,7 @@ static Plan_Target plan_piece(Plan_Ctx& c, int p, int from, BB* scratch, Plan_Ca
             }
             else
             {
-                const int pt_to = W.piece_table_value_opening[row][to]*ow + W.piece_table_value_endgame[row][to]*ew;
+                const int pt_to = W.piece_table_value_opening[row][to^flip]*ow + W.piece_table_value_endgame[row][to^flip]*ew;
                 const int d = (pt_base + sign*pt_to)/39 - pt_now + (c.act + delta)/2 - act_now;
                 // pawn structure, the owner's own view
                 int ps_to = count(other_pawns & pawn_from[to]);
@@ -834,7 +850,7 @@ static int plan_eval_impl(const BB* const original, const WEIGHTS& W, Plan_Targe
         BB scratch = *original;// only Board[] is read by the partial evals, so the lazy cache is left alone
         if(PLAN_OWN_ACT)
         {
-            c.ref_act = plan_ref_activity_all(&scratch);
+            c.ref_act = plan_ref_activity_all(&scratch, W);
             c.base = piecetable(&scratch,W) + positional_eval(&scratch,W);
         }
         else

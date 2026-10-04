@@ -3,6 +3,7 @@
 #define Weights_CPP
 
 #include "../lib/Weights.hpp"
+#include "../lib/weight_set.hpp"
 
 #ifndef WEIGHTS_CPP
 #define WEIGHTS_CPP
@@ -22,7 +23,7 @@ void WEIGHTS::change_values(int alpha, bool change_white_pawn_values, int probab
     if(std::rand()%100<probabiltiy_of_change)
     check_value += alpha*(1-2*(std::rand()%2));
     
-    for(int piece=0;piece<7;piece++)
+    for(int piece=0;piece<6;piece++)
     for(int i=0;i<8;i++)
     for(int j=0;j<8;j++)
     {
@@ -61,14 +62,14 @@ void WEIGHTS::print_values_to_file(std::string filename)const
     file << value_of_attacked_square << std::endl;
     file << check_value << std::endl;
 
-    for(int piece=0;piece<7;piece++)
+    for(int piece=0;piece<6;piece++)
     for(int i=0;i<8;i++)
     for(int j=0;j<8;j++)
     {
         file << piece_table_value_opening[piece][i*8+j] << " ";
 
     }
-    for(int piece=0;piece<7;piece++)
+    for(int piece=0;piece<6;piece++)
     for(int i=0;i<8;i++)
     for(int j=0;j<8;j++)
     {
@@ -100,13 +101,13 @@ void WEIGHTS::read_values_from_file(std::string filename)
     file >> value_of_attacked_square;
     file >> check_value;
 
-    for(int piece=0;piece<7;piece++)
+    for(int piece=0;piece<6;piece++)
     for(int i=0;i<8;i++)
     for(int j=0;j<8;j++)
     {
         file >> piece_table_value_opening[piece][i*8+j];
     }
-    for(int piece=0;piece<7;piece++)
+    for(int piece=0;piece<6;piece++)
     for(int i=0;i<8;i++)
     for(int j=0;j<8;j++)
     {
@@ -133,13 +134,13 @@ void WEIGHTS::print_all_values()const
     std::cout << skip_depth_decrease_threshold << " ";
     std::cout << value_of_attacked_square << " ";
     std::cout << check_value << " ";
-    for(int piece=0;piece<7;piece++)
+    for(int piece=0;piece<6;piece++)
     for(int i=0;i<8;i++)
     for(int j=0;j<8;j++)
     {
         std::cout << piece_table_value_opening[piece][i*8+j] << " ";
     }
-    for(int piece=0;piece<7;piece++)
+    for(int piece=0;piece<6;piece++)
     for(int i=0;i<8;i++)
     for(int j=0;j<8;j++)
     {
@@ -167,13 +168,13 @@ int WEIGHTS::norm_to(const WEIGHTS& W) const
     sum+=std::pow(skip_depth_decrease_threshold-W.skip_depth_decrease_threshold,2);
     sum+=std::pow(value_of_attacked_square-W.value_of_attacked_square,2);
     sum+=std::pow(check_value-W.check_value,2);
-    for(int piece=0;piece<7;piece++)
+    for(int piece=0;piece<6;piece++)
     for(int i=0;i<8;i++)
     for(int j=0;j<8;j++)
     {
         sum+=std::pow(piece_table_value_opening[piece][i*8+j]-W.piece_table_value_opening[piece][i*8+j],2);
     }
-    for(int piece=0;piece<7;piece++)
+    for(int piece=0;piece<6;piece++)
     for(int i=0;i<8;i++)
     for(int j=0;j<8;j++)
     {
@@ -200,10 +201,10 @@ void WEIGHTS::append_weights_to_File(const std::string& filename)const {
     file.open(filename, std::ios::app);
     if (file.is_open()) {
         file << skip_depth_decrease_threshold << " " << value_of_attacked_square << " " << check_value << " ";
-        for(int piece=0;piece<7;piece++)
+        for(int piece=0;piece<6;piece++)
         for(int i=0;i<64;i++) 
         file << piece_table_value_opening[piece][i] << " ";
-        for(int piece=0;piece<7;piece++)
+        for(int piece=0;piece<6;piece++)
         for(int i=0;i<64;i++)
         file << piece_table_value_endgame[piece][i] << " ";
 
@@ -273,149 +274,20 @@ void WEIGHTS::clearFileExceptFirstLine(const std::string& filename)const {
 
 WEIGHTS::WEIGHTS()
 {
-    //initialize weights to zero
-    for(int piece=0;piece<7;piece++)
-    for(int k=0;k<64;k++)
+    // Everything basic_eval() uses is the default weight set (#85): weights/w1.txt
+    // (WEIGHTS_DEFAULT_FILE), compiled in by lib/weights_default.hpp.
+    Weight_Set_Info info;
+    std::string error;
+    if(!read_weight_set(WEIGHTS_DEFAULT_TEXT, *this, info, error))
     {
-        piece_table_value_opening[piece][k]=0;
-        piece_table_value_endgame[piece][k]=0;
-    }
-    
-    for(int piece=0;piece<7;piece++)
-    for(int i=0;i<8;i++)
-    for(int j=0;j<8;j++)
-    {
-        if(piece==0 || piece==6)
-        {
-            // white pawn table (row 0) is derived from this one below, mirrored - not set here
-            piece_table_value_opening[6][i*8+j] = (7-i)*10;
-            piece_table_value_endgame[6][i*8+j] = (7-i)*(7-i)*5;
-            if((i==3 || i==4) && (j==3 || j==4))//d4/e4/d5/e5: centre bonus, in the opening only (#36)
-            piece_table_value_opening[6][i*8+j] = piece_table_value_opening[6][i*8+j]*3/2;
-            continue;//pawns get no file bonus below, the centre bonus above replaces it (#36)
-        }
-        else
-        {
-            if(i==1 || i==6)
-            {
-                piece_table_value_opening[piece][i*8+j] = 10;
-                piece_table_value_endgame[piece][i*8+j] = 5;//this is half, of the avove, in an endgame the positioning of a pice is less important, compaed to the middlegame. the endgme, vs middlegame is to be computed by the enemys material, for each colour
-            }
-            if(i==2 || i==5)
-            {
-                piece_table_value_opening[piece][i*8+j] = 15;
-                piece_table_value_endgame[piece][i*8+j] = 8;
-            }
-            if(i==3 || i==4)
-            {
-                piece_table_value_opening[piece][i*8+j] = 20;
-                piece_table_value_endgame[piece][i*8+j] = 10;
-
-            }
-        }
-        
-        if(j==1 || j==6)
-        {
-            piece_table_value_opening[piece][i*8+j] += 20;
-            piece_table_value_endgame[piece][i*8+j] += 4;
-        } 
-        if(j==2 || j==5)
-        {
-            piece_table_value_opening[piece][i*8+j] += 40;
-            piece_table_value_endgame[piece][i*8+j] += 14;
-        }
-        if(j==3 || j==4)
-        {
-            piece_table_value_opening[piece][i*8+j] += 60;
-            piece_table_value_endgame[piece][i*8+j] += 24;
-        }
-        
-        if(piece==5)
-        {
-            piece_table_value_opening[piece][i*8+j] = -piece_table_value_opening[piece][i*8+j];
-            piece_table_value_endgame[piece][i*8+j] =  2*piece_table_value_endgame[piece][i*8+j];//redundant, but to clarify, in the endgame the king belongs in the center
-        }
-
+        std::cerr << "default weight set " << WEIGHTS_DEFAULT_FILE << ": " << error << std::endl;
+        std::exit(1);
     }
 
-    // white pawn table is the black pawn table above, mirrored vertically (rank i <-> rank 7-i,
-    // same file) - the two colours' pawns are meant to value squares identically
-    for(int i=0;i<8;i++)
-    for(int j=0;j<8;j++)
-    {
-        piece_table_value_opening[0][i*8+j] = piece_table_value_opening[6][(7-i)*8+j];
-        piece_table_value_endgame[0][i*8+j] = piece_table_value_endgame[6][(7-i)*8+j];
-    }
-
-    //adjust rook values
-    for(int i=0;i<8;i++)
-    for(int j=0;j<8;j++)
-    {
-        piece_table_value_opening[1][i*8+j] = std::min(abs(i-4),abs(i-3))*10;// the further out the better
-        piece_table_value_endgame[1][i*8+j] = std::min(abs(i-4),abs(i-3))*5;
-        if(j==1 || j==6)
-        {
-            piece_table_value_opening[1][i*8+j] += 8;
-            piece_table_value_endgame[1][i*8+j] += 4;
-        } 
-        if(j==2 || j==5)
-        {
-            piece_table_value_opening[1][i*8+j] += 16;
-            piece_table_value_endgame[1][i*8+j] += 8;
-        }
-        if(j==3 || j==4)
-        {
-            piece_table_value_opening[1][i*8+j] += 24;
-            piece_table_value_endgame[1][i*8+j] += 12;
-        }
-
-    }
-
-    //adjust bishop values
-    for(int i=0;i<8;i++)
-    for(int j=0;j<8;j++)
-    {   
-        piece_table_value_opening[3][i*8+j] = std::min(abs(i-3),abs(i-4))*10;// the further out the better
-        piece_table_value_endgame[3][i*8+j] = std::min(abs(i-3),abs(i-4))*5;
-        if(j==1 || j==6)
-        {
-            piece_table_value_opening[3][i*8+j] += 8;
-            piece_table_value_endgame[3][i*8+j] += 4;
-        }
-        if(j==2 || j==5)
-        {
-            piece_table_value_opening[3][i*8+j] += 16;
-            piece_table_value_endgame[3][i*8+j] += 8;
-        }
-        if(j==3 || j==4)
-        {
-            piece_table_value_opening[3][i*8+j] += 24;
-            piece_table_value_endgame[3][i*8+j] += 12;
-        }
-        if(i==0 || i==7)
-        {
-            piece_table_value_opening[3][i*8+j] -=20;
-            piece_table_value_endgame[3][i*8+j] -= 4;
-        }
-        
-    }
-
-    //queen in the openign is mix, of rook and bishop
-    for(int i=0;i<8;i++)
-    for(int j=0;j<8;j++)
-    {
-        piece_table_value_opening[4][i*8+j] = (piece_table_value_opening[1][i*8+j]+piece_table_value_opening[3][i*8+j])/2;
-        piece_table_value_endgame[4][i*8+j] = (piece_table_value_endgame[1][i*8+j]+piece_table_value_endgame[3][i*8+j])/2;
-    }
+    // not in a weight set: basic_eval() does not use them
     skip_depth_decrease_threshold = 50;
     value_of_attacked_square = 2;//number of moves avaliable
     check_value = 200;
-    piece_value[0] = 100;
-    piece_value[1] = 500;
-    piece_value[2] = 300;
-    piece_value[3] = 300;
-    piece_value[4] = 900;
-    piece_value[5] = 350;
     offensive_value[0] = 100;
     offensive_value[1] = 500;
     offensive_value[2] = 300;
@@ -429,26 +301,7 @@ WEIGHTS::WEIGHTS()
     defensive_value[4] = 500;
     defensive_value[5] = 350;
     king_safety_value = 10;
-    punishment_for_double_pawn = 10;
-    punishment_for_isolated_pawn = 10;
-    punishment_for_trippled_pawn = 30;//also get punishmeht for doubles pawns
-    pawn_supporting_value = 15;
-    {
-        const int passed[8] = {0, 2, 4, 9, 18, 33, 55, 0};
-        for(int r=0;r<8;r++) passed_pawn_value[r] = passed[r];
-    }
     value_of_king_safety_for_sorting = 50;//this is a factor!//it should not be changed, untill
-
-    //halve the pawn values
-    for(int i=0;i<64;i++)
-    {
-        //piece_table_value_opening[0][i] /= 2;
-        //piece_table_value_opening[6][i] /= 2;
-        piece_table_value_endgame[0][i] /= 2;
-        piece_table_value_endgame[6][i] /= 2;
-    }
-
-
 };
 
 //other functions of WEIGHTS

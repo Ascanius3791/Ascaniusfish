@@ -339,13 +339,14 @@ class Engine_Link
 // build with -DTT_BOUNDS_NEVER_NARROW=0 names TTNarrowing/TTNarrowingDeeper.
 // In the default build a stored bound only cuts, and the gear says so.
 // Also which eval it scores with (#79): its EVAL_VERSION and commit from the
-// answer to "uci", and the hash of the net it loads by default, which is what
+// answer to "uci" (and its weight set's version, #85), and the hash of the net it loads by default, which is what
 // decides whether a PTT entry is current.
 struct Engine_Build
 {
     bool known = false;       // the engine answered "uci"
     bool narrowing = false;   // its options can narrow alpha and beta on a stored bound
     int eval_version = 0;     // 0 = it did not say
+    int weights = 1;          // its weight set's version (#85); one that does not say has set 1
     std::string commit;
     std::string net_hash;     // "" = no net loaded
 
@@ -361,8 +362,13 @@ struct Engine_Build
             std::istringstream in(text);
             std::string word;
             in >> word;
-            if(word=="evalversion")
-            in >> eval_version >> word >> commit;   // "evalversion N commit C"
+            if(word=="evalversion")// "evalversion N weights W commit C"
+            {
+                in >> eval_version;
+                while(in >> word)
+                if(word=="weights") in >> weights;
+                else if(word=="commit") in >> commit;
+            }
             const size_t hash = text.rfind(", hash ");
             if(text.compare(0, 7, "nne on,")==0 && hash!=std::string::npos)
             net_hash = text.substr(hash+7);

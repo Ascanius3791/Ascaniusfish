@@ -4,10 +4,10 @@
 #include "../lib/time_manager.hpp"
 #include <algorithm>
 
-int expected_moves_left(const BB& pos)
+int expected_moves_left(const BB& pos, const WEIGHTS& W)
 {
     float material = (enemy_material_left_percent(&pos, true) + enemy_material_left_percent(&pos, false))/2;
-    int eval_cp = eval(&pos, WEIGHTS_OG);
+    int eval_cp = eval(&pos, W);
     double estimate = 20 + material*20 - std::abs(eval_cp)/200.0;
     return std::max((double)TM_MIN_MOVES_LEFT, estimate);
 }
@@ -53,12 +53,12 @@ double Lambda_History::average() const
     return sum/total_weight;
 }
 
-TimeManager::TimeManager(const BB& root, long long time_ms, long long inc_ms, int movestogo, Lambda_History& hist)
+TimeManager::TimeManager(const BB& root, long long time_ms, long long inc_ms, int movestogo, Lambda_History& hist, const WEIGHTS& W)
 : history(hist)
 {
     time_ms = std::max(0LL, time_ms);
     inc = std::max(0LL, inc_ms);
-    int moves_left = movestogo>0 ? movestogo : expected_moves_left(root);
+    int moves_left = movestogo>0 ? movestogo : expected_moves_left(root, W);
     share = time_ms/moves_left;
     long long reserve = std::min(TM_MOVE_OVERHEAD_MS, time_ms/2);
     hard = std::max(1LL, std::min(inc + TM_HARD_SHARES*share, time_ms-reserve));

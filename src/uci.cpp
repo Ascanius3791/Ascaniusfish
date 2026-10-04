@@ -223,6 +223,27 @@ void UCI_Engine::apply_nne()
     table->reset();
 }
 
+// WeightsFile (#85): loads a weight set (lib/weight_set.hpp), or the compiled-in
+// default for an empty value; a relative path is looked for like NNEFile's. A
+// file that does not read leaves the set in use. Clears the TT when the set
+// changes, since its scores were found with the other one.
+void UCI_Engine::apply_weights(const std::string& file)
+{
+    WEIGHTS next = WEIGHTS_OG;
+    Weight_Set_Info info;
+    std::string error;
+    if(!file.empty() && !load_weight_set(nne_resolve(file), next, info, error))
+    {
+        send("info string weights " + std::to_string(weights.version) + " kept: " + error);
+        return;
+    }
+    const bool changed = std::memcmp(&next, &weights, sizeof(WEIGHTS))!=0;
+    weights = next;
+    send("info string weights " + std::to_string(weights.version) + (file.empty() ? ", the default set" : ", " + file));
+    if(table && changed)
+    table->reset();
+}
+
 void UCI_Engine::stop_search()
 {
     stop_search_flag.store(true);
@@ -277,13 +298,15 @@ void UCI_Engine::handle_position(const std::vector<std::string>& tokens)
 
 // What the scores of the coming search are found with (#79), sent as
 // "info string provenance ..." before its first "info depth": the eval version,
-// the net (its file hash, or off), how many pieces each tablebase answers for
-// (0 = not loaded) and the commit the binary was built from.
+// the weight set's version (#85), the net (its file hash, or off), how many
+// pieces each tablebase answers for (0 = not loaded) and the commit the binary
+// was built from.
 std::string UCI_Engine::provenance() const
 {
     const int syzygy_pieces = std::min(tb_probe_limit, syzygy::max_pieces());
     const int gaviota_pieces = std::min(tb_probe_limit, gaviota::max_pieces());
     return "provenance evalversion " + std::to_string(EVAL_VERSION)
+         + " weights " + std::to_string(weights.version)
          + " nne " + (nne::enabled ? nne_hash : std::string("off"))
          + " syzygy " + std::to_string(std::max(0, syzygy_pieces))
          + " gaviota " + std::to_string(std::max(0, gaviota_pieces))
@@ -463,7 +486,7 @@ void UCI_Engine::handle_go(const std::vector<std::string>& tokens)
     if(clocked && budget_ms==0)
     {
         bool white = game.back().white_move;
-        tm = new TimeManager(game.back(), white ? limits.wtime : limits.btime, white ? limits.winc : limits.binc, limits.movestogo, lambda_history);
+        tm = new TimeManager(game.back(), white ? limits.wtime : limits.btime, white ? limits.winc : limits.binc, limits.movestogo, lambda_history, weights);
         budget_ms = tm->hard_ms();
     }
     search_deadline_ns.store(budget_ms>0 && !limits.infinite ? start_ns + budget_ms*1000000LL : 0);
@@ -656,10 +679,10 @@ void UCI_Engine::search_tb_root(const BB& root, const std::vector<Move>& moves, 
     if(keep.size()==1 || all_probed)
     {
         int pick = keep[0];
-        int pick_eval = eval(&children[pick], WEIGHTS_OG, -1);
+        int pick_eval = eval(&children[pick], weights, -1);
         for(int i : keep)
         {
-            const int e = eval(&children[i], WEIGHTS_OG, -1);
+            const int e = eval(&children[i], weights, -1);
             if(root.white_move ? e>pick_eval : e<pick_eval)
             {
                 pick = i;
@@ -699,9 +722,9 @@ void UCI_Engine::search_tb_root(const BB& root, const std::vector<Move>& moves, 
                 for(int j=ply-1; j>=window_start; j-=2)
                 if(are_equal(&path_history[j], &child)) { repeat = true; break; }
                 if(repeat)
-                cpv = make_repetition_draw_pv_line(&child, wfh, d-1, ply+1, ply, WEIGHTS_OG);
+                cpv = make_repetition_draw_pv_line(&child, wfh, d-1, ply+1, ply, weights);
                 else
-                cpv = minimax(&child, wfh, d-1, WEIGHTS_OG, INT_MIN, INT_MAX, table, path_history, ply+1, cycle_table, ply);
+                cpv = minimax(&child, wfh, d-1, weights, INT_MIN, INT_MAX, table, path_history, ply+1, cycle_table, ply);
                 if(cpv.eval<INT_MIN+max_mating_seq)
                 cpv.eval++;
                 if(cpv.eval>INT_MAX-max_mating_seq)
@@ -828,7 +851,7 @@ int UCI_Engine::verify_mate(const BB& root, PV_Line& pv, long long budget, bool 
 }
 
 std::vector<PV_Line> multipv_search(const BB& root, BB* wfh, int depth, lookup_table* table, BB* path_history, int ply,
-                                    const CuckooCycleTable* cycle_table, int lines_wanted)
+                                    const CuckooCycleTable* cycle_table, int lines_wanted, const WEIGHTS& W)
 {
     // Pass k searches the root without the first moves of lines 1..k-1;
     // pass 1 is the plain search.
@@ -836,7 +859,7 @@ std::vector<PV_Line> multipv_search(const BB& root, BB* wfh, int depth, lookup_t
     std::vector<Move> excluded;
     for(int k=0; k<lines_wanted; k++)
     {
-        PV_Line line = minimax(&root, wfh, depth, WEIGHTS_OG, INT_MIN, INT_MAX, table, path_history, ply, cycle_table,
+        PV_Line line = minimax(&root, wfh, depth, W, INT_MIN, INT_MAX, table, path_history, ply, cycle_table,
                                INT_MIN, true, excluded.data(), (int)excluded.size());
         if(k>0 && line.current_lenght==0)
         break;
@@ -885,7 +908,7 @@ void UCI_Engine::search(UCI_Limits limits, long long start_ns)
     if(hint_depth>0)
     send("info string hint seeded " + std::to_string(seed_hint(root)) + " plies at depth " + std::to_string(hint_depth));
     // Fallback if even depth 1 gets aborted: the move ordering's favourite.
-    std::vector<int> order = sorting_moves(wfh, std::get<1>(result), n, root.white_move, nullptr, 0, WEIGHTS_OG);
+    std::vector<int> order = sorting_moves(wfh, std::get<1>(result), n, root.white_move, nullptr, 0, weights);
     std::string best = get_UCI(&root, wfh+order[0]);
 
     // Repetition context, seeded from the game like engine_move() does.
@@ -908,7 +931,7 @@ void UCI_Engine::search(UCI_Limits limits, long long start_ns)
         std::vector<PV_Line> lines;
         try
         {
-            lines = multipv_search(root, wfh, d, table, path_history, ply, cycle_table, lines_wanted);
+            lines = multipv_search(root, wfh, d, table, path_history, ply, cycle_table, lines_wanted, weights);
         }
         catch(const search_aborted&)
         {
@@ -981,7 +1004,7 @@ int UCI_Engine::loop()
         {
             send("id name Ascaniusfish");
             send("id author Ascanius");
-            send("info string evalversion " + std::to_string(EVAL_VERSION) + " commit " + ENGINE_COMMIT);
+            send("info string evalversion " + std::to_string(EVAL_VERSION) + " weights " + std::to_string(weights.version) + " commit " + ENGINE_COMMIT);
             send("option name SyzygyPath type string default <empty>");
             send("option name SyzygyProbeLimit type spin default 5 min 0 max 5");
             if(gaviota::compiled_in())
@@ -991,6 +1014,7 @@ int UCI_Engine::loop()
             }
             send("option name NNEFile type string default nets/nne_d6.bin");
             send("option name UseNNE type check default true");
+            send("option name WeightsFile type string default <empty>");
             send("option name MultiPV type spin default 1 min 1 max " + std::to_string(MAX_ORDERED_MOVES));
             send("option name TTWalk type check default true");
             if(!tt_bounds_never_narrow)//only a -DTT_BOUNDS_NEVER_NARROW=0 build can narrow (#65)
@@ -1105,6 +1129,11 @@ int UCI_Engine::loop()
                 stop_search();
                 nne_file = value;
                 apply_nne();
+            }
+            else if(name=="WeightsFile")
+            {
+                stop_search();
+                apply_weights(value=="<empty>" ? "" : value);
             }
             else if(name=="MultiPV")
             {

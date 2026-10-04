@@ -33,9 +33,9 @@ static void check_eq(long long got, long long want, const std::string& what)
 
 static const char* const START = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 
-// One iteration as the engine reports it, found with eval `version` and net `nne`.
+// One iteration as the engine reports it, found with eval `version`, net `nne` and weight set `weights`.
 static Search_Info iteration(int depth, int cp, const std::vector<std::string>& pv, long long ms = 6000,
-                             int version = 1, const std::string& nne = "abc")
+                             int version = 1, const std::string& nne = "abc", int weights = 1)
 {
     Search_Info info;
     info.depth = depth;
@@ -47,6 +47,7 @@ static Search_Info iteration(int depth, int cp, const std::vector<std::string>& 
     info.pv = pv;
     info.prov.eval_version = version;
     info.prov.nne = nne;
+    info.prov.weights = weights;
     info.prov.syzygy = 5;
     info.prov.commit = "abc1234";
     return info;
@@ -124,10 +125,12 @@ static void test_better(const std::string& path)
     check(!ptt.put(k, entry(START, iteration(30, 0, {"c2c4"}, 6000, 0))), "an older eval never replaces a newer one");
     check(ptt.put(k, entry(START, iteration(10, 5, {"g1f3"}, 6000, 2))), "a newer eval replaces even a deeper one");
     check(ptt.put(k, entry(START, iteration(9, 5, {"g1f3"}, 6000, 2, "def"))), "another net of the same version is newer");
-    check_eq(ptt.get(k)->info.depth, 9, "what is kept is the last of those");
+    check(ptt.put(k, entry(START, iteration(8, 5, {"g1f3"}, 6000, 2, "def", 3))), "and so is another weight set (#85)");
+    check_eq(ptt.get(k)->info.depth, 8, "what is kept is the last of those");
     PTT again;
     again.open(path, error);
-    check_eq(again.get(k)->info.depth, 9, "and reading the file gives the same answer");
+    check_eq(again.get(k)->info.depth, 8, "and reading the file gives the same answer");
+    check_eq(again.get(k)->info.prov.weights, 3, "with its weight set");
 }
 
 static void test_two_guis(const std::string& path)
@@ -227,6 +230,12 @@ static void test_session(const std::string& path)
         check(s.analysis_older, "a different net is another eval too");
     }
     engine_build().net_hash = "abc";
+    engine_build().weights = 2;
+    {
+        Session s;
+        check(s.analysis_older, "and so is a different weight set");
+    }
+    engine_build().weights = 1;
 }
 
 static void test_history(const std::string& path)
