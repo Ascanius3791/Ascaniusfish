@@ -50,8 +50,9 @@ inline long long search_nodes = 0;
 inline int tt_narrowing = 0;
 
 // A stored bound from a deeper search cuts off too (#93, UCI TTDeeperCuts), not
-// only one of the same depth; it never narrows. Set while no search runs.
-inline bool tt_deeper_cuts = false;
+// only one of the same depth; it never narrows. On by default (SPRT +29.7 Elo,
+// undecided, accepted by Ascanius). Set while no search runs.
+inline bool tt_deeper_cuts = true;
 
 inline void poll_search_abort()
 {

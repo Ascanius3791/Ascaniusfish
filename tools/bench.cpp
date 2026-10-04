@@ -13,7 +13,7 @@
 // nne=<file> evaluates quiet leaves with that eval-correction net (UCI UseNNE,
 // #52); the node count is then a different signature.
 // narrow=n sets tt_narrowing (#65); only a -DTT_BOUNDS_NEVER_NARROW=0 build reads it.
-// deeper=1 sets tt_deeper_cuts (#93): a deeper stored bound cuts too.
+// deeper=0 clears tt_deeper_cuts (#93, on by default): a bound cuts only at its own depth.
 // The last line is always: bench: nodes <N> time_ms <T> nps <X>
 #include "../lib/uci.hpp"
 #include "bench_positions.hpp"

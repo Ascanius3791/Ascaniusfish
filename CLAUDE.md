@@ -378,7 +378,7 @@ The GUI asks its engine once at startup which build it is (`engine_build()`,
 `gui/engine_link.hpp`) and shows it, with both switches, in the gear.
 
 Separately, a bound cuts only when it was stored at exactly the node's depth. The UCI check
-option `TTDeeperCuts` (#93, default off, every build; `tt_deeper_cuts`, `tools/bench deeper=1`)
+option `TTDeeperCuts` (#93, default on, every build; `tt_deeper_cuts`, `tools/bench deeper=0` for off)
 lets a bound from a deeper search cut too, still without narrowing.
 
 #### Transposition table size: do not raise it

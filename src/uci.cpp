@@ -1017,7 +1017,7 @@ int UCI_Engine::loop()
             send("option name WeightsFile type string default <empty>");
             send("option name MultiPV type spin default 1 min 1 max " + std::to_string(MAX_ORDERED_MOVES));
             send("option name TTWalk type check default true");
-            send("option name TTDeeperCuts type check default false");
+            send("option name TTDeeperCuts type check default true");
             if(!tt_bounds_never_narrow)//only a -DTT_BOUNDS_NEVER_NARROW=0 build can narrow (#65)
             {
                 send("option name TTNarrowing type check default false");
