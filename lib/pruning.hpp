@@ -71,8 +71,16 @@ inline int lmp_clamp(bool white_move, int result, int alpha_0, int beta_0)
 // below DELTA_MIN_PHASE, where a single capture can decide the ending. The
 // caller keeps it off the forced-move path and out of check.
 constexpr bool ENABLE_DELTA_PRUNING = 1;
-constexpr int DELTA_MARGIN = 200;     // cp; covers the positional swing and the net's correction
+#ifndef DELTA_MARGIN_CP
+#define DELTA_MARGIN_CP 500
+#endif
+constexpr int DELTA_MARGIN = DELTA_MARGIN_CP;  // cp; ~0.6% of pruned captures would have raised alpha (#75, diagnostics/delta_margin.cpp)
 constexpr int DELTA_MIN_PHASE = 4;    // game_phase(): a queen, or two rooks, or ~4 minors
+
+#ifdef DELTA_STATS
+inline bool delta_recording = false;
+void delta_record(const BB* pos, const Move& m, int stand_pat, int alpha, int beta, int value, int see);  // defined by the diagnostic
+#endif
 
 inline bool delta_prunable(const BB* const pos, const Move& m, int stand_pat, int alpha, int beta, const WEIGHTS& W)
 {
@@ -86,9 +94,18 @@ inline bool delta_prunable(const BB* const pos, const Move& m, int stand_pat, in
         for(int p = 0; p < 5; p++)
             if(pos->Board[p + enemy] & (1ULL << m.to)) { victim = p; break; }
     }
-    const long long gain = ((long long)W.piece_value[victim] * phase
-                          + (long long)W.piece_value_endgame[victim] * (PHASE_MAX - phase)) / PHASE_MAX
-                          + DELTA_MARGIN;
+    const long long value = ((long long)W.piece_value[victim] * phase
+                           + (long long)W.piece_value_endgame[victim] * (PHASE_MAX - phase)) / PHASE_MAX;
+#ifdef DELTA_STATS
+    // Measurement build (diagnostics/delta_margin.cpp): prune nothing, record
+    // every capture that margin 0 would prune, with how far short it falls.
+    // SEE <= the victim's value, so its candidates are a superset of the victim's.
+    const int see = static_exchange_eval(pos->Board, m.from, m.to, pos->white_move, m.is_en_passant);
+    const long long see_deficit = pos->white_move ? alpha - ((long long)stand_pat + see) : ((long long)stand_pat - see) - beta;
+    if(delta_recording && see_deficit >= 0) delta_record(pos, m, stand_pat, alpha, beta, (int)value, see);
+    return false;
+#endif
+    const long long gain = value + DELTA_MARGIN;
     return pos->white_move ? stand_pat + gain <= alpha : stand_pat - gain >= beta;
 }
 
