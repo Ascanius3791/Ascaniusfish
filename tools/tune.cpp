@@ -143,6 +143,12 @@ static void build_groups()
     add(G_POSITIONAL, &W.pawn_supporting_value, 1);
     G_POSITIONAL.value = 1;
     add(G_PASSED, W.passed_pawn_value, 8);
+    add(G_PASSED, W.passed_free_path, 8);   // #90's modifiers: v*(78-OW)/78, also exact at 156
+    add(G_PASSED, W.passed_king_enemy, 8);
+    add(G_PASSED, W.passed_king_own, 8);
+    add(G_PASSED, W.passed_supported, 8);
+    add(G_PASSED, &W.passed_rook_behind, 1);
+    add(G_PASSED, &W.passed_unstoppable, 1);   // a max over the passers: linear while >= 0
     G_PASSED.value = 4*39;              // passed_pawn_bonus(): v*(156-OW)/156, exact
     for(const int* p : {&W.activity_pawn_attack, &W.activity_pawn_defend, &W.activity_pawn_blocked,
                         &W.activity_pawn_push_attack, &W.activity_pawn_push_defend,
