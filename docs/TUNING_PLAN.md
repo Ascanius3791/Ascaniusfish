@@ -45,11 +45,23 @@ engines' mean Elo:
 | all | 2,458,744 | 29.2% | 50.9% | 19.9% | 488,664 |
 
 (1,983 games have no Elo tag.) Black wins are the scarcest result in every band, so they set
-the size. Balanced within each band, that gives 3 × 488k ≈ **1.46M games**, and with one
-to two positions per game, 1.5–2.9M positions. Below 2000 (our own range, ~1550–1800 CCRL)
-there are 55k games. That's not enough on its own, but it isn't left out either. Results
-also depend on the Elo gap (55.6% draws at a gap under 100, 13.5% at 400–499) and on
-length (93.7% draws under 40 plies: early agreed draws, which the filters drop).
+the size. Results also depend on the Elo gap (55.6% draws at a gap under 100, 13.5% at
+400–499) and on length (93.7% draws under 40 plies: early agreed draws, which the filters
+drop).
+
+**Ascanius's rule: only very good engines, both rated 3000 or more.** Keeping only the games
+where the *weaker* engine is ≥3000, with at least 40 plies:
+
+| Weaker engine | Games | 1-0 | ½-½ | 0-1 |
+|---|---|---|---|---|
+| 3000–3249 | 482,384 | 143,816 | 247,351 | 91,217 |
+| 3250–3499 | 446,849 | 103,265 | 293,711 | 49,873 |
+| 3500+ | 343,508 | 36,052 | 299,593 | 7,863 |
+| all (≥40 plies) | 1,263,583 | 282,932 | 831,747 | 148,904 |
+
+The 149k black wins set the size: 3 × 149k ≈ **447k balanced games**. At two or three
+positions per game, that is 0.9–1.3M positions for ~800 parameters, enough for Texel
+tuning. If more is wanted, CCRL Blitz is the next source, under the same filter.
 
 Candidates considered:
 
@@ -59,11 +71,11 @@ Candidates considered:
 | CCRL Blitz (2'+1") | 2.13M | 46.4% | wide | one 416 MB `.7z` |
 | TCEC (all seasons) | not counted (far fewer) | very high in the upper leagues | top engines only | GitHub releases, CC BY-SA 3.0 |
 
-**Chosen: CCRL 40/15.** It has the most games, the widest strength range and an Elo tag on
-both sides, which the balanced sampling and a band filter need. At 40/15 the games are
-cleaner than in Blitz. TCEC is too small and too drawish: in its upper leagues balancing to
-one third draws would throw away most of the games, and only top engines play there. Blitz
-is the reserve if 40/15 yields too few black wins in some band.
+**Chosen: CCRL 40/15, both engines ≥3000.** Every CCRL game is engine against engine (no
+humans), at a fixed time control, with an Elo tag on both sides, which the strength filter
+and the balancing need. At 40/15 the games are cleaner than in Blitz. TCEC is all top
+engines but too small and too drawish: balancing to one third draws would throw away most
+of its games. Blitz is the reserve.
 
 The PGNs are only read locally to make the dataset. They are not committed to the repo:
 nothing under `data/` is.
@@ -71,7 +83,7 @@ nothing under `data/` is.
 ## Balanced sampling
 
 Ascanius's rule: 1-0, ½-½ and 0-1 equally likely. Since black wins are the rarest result
-(19.9% of 40/15 games), they set the size. Every black-win game that passes the filters is
+(11.8% of the games with both engines ≥3000), they set the size. Every black-win game that passes the filters is
 used, and the 1-0 and ½-½ games are subsampled to the same count.
 
 - **Balance within each Elo band** (mean Elo of the two engines, 250 wide), not only
