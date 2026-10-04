@@ -1,0 +1,278 @@
+# OWNERSHIP=Claude
+# A weight set of Ascaniusfish's eval: every number basic_eval() uses (#85).
+# Format: lib/weight_set.hpp.
+version 4
+parent 1
+data ccrl4040-3000-balanced
+tuner 50946d2
+loss 0.124711
+
+# material_eval(): pawn rook knight bishop queen king
+piece_value 100 611 333 412 1169 379
+
+# piecetable(): rank 8 first, files a..h, white's view; black reads it rank-flipped
+piece_table_value_opening pawn
+   70   70   70   70   70   70   70   70
+   73   93   99   94   95   72   70   57
+   39   72   49   54   97  131  131    6
+   -7   29   17   10   89   93   43    4
+  -20  -23   -2   -6   58   38   38    0
+  -44  -66  -61  -31  -19   20   -9  -11
+  -41  -96  -64  -86  -54  -18  -31  -73
+    0    0    0    0    0    0    0    0
+piece_table_value_opening rook
+   62   75   75   81   71   58   67   69
+   27   24   61   71   63   64   55   66
+   15   32   33   52   84   63   69   48
+   -8    8   36   51   74   56   67   47
+  -59  -23   -4   13   23   -2   23  -15
+  -66  -43  -36  -16   21  -16   35    9
+  -86  -56  -28  -33  -17    7   22  -21
+  -74  -46  -40  -24  -12  -29   26  -41
+piece_table_value_opening knight
+  -45   24   40   61   67   43   20  -14
+   10   38   59   95   98   79   45   32
+   27    6   74   94  124  102   96   41
+   48   21   60   75   30   99  123  114
+    2   55   46   55   86   64  115   84
+    3    5  -27   64   83   25   83   71
+  -40   -3   15   41   28   56   42   44
+  -19   -6   -6   15   38   37   12  -11
+piece_table_value_opening bishop
+    3   11   27   33   27   18   15    4
+   -4   27   25   46   50   41   17   13
+   11   20   18   46   73   96   80   62
+   -5   58   25   78   56   90   81   40
+   17   24   46   61   67   21   80   55
+    9   27   22   38    7   38    9   58
+   31    1   51   -4   34   -4   33  -22
+   20   53   14   -5   -3   27    9  -32
+piece_table_value_opening queen
+   17   52   55   64   69   55   53   58
+   -1  -31   12   37   51   45   31   91
+   -7   -2  -11   12   49   64   67   94
+   -8  -34  -13   -8   17   37   69   79
+    0  -31  -29   -7    1   16   65   95
+   -9  -11   -8  -18   -8   24   40   87
+   22   18   18   32   33   23   18   46
+   48   37   44   81   58  -15  -13   34
+piece_table_value_opening king
+    1  -16  -36  -56  -58  -36  -16    0
+   -5  -18  -37  -61  -62  -41  -20   -7
+   -8  -21  -34  -59  -62  -36  -24   -6
+  -14  -24  -41  -64  -64  -41  -30  -13
+  -19  -28  -42  -68  -69  -49  -33  -51
+  -12  -28  -49  -81  -73  -76  -67  -68
+   43  -29  -45  -87  -72 -106  -30  -41
+  -57  -46  -21 -119  -39 -154  -50  -40
+piece_table_value_endgame pawn
+  122  122  122  122  122  122  122  122
+   73   93  107   92  109   98   99   80
+   94   85   80   59   66   98  109  113
+   94   65   47    9    7   36   79   86
+   67   65   31    9   14   46   54   40
+   40   44   45   45   47   49   44   24
+   34   64   57   23   62   92   79   26
+    0    0    0    0    0    0    0    0
+piece_table_value_endgame rook
+   57   64   65   53   50   48   58   53
+   78   80   58   66   54   54   59   56
+   80   69   63   63   57   54   54   57
+   70   77   62   61   63   55   61   52
+   38   35   47   38   37   34   35   10
+   -7   -2   -3    1  -14  -13  -12  -13
+  -17  -16  -25  -27  -35  -62  -41  -38
+  -53  -27  -13  -33  -43  -62  -42  -44
+piece_table_value_endgame knight
+  -21   17   21   33   39   24    8  -11
+   16   26   34   53   49   30   24   21
+   27   45   14   27   35   36   33   29
+   34   27   31   53   62   46   51   51
+   21   27   17    9   20   31   39   31
+  -18   -3  -24    3  -22  -39    3   10
+  -10    0  -23  -27  -21  -13    6    1
+   -9  -37  -12   -7  -17  -28  -21   -6
+piece_table_value_endgame bishop
+   17   18   35   29   23   16   17    7
+    3   24   21   25   25   25   17    8
+   13   28   26   13   24   29   34   27
+   13    9    7   15   15   26   13   17
+   13    4   11   -4    4   15    9  -10
+   11   13   -1  -12   -1   -9   -8    0
+    3  -33  -31  -24  -34   -8  -33  -28
+   -3  -12  -61  -18  -14  -36   -4  -12
+piece_table_value_endgame queen
+   29   46   48   49   54   45   45   46
+   29   30   39   36   43   38   32   57
+   21   34   29   33   48   48   49   50
+   29   25   33   21   35   41   49   57
+   13   17   10   13    4   32   36   46
+    3   -6  -12  -21   -8  -13    4   12
+   -6  -19  -60  -63  -66  -64  -53    4
+    2  -22  -25  -69  -57  -58  -19   16
+piece_table_value_endgame king
+    2   20   40   59   54   39   19   -1
+   23   52   75   81   78   68   49   21
+   38   68  101  103  101   89   67   36
+   41   71   97  107   97   93   66   50
+   31   59   87   87   83   68   48   12
+   10   28   47   50   43   33    0  -22
+   -7   -1    7   17    0    6  -36  -41
+  -48  -15  -18   -3  -63  -24  -74 -120
+
+# positional_eval()
+punishment_for_double_pawn 22
+punishment_for_trippled_pawn 36
+punishment_for_isolated_pawn 11
+pawn_supporting_value 2
+
+# passed_pawn_eval(): by relative rank, full with bare kings, half with all material
+passed_pawn_value 0 21 21 29 79 122 175 0
+
+# passed_pawn_eval()'s endgame modifiers (#90), by relative rank where 8 numbers, scaled to 0 with all material:
+# nothing ahead; per square (max 5) of the enemy king's / our king's distance to the stop square;
+# an own pawn beside or protecting it; our rook behind it (+), theirs (-); unstoppable by the
+# rule of the square (not scaled, the side's best passer only)
+passed_free_path 0 7 -7 2 6 31 78 0
+passed_king_enemy 0 8 5 23 48 74 81 0
+passed_king_own 0 14 17 24 39 43 40 0
+passed_supported 0 -14 33 55 82 130 49 0
+passed_rook_behind 54
+passed_unstoppable 7
+
+# basic_eval(): per attacked square
+mobility_value 3
+
+# piece_activity_eval(): added for the owner per piece or square hit, halved at the end;
+# bishop = every diagonal, queens included, rook = every line
+activity_pawn_attack 145
+activity_pawn_defend 7
+activity_pawn_blocked -71
+activity_pawn_push_attack 43
+activity_pawn_push_defend -30
+activity_bishop_defend 5
+activity_bishop_attack -5
+activity_bishop_square 28
+activity_rook_defend 13
+activity_rook_attack 35
+activity_rook_square 27
+activity_knight_defend -1
+activity_knight_attack 5
+activity_knight_square 47
+activity_king_defend 15
+activity_king_attack 76
+
+# tempo_eval(): the side to move's, with all and with no material
+tempo_opening -6
+tempo_endgame 5
+
+# king_safety_eval() (src/king_safety.cpp); by piece: pawn rook knight bishop queen king
+ks_attacker_weight 0 69 83 58 -17 0
+ks_min_attackers 2
+ks_hit 37
+ks_weak_ring_square 91
+ks_safe_check 0 809 644 571 672 0
+ks_unsafe_check 207
+ks_no_queen 981
+ks_danger_div 5000
+ks_shelter 125 40 48 71 84 74 15 16
+ks_open_file 55
+ks_storm 8 0 -28 51 74 15 -22 -16
+ks_storm_blocked_div 4
+ks_full_piece_material 31
+
+# fit report (loss = valid loss by the real eval)
+# tools/tune 50946d2: set 4 from set 1, /home/ascanius/Documents/Cpp/other_programms/Chess/data/tune
+# positions: train 1034763, valid 127374, test 127569
+# K 329.79 (fitted on set 1), lambda 1e-09, lr 2, epochs 1500, best epoch 1500 (valid, model 0.124697), 251 s
+# loss (sigma(basic_eval/K) - result)^2, real eval:
+#   set   train      valid      test
+#   1     0.140723   0.140784   0.141126
+#   4     0.124602   0.124711   0.125128
+# changed: 810 of 876 weights; scalars:
+#   ks_safe_check[1]                     1080 ->    809
+#   piece_value[4]                        900 ->   1169
+#   ks_safe_check[2]                      790 ->    644
+#   passed_supported[5]                     0 ->    130
+#   passed_pawn_value[6]                   55 ->    175
+#   activity_pawn_attack                   30 ->    145
+#   piece_value[3]                        300 ->    412
+#   piece_value[1]                        500 ->    611
+#   ks_safe_check[4]                      780 ->    672
+#   ks_no_queen                           873 ->    981
+#   ks_weak_ring_square                   185 ->     91
+#   passed_pawn_value[5]                   33 ->    122
+#   ks_shelter[0]                          40 ->    125
+#   passed_supported[4]                     0 ->     82
+#   passed_king_enemy[6]                    0 ->     81
+#   passed_free_path[6]                     0 ->     78
+#   passed_king_enemy[5]                    0 ->     74
+#   ks_safe_check[3]                      635 ->    571
+#   passed_pawn_value[4]                   18 ->     79
+#   ks_unsafe_check                       148 ->    207
+#   ks_shelter[3]                          12 ->     71
+#   ks_storm[4]                            15 ->     74
+#   activity_king_attack                   20 ->     76
+#   ks_shelter[4]                          28 ->     84
+#   passed_supported[3]                     0 ->     55
+#   passed_rook_behind                      0 ->     54
+#   activity_pawn_blocked                 -20 ->    -71
+#   passed_supported[6]                     0 ->     49
+#   passed_king_enemy[4]                    0 ->     48
+#   ks_shelter[2]                           0 ->     48
+#   activity_bishop_attack                 40 ->     -5
+#   passed_king_own[5]                      0 ->     43
+#   activity_knight_square                  5 ->     47
+#   passed_king_own[6]                      0 ->     40
+#   activity_pawn_push_defend              10 ->    -30
+#   passed_king_own[4]                      0 ->     39
+#   ks_shelter[5]                          38 ->     74
+#   ks_open_file                           20 ->     55
+#   piece_value[2]                        300 ->    333
+#   passed_supported[2]                     0 ->     33
+#   ks_hit                                 69 ->     37
+#   passed_free_path[5]                     0 ->     31
+#   tempo_opening                          24 ->     -6
+#   piece_value[5]                        350 ->    379
+#   ks_storm[2]                             0 ->    -28
+#   ks_attacker_weight[4]                  10 ->    -17
+#   ks_attacker_weight[1]                  44 ->     69
+#   passed_king_own[3]                      0 ->     24
+#   passed_king_enemy[3]                    0 ->     23
+#   activity_pawn_push_attack              20 ->     43
+#   activity_bishop_square                  5 ->     28
+#   activity_rook_defend                  -10 ->     13
+#   ks_shelter[6]                          38 ->     15
+#   ks_shelter[7]                          38 ->     16
+#   ks_storm[6]                             0 ->    -22
+#   ks_storm[3]                            30 ->     51
+#   passed_pawn_value[3]                    9 ->     29
+#   activity_rook_square                    7 ->     27
+#   passed_pawn_value[1]                    2 ->     21
+#   passed_pawn_value[2]                    4 ->     21
+#   passed_king_own[2]                      0 ->     17
+#   ks_storm[7]                             0 ->    -16
+#   passed_king_own[1]                      0 ->     14
+#   passed_supported[1]                     0 ->    -14
+#   pawn_supporting_value                  15 ->      2
+#   punishment_for_double_pawn             10 ->     22
+#   activity_knight_defend                -10 ->     -1
+#   ks_storm[5]                             6 ->     15
+#   passed_king_enemy[1]                    0 ->      8
+#   activity_pawn_defend                   15 ->      7
+#   ks_storm[0]                             0 ->      8
+#   passed_free_path[1]                     0 ->      7
+#   passed_free_path[2]                     0 ->     -7
+#   passed_unstoppable                      0 ->      7
+#   punishment_for_trippled_pawn           30 ->     36
+#   passed_free_path[4]                     0 ->      6
+#   ks_attacker_weight[3]                  52 ->     58
+#   passed_king_enemy[2]                    0 ->      5
+#   activity_bishop_defend                 10 ->      5
+#   activity_rook_attack                   40 ->     35
+#   activity_knight_attack                 10 ->      5
+#   tempo_endgame                           9 ->      5
+#   passed_free_path[3]                     0 ->      2
+#   mobility_value                          5 ->      3
+#   ks_attacker_weight[2]                  81 ->     83
+#   punishment_for_isolated_pawn           10 ->     11
