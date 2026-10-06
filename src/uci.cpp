@@ -374,8 +374,10 @@ std::vector<std::string> UCI_Engine::pv_to_uci(const BB& root, const PV_Line& pv
 
 void UCI_Engine::extend_pv_from_tt(const BB& root, PV_Line& pv, int ply)
 {
-    // Stops at a position without a TT move, an illegal move, a position
+    // Stops at a position without an exact TT entry, an illegal move, a position
     // already on the line or in the game (path_history[0..ply]), or MAX_PV_Lenght.
+    // A bound's move is only one that failed high or low (a capture tried
+    // first, a hint), not the best: walked on, a mate line runs past a mate in one.
     std::vector<uint64_t> seen;
     for(int i=0;i<=ply;i++)
     seen.push_back(path_history[i].zobrist_hash);
@@ -390,7 +392,7 @@ void UCI_Engine::extend_pv_from_tt(const BB& root, PV_Line& pv, int ply)
             if(k>=MAX_PV_Lenght)
             return;
             TT_readout readout = table->is_retrivable_eval(&cur, 0);
-            if(!readout.is_found || readout.pv_line.current_lenght==0)
+            if(!readout.is_found || readout.pv_line.current_lenght==0 || readout.pv_line.bound_type!=0)
             return;
             next = readout.pv_line.moves[0];
         }
