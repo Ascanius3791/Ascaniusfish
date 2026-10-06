@@ -4,7 +4,7 @@
 // The total node count is a signature of search behaviour: it changes only
 // when the search itself changes, never with machine speed.
 //
-//   ./tools/bench [depth] [-q] [nne=<file>] [narrow=0|1|2] [deeper=0|1] [epd=<file>]
+//   ./tools/bench [depth] [-q] [nne=<file>] [weights=<file>] [narrow=0|1|2] [deeper=0|1] [epd=<file>]
 // -q prints only the final "bench:" line (used by tools/speed_compare).
 // epd=<file> searches that suite's positions after the bench's own, e.g.
 // epd=tools/openings.epd for the 130 positions of #80/#81.
@@ -12,6 +12,8 @@
 // (new_search(), as UCI "go" does), so the table runs full like in a game (#81).
 // nne=<file> evaluates quiet leaves with that eval-correction net (UCI UseNNE,
 // #52); the node count is then a different signature.
+// weights=<file> searches with that weight set (UCI WeightsFile, #85) instead of
+// the compiled-in default; with the default's own file the count is unchanged.
 // narrow=n sets tt_narrowing (#65); only a -DTT_BOUNDS_NEVER_NARROW=0 build reads it.
 // deeper=0 clears tt_deeper_cuts (#93, on by default): a bound cuts only at its own depth.
 // The last line is always: bench: nodes <N> time_ms <T> nps <X>
@@ -30,12 +32,14 @@ int main(int argc, char** argv)
     bool quiet = false;
     bool keep = false;
     const char* nne_file = nullptr;
+    const char* weights_file = nullptr;
     std::vector<std::string> fens(std::begin(BENCH_FENS), std::end(BENCH_FENS));
     for(int i=1;i<argc;i++)
     {
         if(std::strcmp(argv[i], "-q")==0) quiet = true;
         else if(std::strcmp(argv[i], "keep")==0) keep = true;
         else if(std::strncmp(argv[i], "nne=", 4)==0) nne_file = argv[i]+4;
+        else if(std::strncmp(argv[i], "weights=", 8)==0) weights_file = argv[i]+8;
         else if(std::strncmp(argv[i], "epd=", 4)==0)
         {
             std::vector<std::string> more = load_epd_fens(argv[i]+4);
@@ -54,6 +58,17 @@ int main(int argc, char** argv)
             return 1;
         }
         nne::enabled = true;
+    }
+    WEIGHTS weights = WEIGHTS_OG;
+    if(weights_file)
+    {
+        Weight_Set_Info info;
+        std::string error;
+        if(!load_weight_set(weights_file, weights, info, error))
+        {
+            std::fprintf(stderr, "%s\n", error.c_str());
+            return 1;
+        }
     }
 
     Zobrist zobrist_keys;
@@ -89,7 +104,7 @@ int main(int argc, char** argv)
         long long start_ns = steady_now_ns();
         PV_Line pv;
         for(int d=1; d<=depth; d++)
-        pv = minimax(&root, wfh, d, WEIGHTS_OG, INT_MIN, INT_MAX, table, path_history, 0, cycle_table);
+        pv = minimax(&root, wfh, d, weights, INT_MIN, INT_MAX, table, path_history, 0, cycle_table);
         long long ns = steady_now_ns()-start_ns;
         long long nodes = search_nodes-nodes_before;
         total_nodes += nodes;

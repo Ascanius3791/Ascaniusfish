@@ -270,9 +270,9 @@ nne-retrain:
 perft: tools/perft
 	./tools/perft $(PERFT_DEPTH)
 
-# Fixed-depth search; total nodes = search signature (BENCH_DEPTH overrides)
+# Fixed-depth search; total nodes = search signature (BENCH_DEPTH overrides; WEIGHTS_FILE=<set> searches with another weight set)
 bench: tools/bench
-	./tools/bench $(BENCH_DEPTH) $(if $(NNE),nne=$(NNE))
+	./tools/bench $(BENCH_DEPTH) $(if $(NNE),nne=$(NNE)) $(if $(WEIGHTS_FILE),weights=$(WEIGHTS_FILE))
 
 # Speed A/B of two git refs ("." = working tree): make speed-compare A=main B=.
 speed-compare: tools/speed_compare
