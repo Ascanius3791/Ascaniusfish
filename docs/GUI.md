@@ -106,8 +106,9 @@ How `./gui/ascaniusfish_gui` (`make gui`, `gui/`) is built. Read before working 
   does `Http_Server::wake()` (a self-pipe), and the poll loop's `on_tick` picks the answer up.
   So a search never blocks a request — page loads, `flip`, `undo` and mode switches are all
   answered while the engine thinks, and every iteration's depth/score is pushed over SSE.
-  `gui_server.cpp` keeps up to **three** links per session (`Engine_Set`): one for Play and
-  Analyse, one per side for Watch, each started on the first search it is asked for. **Pure
+  `gui_server.cpp` keeps up to **four** links per session (`Engine_Set`): one for Play and
+  Analyse, one per side for Watch, the root engine of Correspondence mode (`SLOT_ROOT`, #101),
+  each started on the first search it is asked for. **Pure
   watch** (#91, the Watch panel's checkbox, `Session::watch_pure`, `pure` in `/api/watch`, on
   by default) has the white link play both sides, so each search starts from the TT the other
   side just filled (safe: engine settings are per session, only `Go_Limits` differ per side);
@@ -175,7 +176,7 @@ How `./gui/ascaniusfish_gui` (`make gui`, `gui/`) is built. Read before working 
 **The server owns the position and the page owns nothing** — reloading the browser is just another
 `GET /api/state`. All chess logic stays in C++; the JS is presentation only. Routes:
 `GET /api/state`, `GET /api/events` (SSE),
-`POST /api/{move,fen,reset,undo,resign,play,watch,mode,flip,analyse,line,settings}`, all taking
+`POST /api/{move,fen,reset,undo,resign,play,watch,mode,flip,analyse,line,settings,corr}`, all taking
 `id` (default `main`). Both Play and Watch play under a Clock or a fixed depth (#21), starting on a
 1+1 clock (a clock is seeded with base + increment, `Session::clock_start_ms()`, #58) (`Session::play_base_ms`/`watch_base_ms`), which is also what Custom opens with; a `kind` of
 `depth` carries `value` (Watch: per side), and a `kind` of `clock` carries `baseMs`/`incMs` in
@@ -241,7 +242,7 @@ Like every tool that touches movegen, `main()` must run `Zobrist`/`initialize_ra
 misses checks instead of crashing.
 
 ## Modes
-The mode selector shows Analyse / Play / Watch. Analyse is free play, FEN setup and a live
+The mode selector shows Analyse / Play / Watch / Correspondence. Analyse is free play, FEN setup and a live
 `go infinite` analysis of whatever is on the board; Play is a full game against
 `./ascaniusfish_uci` (`engine=` picks a different binary); Watch is Ascaniusfish against itself,
 one shared process (Pure watch) or two, with a depth or movetime each, started/paused/stepped from the panel and reviewable
@@ -257,3 +258,18 @@ like Play, so stepping back into the game pauses it. The analysis toggle starts
 leaves room for several engine processes at once. `main()` ignores `SIGPIPE` — an engine that died must be a message on the page,
 not the end of the server — and takes `SIGINT`/`SIGTERM` as "leave through `main()`", which
 aborts every search and quits the engines rather than orphaning them.
+
+**Correspondence mode** (#101) is Analyse on the board plus a root engine (`SLOT_ROOT`) that runs
+`go infinite` on one node of the tree, the root (`Session::corr_root`, a dead node falls back to the
+start), with the game's path to it. The Engine panel's "Analyse position in correspondence mode"
+makes the position on the board the root and keeps the game; picking the mode directly starts a
+fresh board whose start is the root, and a FEN, PGN or reset moves it there. The Analyse engine is
+the **Searcher**. `POST /api/corr` takes `mark` (1–32767, the panel's field and +1) and `action`:
+`enter`; `save` puts the position on the board into the root's TT with the mark and the analysis
+result on show (depth, score, first move; not an older eval's) as the engine's `ttmark`, and the
+GUI keeps the list (`corr_saves`, one per position, the higher mark); `return` sends the cursor to
+the root, the root engine `ttdemote` plus every save, and starts a new Searcher (`ucinewgame` plus
+every save, `Search_Request::prelude`). The root is restarted for each, since the TT is the
+search's (`maybe_start_root()`/`collect_root()` in `gui_server.cpp`); the engine's `info string
+ttmark…`/`ttdemote…` answers show at the panel's foot. The root search stops when the mode is left
+or no page watches, and its results are not offered to the PTT.
