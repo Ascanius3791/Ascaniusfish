@@ -18,10 +18,12 @@
 #include <thread>
 
 // UCI front end. Implements uci, isready, ucinewgame, position, go, stop,
-// quit (setoption handles SyzygyPath, SyzygyProbeLimit, GaviotaTbPath, GaviotaTbCache, NNEFile, UseNNE, WeightsFile and MultiPV, debug/register/ponderhit are accepted and ignored), plus
-// the non-standard "go perft N" for checking move generation from any FEN, and
+// quit (setoption handles SyzygyPath, SyzygyProbeLimit, GaviotaTbPath, GaviotaTbCache, NNEFile, UseNNE, WeightsFile, MultiPV and UCI_AnalyseMode, debug/register/ponderhit are accepted and ignored), plus
+// the non-standard "go perft N" for checking move generation from any FEN,
 // the non-standard "hint depth D pv <moves>" (#79): a line found earlier for
-// the position just set, seeded into the TT before the next "go" (see seed_hint()).
+// the position just set, seeded into the TT before the next "go" (see seed_hint()),
+// and the non-standard "route <moves>" (#100): another route to a position on
+// the path, which an analysis search's path refresh refreshes too.
 // The search runs on its own thread so "stop"/"isready" are answered while
 // it thinks; see lib/search_control.hpp for how a search is aborted.
 
@@ -48,15 +50,17 @@ struct UCI_Table : lookup_table
     // and every ancestor's entry, exact or bound, that is i plies above the root
     // with i <= its depth. A bound never cuts at the root (full window) and is
     // what the parent's null-window search needs back; an entry shallower than
-    // its distance never saw the root. Returns the entries demoted.
-    int refresh_path(const std::vector<BB>& path)
+    // its distance never saw the root. A path that ends `offset` plies above
+    // the root (another route to an ancestor, #100's "route") counts its
+    // distances from there. Returns the entries demoted.
+    int refresh_path(const std::vector<BB>& path, int offset = 0)
     {
         int demoted = 0;
         const int root = (int)path.size()-1;
         for(int j=0;j<=root;j++)
         {
             TT_slot* s = find_slot(path[j].zobrist_hash);
-            const int i = root-j;
+            const int i = root-j+offset;
             if(s && (i==0 ? s->pv_line.bound_type==0 : i<=s->pv_line.depth))
             demoted += demote(*s);
         }
@@ -200,6 +204,14 @@ class UCI_Engine
     int hint_depth = 0;
     std::vector<std::string> hint_pv;
     int seed_hint(const BB& root);
+    // An analysis search refreshes its path (UCI_Table::refresh_path()): on
+    // "go infinite", or any "go" with UCI_AnalyseMode on.
+    bool analyse_mode = false;
+    // "route <moves>" (#100): another route from the "position" command's start
+    // to a position on its path, a transposition the path refresh refreshes
+    // too. Dropped by the next "position", like the hint.
+    std::vector<std::vector<std::string>> routes;
+    int refresh_routes();
     std::string provenance() const;
 };
 

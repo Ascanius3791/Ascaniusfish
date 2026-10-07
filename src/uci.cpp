@@ -255,6 +255,7 @@ void UCI_Engine::handle_position(const std::vector<std::string>& tokens)
 {
     hint_depth = 0;   // a hint belongs to the position it was given for
     hint_pv.clear();
+    routes.clear();   // and so do routes
     size_t i = 1;
     BB root;
     if(i<tokens.size() && tokens[i]=="startpos")
@@ -294,6 +295,37 @@ void UCI_Engine::handle_position(const std::vector<std::string>& tokens)
         }
     }
     game = positions;
+}
+
+// The "route" lines' share of an analysis search's path refresh (#100): each
+// route is played from the game's start; where it ends on a position of the
+// game, i plies above the root, refresh_path() takes it with that offset. A
+// route with an illegal move, or ending off the path, is skipped. Returns the
+// entries demoted.
+int UCI_Engine::refresh_routes()
+{
+    int demoted = 0;
+    for(const std::vector<std::string>& route : routes)
+    {
+        std::vector<BB> path(1, game[0]);
+        bool legal = true;
+        for(const std::string& move : route)
+        {
+            BB next;
+            if(!(legal = uci_apply_move(path.back(), move, next)))
+            break;
+            path.push_back(next);
+        }
+        if(!legal)
+        continue;
+        for(int j=(int)game.size()-1; j>=0; j--)
+        if(game[j].zobrist_hash==path.back().zobrist_hash)
+        {
+            demoted += table->refresh_path(path, (int)game.size()-1-j);
+            break;
+        }
+    }
+    return demoted;
 }
 
 // What the scores of the coming search are found with (#79), sent as
@@ -885,9 +917,18 @@ void UCI_Engine::search(UCI_Limits limits, long long start_ns)
     const BB root = game.back();
     send("info string " + provenance());
     // An analysis walks the move tree in any order: refresh the path first
-    // (UCI_Table::refresh_path()). A game search only moves forward and is left as it was.
-    if(table && limits.infinite)
-    send("info string refresh " + std::to_string(table->refresh_path(game)) + " entries demoted");
+    // (UCI_Table::refresh_path()), and every route the GUI named to it. A game
+    // search only moves forward and is left as it was.
+    const bool analysis = limits.infinite || analyse_mode;
+    if(table && analysis)
+    {
+        const int demoted = table->refresh_path(game);
+        if(routes.empty())
+        send("info string refresh " + std::to_string(demoted) + " entries demoted");
+        else
+        send("info string refresh " + std::to_string(demoted+refresh_routes()) + " entries demoted, "
+             + std::to_string(routes.size()) + " routes");
+    }
     auto result = all_moves(&root, wfh);
     int n = std::get<0>(result);
     if(n==0)
@@ -958,7 +999,7 @@ void UCI_Engine::search(UCI_Limits limits, long long start_ns)
         if(mate_claimed)
         mate_check = verify_mate(root, pv, std::max(MATE_VERIFY_MIN_NODES, search_nodes-nodes_before), lines_wanted==1);
         // A verified mate goes over the root's entry however deep (UCI_Table::store_proven()).
-        if(table && limits.infinite && mate_check==1 && lines_wanted==1)
+        if(table && analysis && mate_check==1 && lines_wanted==1)
         table->store_proven(root.zobrist_hash, pv);
 
         long long elapsed_ms = (steady_now_ns()-start_ns)/1000000;
@@ -1030,6 +1071,7 @@ int UCI_Engine::loop()
             send("option name MultiPV type spin default 1 min 1 max " + std::to_string(MAX_ORDERED_MOVES));
             send("option name TTWalk type check default true");
             send("option name TTDeeperCuts type check default true");
+            send("option name UCI_AnalyseMode type check default false");
             if(!tt_bounds_never_narrow)//only a -DTT_BOUNDS_NEVER_NARROW=0 build can narrow (#65)
             {
                 send("option name TTNarrowing type check default false");
@@ -1084,6 +1126,13 @@ int UCI_Engine::loop()
             }
             if(hint_pv.empty())
             hint_depth = 0;
+        }
+        else if(cmd=="route")
+        {
+            // route <moves>: after "position", before "go" (#100); one per line
+            stop_search();
+            if(tokens.size()>1)
+            routes.emplace_back(tokens.begin()+1, tokens.end());
         }
         else if(cmd=="stop")
         stop_search();
@@ -1157,6 +1206,11 @@ int UCI_Engine::loop()
             {
                 stop_search();
                 tt_walk = value=="true";
+            }
+            else if(name=="UCI_AnalyseMode")
+            {
+                stop_search();
+                analyse_mode = value=="true";
             }
             else if(name=="TTDeeperCuts")
             {
