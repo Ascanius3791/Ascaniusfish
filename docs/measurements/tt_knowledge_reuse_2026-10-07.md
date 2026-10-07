@@ -8,6 +8,20 @@ page first showed a mate, `engine` when the engine first sent one, `refresh` how
 the engine demoted before the search (from step 2 on). The step label of the mixed walk is the
 plan's row (`m3` = row 3).
 
+## Reading
+
+- **on**, steps back: plies 10', 9, 8 show their mate within 0.0 s, as the engine-off walk does
+  (baseline: none; each step showed its own older, deeper root entry). Ply 7 has none in either
+  walk (no search has refuted 4...Kg4 yet). After step 2 alone the engine already sent the
+  mate at once, but the page kept the Analysis_Store's deeper score until step 4.
+- **off**: unchanged, `refresh 0` at every step: nothing is demoted when every parent is
+  searched after its child.
+- **fwd**: a mate at all 14 steps before and after.
+- **mixed**: rows 6, 8, 9 show a mate within 0.0 s (baseline: none at rows 6 and 8). Row 10
+  (back to the start through demoted entries) reaches depth 16 in 1 s against 13 in the baseline.
+- Forward steps reach the baseline's depth within 1-2 plies; the baseline itself varies by as
+  much between runs. The bench signature stays 31041: game searches are unchanged.
+
 ## Baseline
 
 `issue/101` = main 73d1f0d + 1252d70 (TTWalk follows exact entries only), `bench` 31041.
