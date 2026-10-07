@@ -386,7 +386,7 @@ void UCI_Engine::handle_ttmark(const std::vector<std::string>& tokens)
     entry.pv_line.bound_type = 0;
     const bool stored = table->import_marked(entry, (int16_t)mark);
     const TT_slot* slot = table->find_slot(pos.zobrist_hash);
-    send("info string ttmark " + std::string(stored ? "stored" : "not stored, its bucket holds only entries worth more")
+    send("info string ttmark " + std::string(stored ? "stored" : "not stored, its bucket holds only marked entries")
          + (slot ? ", mark " + std::to_string(tt_mark(slot->pv_line)) + " depth " + std::to_string(slot->pv_line.depth) : std::string()));
 }
 

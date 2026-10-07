@@ -105,7 +105,8 @@ struct UCI_Table : lookup_table
     // "Save to root": `entry` goes in with `mark`. Where the position has an
     // entry already, the result insert() would keep stays (the deeper, a proof
     // over a score) and the higher mark of the two is the entry's. False if the
-    // bucket is full of entries worth more (higher marks, proofs).
+    // bucket is full of marked entries: a mark is never evicted, not even by a
+    // higher one.
     bool import_marked(TT_entry entry, int16_t mark)
     {
         if(mark>0)
@@ -113,6 +114,12 @@ struct UCI_Table : lookup_table
         TT_slot* s = find_slot(entry.zobrist_hash);
         if(!s)
         {
+            const TT_bucket& bucket = table[get_hash(entry.zobrist_hash)];
+            bool room = bucket.fill_count()<bucket_size;
+            for(int i=0;i<bucket.fill_count() && !room;i++)
+            room = tt_mark(bucket.slot[i].pv_line)<=0;
+            if(!room)
+            return false;
             set_tt_mark(entry.pv_line, mark);
             insert(entry);
             return find_slot(entry.zobrist_hash)!=nullptr;
@@ -150,17 +157,19 @@ struct UCI_Table : lookup_table
     }
 
     protected:
-    // With marks held: a proof first, then a mark (the higher first), then
+    // With marks held: a mark first (the higher first), then a proof, then
     // lookup_table's value (depth, less the age). Within a tier the deeper.
+    // An unmarked candidate never reaches the mark tier, so it never evicts a
+    // marked entry; import_marked() keeps a marked one from doing it.
     float value_for_victim_index(const TT_slot& slot) const override
     {
         if(!marks_held)
         return lookup_table::value_for_victim_index(slot);
         const TT_Result& r = slot.pv_line;
+        if(tt_mark(r)>0)
+        return 3e7f + 128.0f*tt_mark(r) + r.depth;
         if(tt_proven(r))
         return 1.2e7f + r.depth;
-        if(tt_mark(r)>0)
-        return 4e6f + 128.0f*tt_mark(r) + r.depth;
         return lookup_table::value_for_victim_index(slot);
     }
 
