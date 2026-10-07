@@ -229,8 +229,8 @@ tb-trade-suite: $(UCI_TARGET) tools/tb_trade_suite
 GUI_TARGET := gui/ascaniusfish_gui
 GUI_HEADERS := gui/http_server.hpp gui/session.hpp gui/move_tree.hpp gui/json.hpp gui/engine_link.hpp gui/analysis_store.hpp gui/tablebase_view.hpp gui/ptt.hpp
 
-# Stepping back along the 3.Bc2+ study in Analyse mode (#100): time until each
-# parent shows its mate, engine off / on / on with forget (~25 min).
+# Analyse along the 3.Bc2+ study (#100, docs/plans/tt_knowledge_reuse.md): when
+# each step shows its mate, walks off / on / fwd / mixed (~40 s per walk).
 tools/walkback: tools/walkback.cpp $(GUI_HEADERS) tools/game_rules.hpp tools/uci_engine.hpp $(HEADERS) $(SOURCES)
 	$(CXX) $(CXXFLAGS) -pthread -o $@ tools/walkback.cpp
 
