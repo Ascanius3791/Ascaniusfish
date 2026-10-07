@@ -20,6 +20,25 @@ already losing (−9 and −11); Ascaniusfish never lost on time.
 
 PGNs (outside the repo): `~/stockfish15/games/sf1500.pgn`, `sf1800.pgn` (Ascaniusfish is "B").
 
+## 2026-10-07: main at f5657e6 (w7 + its retrained net), 20+0.2
+
+Ascaniusfish as `./ascaniusfish_uci` (real TT, 2^18 x 8, net on), Stockfish as above, default
+openings, 5 games in parallel, **tc=20+0.2** instead of 60+0.6 to fit a 15 min budget: the
+`UCI_Elo` calibration is for 60+0.6, so this rating is not strictly comparable with the rows above.
+
+| `UCI_Elo` | Games | Ascaniusfish W/D/L | Elo B−A (95% CI) | Implied rating |
+|---|---|---|---|---|
+| 1900 | 24 (3 min) | 18 / 1 / 5 | +211 [+66, +506] | ~2110 |
+| 2100 | 46 (8 min) | 19 / 7 / 20 | −8 [−115, +99] | ~2092 |
+
+**Estimate: about 2100 CCRL, ±85** (maximum likelihood over all 70 games, logistic Elo;
+likelihood interval 2013–2184). Both of Stockfish's two time losses were at 1900; none of ours.
+
+```bash
+./tools/match ~/stockfish15/src/stockfish ./ascaniusfish_uci tc=20+0.2 concurrency=5 time=8 \
+    optionsA="UCI_LimitStrength=true,UCI_Elo=2100" optionsB="UseNNE=true,NNEFile=$PWD/nets/nne_d6.bin"
+```
+
 ## Rerunning
 
 Stockfish 15 is built natively for Linux at `~/stockfish15/src/stockfish`, from the
