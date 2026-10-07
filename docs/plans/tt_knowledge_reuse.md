@@ -520,6 +520,14 @@ line:
 7. #95's `forget path` overlaps with the path refresh. When #95 is rebased, drop it in favour
    of this?
 
+**Ascanius's answers (2026-10-07).** 1: a new issue, `issue/101`, branched from main. 2: both
+switches, `go infinite` or `UCI_AnalyseMode`. 3: Patch A now, plus its mirror (only a deeper
+proof replaces a proof); bench unchanged (31041), so no SPRT and no `EVAL_VERSION` bump. A probe
+already cuts on an exact proof at any depth (`ascaniusfish_2.hpp:407-410`). 5: yes, a far jump
+rebuilds, and the page shows that rebuild rather than the kept deeper result (a cleverer
+display later). 6: a GUI switch (`Transp.`) that sends the tree's other routes; Ascanius
+judges it in practice.
+
 **Coding agent:** Opus 5.5 at high effort for steps 0–6. The steps are concrete, but the
 engine change is about TT semantics, and the walks need judgement at the decision point. Use
 xhigh only if step 7 is reached.
