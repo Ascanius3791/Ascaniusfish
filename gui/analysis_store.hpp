@@ -43,8 +43,8 @@ class Analysis_Store
     }
 
     // Keeps this result for `key`. For the same position the kept one survives
-    // only if it is at least as deep and has at least as many lines (MultiPV,
-    // #69) — see covers(); a different position simply takes the slot, since
+    // only if it tells more: a mate over a score, or else deeper, with at least
+    // as many lines (MultiPV, #69) — see covers(); a different position simply takes the slot, since
     // the one being looked at now is the one worth having.
     void put(const Position_Key& key, const Search_Info& info)
     {
@@ -61,11 +61,20 @@ class Analysis_Store
         slot.used = true;
     }
 
-    // Whether `kept` tells at least what `fresh` does: as deep, as many lines.
+    // A mate is a proof: it holds at any depth (#100).
+    static bool proven(const Search_Info& i) { return i.score_kind=="mate"; }
+
+    // Whether `kept` tells at least what `fresh` does: as many lines, and a mate
+    // where the fresh one has only a score, or else strictly deeper. At equal
+    // depth the fresh result wins: it was made with whatever was found since.
     // A deep single line does not stand in for the K lines asked for now.
     static bool covers(const Search_Info& kept, const Search_Info& fresh)
     {
-        return kept.depth>=fresh.depth && kept.more.size()>=fresh.more.size();
+        if(kept.more.size()<fresh.more.size())
+        return false;
+        if(proven(kept)!=proven(fresh))
+        return proven(kept);
+        return kept.depth>fresh.depth;
     }
 
     // The best result kept for `key`, if it is still the one in its slot.

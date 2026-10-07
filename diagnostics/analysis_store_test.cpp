@@ -109,6 +109,37 @@ static void test_catching_up()
     check_eq(session.analysis.depth, 11, "and the deeper result is what is kept");
 }
 
+// A mate is a proof (#100): it beats a kept score however deep, a deeper score
+// does not beat a kept mate, and at equal depth the fresh result is the one kept.
+static void test_mates()
+{
+    std::printf("a mate beats a kept score however deep\n");
+    Session session;
+    session.analysis_on = true;
+    session.set_analysis(iteration(18, 2716, {"e2e4"}));
+    play(session, "d2d4");
+    navigate(session, Nav::BACK);
+
+    Search_Info mate = iteration(3, 0, {"g1f3"});
+    mate.score_kind = "mate";
+    mate.score_value = "10";
+    session.set_analysis(mate);
+    check(!session.analysis_stored && session.analysis.score_kind=="mate", "a live mate at depth 3 replaces a kept score at depth 18");
+    play(session, "d2d4");
+    navigate(session, Nav::BACK);
+    check(session.analysis_stored && session.analysis.score_kind=="mate", "and the mate is what is kept");
+
+    session.set_analysis(iteration(20, 2800, {"e2e4"}));
+    check(session.analysis_stored && session.analysis.score_kind=="mate", "a live score at depth 20 does not replace a kept mate");
+
+    Analysis_Store store;
+    const Position_Key key = session.analysis_key;
+    store.put(key, iteration(9, 35, {"e2e4"}));
+    store.put(key, iteration(9, -10, {"b1c3"}));
+    Search_Info got;
+    check(store.get(key, got) && got.score_value=="-10", "a fresh result of equal depth replaces the kept one");
+}
+
 // The entries are positions, not moves: the same position reached another way
 // has the same analysis, and a position never looked at has none.
 static void test_positions_not_nodes()
@@ -229,6 +260,7 @@ int main()
     test_new_game_clears();
     test_nothing_stale();
     test_lines();
+    test_mates();
 
     std::printf("\n%s\n", failures ? "FAIL" : "PASS");
     return failures ? 1 : 0;

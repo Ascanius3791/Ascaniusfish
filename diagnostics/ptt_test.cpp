@@ -131,6 +131,14 @@ static void test_better(const std::string& path)
     again.open(path, error);
     check_eq(again.get(k)->info.depth, 8, "and reading the file gives the same answer");
     check_eq(again.get(k)->info.prov.weights, 3, "with its weight set");
+
+    // A mate is a proof (#100): it beats a deeper score of the same eval, and a
+    // deeper score does not beat it.
+    Search_Info mate = iteration(5, 0, {"g1f3"}, 6000, 2, "def", 3);
+    mate.score_kind = "mate";
+    mate.score_value = "7";
+    check(ptt.put(k, entry(START, mate)), "a mate beats a deeper score of the same eval");
+    check(!ptt.put(k, entry(START, iteration(25, 900, {"g1f3"}, 6000, 2, "def", 3))), "and a deeper score does not beat it");
 }
 
 static void test_two_guis(const std::string& path)

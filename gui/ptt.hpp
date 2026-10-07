@@ -142,8 +142,8 @@ class PTT
 
     // Whether `fresh` should replace `kept` for the same position: a newer
     // eval version wins over an older one and never the other way round; within
-    // one version, weight set and net the deeper search wins (an equal one does
-    // not); a search with another net or weight set of the same version is the
+    // one version, weight set and net a mate beats a score and otherwise the
+    // deeper search wins (an equal one does not); a search with another net or weight set of the same version is the
     // newer opinion.
     static bool better(const PTT_Entry& fresh, const PTT_Entry& kept)
     {
@@ -152,6 +152,8 @@ class PTT
         return f.eval_version>k.eval_version;
         if(f.nne!=k.nne || f.weights!=k.weights)
         return true;
+        if((fresh.info.score_kind=="mate")!=(kept.info.score_kind=="mate"))
+        return fresh.info.score_kind=="mate";   // a mate is a proof, at any depth (#100)
         return fresh.info.depth>kept.info.depth;
     }
 

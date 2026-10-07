@@ -521,13 +521,14 @@ class Session
 
     // Records one analysis iteration. A kept result deeper than the search has
     // got stays up — the depth shown never goes backwards — and the search
-    // takes over as soon as it reaches that depth.
+    // takes over as soon as it reaches that depth, or at once with a mate the
+    // kept one does not have (Analysis_Store::covers()).
     void set_analysis(const Search_Info& info)
     {
         analysis_live_depth = info.depth;
         if(info.more.empty())
         ptt_offer(info);
-        if(analysis_valid && analysis_stored && !analysis_older && info.depth<analysis.depth && Analysis_Store::covers(analysis, info))
+        if(analysis_valid && analysis_stored && !analysis_older && Analysis_Store::covers(analysis, info))
         return;
         show_analysis(info);
         analysis_stored = false;
@@ -1471,15 +1472,15 @@ class Session
     }
 
     // The kept result for the position now on the board, if there is one.
-    // This game's store first; the PTT's entry when it has none, or a deeper
-    // current one. An older entry (another eval) only when nothing else is.
+    // This game's store first; the PTT's entry when it has none, or a current
+    // one that tells more (a mate, or deeper: Analysis_Store::covers()). An older entry (another eval) only when nothing else is.
     void recall_analysis()
     {
         Search_Info found;
         const bool in_store = analysis_store.get(tree.current().key, found);
         const PTT_Entry* kept = ptt_entry();
         const bool current = kept && ptt_eval().matches(kept->info.prov);
-        if(kept && (in_store ? current && kept->info.depth>found.depth : true))
+        if(kept && (in_store ? current && !Analysis_Store::covers(found, kept->info) : true))
         {
             show_analysis(kept->info);
             analysis_stored = true;
