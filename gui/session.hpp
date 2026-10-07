@@ -574,6 +574,14 @@ class Session
         save.depth = analysis.depth;
         save.score_kind = analysis.score_kind;
         save.score_value = std::atoll(analysis.score_value.c_str());
+        // An exact mate in the root's TT is a proof: it cuts at any depth and
+        // nothing but a deeper proof replaces it. One the engine did not confirm
+        // goes in as the largest score short of the tables' instead (#100).
+        if(save.score_kind=="mate" && !analysis.mate_confirmed)
+        {
+            save.score_kind = "cp";
+            save.score_value = save.score_value>0 ? TB_WIN_CP-1 : -(TB_WIN_CP-1);
+        }
         save.white = white_to_move();
         if(!analysis_uci.empty())
         {

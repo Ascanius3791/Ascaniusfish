@@ -277,7 +277,9 @@ makes the position on the board the root and keeps the game; picking the mode di
 fresh board whose start is the root, and a FEN, PGN or reset moves it there. The Analyse engine is
 the **Searcher**. `POST /api/corr` takes `mark` (1–32767, the panel's field and +1) and `action`:
 `enter`; `save` puts the position on the board into the root's TT with the mark and the analysis
-result on show (depth, score, first move; not an older eval's) as the engine's `ttmark`, and the
+result on show (depth, score, first move; not an older eval's) as the engine's `ttmark` (a mate
+only if the engine confirmed it, `Search_Info::mate_confirmed`, since an exact mate there is a
+proof; an unconfirmed one goes in as ±9999 cp, #100), and the
 GUI keeps the list (`corr_saves`, one per position, the higher mark); `return` sends the cursor to
 the root, the root engine `ttdemote` plus every save, and starts a new Searcher (`ucinewgame` plus
 every save, `Search_Request::prelude`). The root is restarted for each, since the TT is the

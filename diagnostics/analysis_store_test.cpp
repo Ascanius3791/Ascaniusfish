@@ -159,6 +159,31 @@ static void test_routes()
           routes.empty() ? "none" : routes[0]);
 }
 
+// "Save to root" (#101) puts an exact entry in the root's TT, and an exact mate
+// there is a proof: only a mate the engine confirmed goes in as one (#100).
+static void test_corr_save_mates()
+{
+    std::printf("a save is a mate only if the engine confirmed it\n");
+    Session session;
+    session.mode = Mode::CORRESPONDENCE;
+    session.analysis_on = true;
+    Search_Info mate = iteration(7, 0, {"e2e4"});
+    mate.score_kind = "mate";
+    mate.score_value = "4";
+    session.set_analysis(mate);
+    std::string error;
+    check(session.corr_save(error), "an unconfirmed mate saves", error);
+    check(!session.corr_saves.empty() && session.corr_saves.back().score_kind=="cp"
+          && session.corr_saves.back().score_value==TB_WIN_CP-1, "as the largest score short of the tables'");
+
+    mate.mate_confirmed = true;
+    mate.depth = 8;
+    session.set_analysis(mate);
+    check(session.corr_save(error), "a confirmed mate saves", error);
+    check(session.corr_saves.size()==1 && session.corr_saves.back().score_kind=="mate"
+          && session.corr_saves.back().score_value==4, "as the mate, replacing the first save");
+}
+
 // The entries are positions, not moves: the same position reached another way
 // has the same analysis, and a position never looked at has none.
 static void test_positions_not_nodes()
@@ -281,6 +306,7 @@ int main()
     test_lines();
     test_mates();
     test_routes();
+    test_corr_save_mates();
 
     std::printf("\n%s\n", failures ? "FAIL" : "PASS");
     return failures ? 1 : 0;

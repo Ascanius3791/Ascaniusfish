@@ -313,11 +313,17 @@ class Engine_Link
         std::string line;
         Search_Info set;   // the MultiPV set being gathered
         Search_Provenance prov;   // the search's, from the line before its first iteration
+        bool mate_confirmed = false;   // the engine's verdict on line 1's mate, sent just before it
         while(engine.read_line(line, deadline))
         {
             Search_Info info;
             if(parse_provenance(line, prov))
             continue;
+            if(line.compare(0, 22, "info string mate claim")==0)
+            {
+                mate_confirmed = line.find(" confirmed:")!=std::string::npos;
+                continue;
+            }
             if(line.compare(0, 18, "info string ttmark")==0 || line.compare(0, 20, "info string ttdemote")==0)
             {
                 std::lock_guard<std::mutex> lock(m);
@@ -327,6 +333,9 @@ class Engine_Link
             if(parse_info(line, info))
             {
                 info.prov = prov;
+                info.mate_confirmed = mate_confirmed && info.score_kind=="mate" && info.multipv<=1;
+                if(info.multipv<=1)
+                mate_confirmed = false;
                 if(info.multipv>=1)
                 {
                     if(info.multipv==1)

@@ -71,6 +71,7 @@ struct Search_Info
     int multipv = 0;                      // the line's "multipv i", 0 when the engine gave none
     std::vector<Search_Line> more;
     Search_Provenance prov;               // the search's, set by whoever reads its lines
+    bool mate_confirmed = false;          // a mate the engine's verify_mate() confirmed ("info string mate claim ... confirmed"), set by whoever reads its lines
 };
 
 inline bool parse_info(const std::string& line, Search_Info& info)
