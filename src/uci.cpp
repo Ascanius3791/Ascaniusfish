@@ -158,7 +158,7 @@ void UCI_Engine::send(const std::string& line)
 void UCI_Engine::ensure_table()
 {
     if(!table)
-    table = new lookup_table;
+    table = new UCI_Table;
 }
 
 // A relative NNEFile is looked for in the working directory, then next to the
@@ -343,6 +343,9 @@ int UCI_Engine::seed_hint(const BB& root)
         entry.pv_line = PV_Line(std::get<1>(result)[found], hint_depth-(int)i);
         entry.pv_line.eval = INT_MIN;
         entry.pv_line.bound_type = -1;
+        // A proof there stays: a deeper vacuous bound would replace it.
+        const TT_slot* held = table->find_slot(pos.zobrist_hash);
+        if(!held || !tt_proven(held->pv_line))
         table->insert(entry);
         pos = pv_buf[found];
         seeded++;
@@ -881,6 +884,10 @@ void UCI_Engine::search(UCI_Limits limits, long long start_ns)
     if(table) table->new_search();
     const BB root = game.back();
     send("info string " + provenance());
+    // An analysis walks the move tree in any order: refresh the path first
+    // (UCI_Table::refresh_path()). A game search only moves forward and is left as it was.
+    if(table && limits.infinite)
+    send("info string refresh " + std::to_string(table->refresh_path(game)) + " entries demoted");
     auto result = all_moves(&root, wfh);
     int n = std::get<0>(result);
     if(n==0)
@@ -950,6 +957,9 @@ void UCI_Engine::search(UCI_Limits limits, long long start_ns)
         int mate_check = 0;
         if(mate_claimed)
         mate_check = verify_mate(root, pv, std::max(MATE_VERIFY_MIN_NODES, search_nodes-nodes_before), lines_wanted==1);
+        // A verified mate goes over the root's entry however deep (UCI_Table::store_proven()).
+        if(table && limits.infinite && mate_check==1 && lines_wanted==1)
+        table->store_proven(root.zobrist_hash, pv);
 
         long long elapsed_ms = (steady_now_ns()-start_ns)/1000000;
         long long nodes = search_nodes-nodes_before;

@@ -25,6 +25,85 @@
 // The search runs on its own thread so "stop"/"isready" are answered while
 // it thinks; see lib/search_control.hpp for how a search is aborted.
 
+// The engine's TT, plus what an analysis needs (#100, docs/plans/tt_knowledge_reuse.md).
+// Analyse walks the move tree in any order, so an entry stored before something
+// below it was searched deeper or proven would cut before the search reaches that
+// again. refresh_path() demotes such entries before an analysis search, and
+// store_proven() keeps a verified root mate that insert() would drop under a
+// deeper entry. Uses only lookup_table_base's protected members.
+struct UCI_Table : lookup_table
+{
+    // The entry of a position, or nullptr.
+    TT_slot* find_slot(uint64_t zobrist_hash)
+    {
+        TT_bucket& bucket = table[get_hash(zobrist_hash)];
+        for(int i=0;i<bucket.fill_count();i++)
+        if(bucket.holds(i, zobrist_hash))
+        return &bucket.slot[i];
+        return nullptr;
+    }
+
+    // Before an analysis search: what was stored before this search learns
+    // something below it must not cut. Demotes the root's entry if it is exact,
+    // and every ancestor's entry, exact or bound, that is i plies above the root
+    // with i <= its depth. A bound never cuts at the root (full window) and is
+    // what the parent's null-window search needs back; an entry shallower than
+    // its distance never saw the root. Returns the entries demoted.
+    int refresh_path(const std::vector<BB>& path)
+    {
+        int demoted = 0;
+        const int root = (int)path.size()-1;
+        for(int j=0;j<=root;j++)
+        {
+            TT_slot* s = find_slot(path[j].zobrist_hash);
+            const int i = root-j;
+            if(s && (i==0 ? s->pv_line.bound_type==0 : i<=s->pv_line.depth))
+            demoted += demote(*s);
+        }
+        return demoted;
+    }
+
+    // A verified mate for the root holds at every depth; insert() would keep an
+    // older, deeper bound over it. Written over that entry, at the deeper depth
+    // of the two so it is not the first one evicted.
+    void store_proven(uint64_t zobrist_hash, const PV_Line& pv)
+    {
+        TT_entry entry;
+        entry.zobrist_hash = zobrist_hash;
+        entry.initialized = true;
+        entry.pv_line = pv;
+        entry.pv_line.bound_type = 0;
+        TT_slot* s = find_slot(zobrist_hash);
+        if(!s)
+        {
+            insert(entry);
+            return;
+        }
+        entry.pv_line.depth = std::max(entry.pv_line.depth, s->pv_line.depth);
+        entry.search_id = current_search_id;
+        *s = TT_slot(entry);
+    }
+
+    private:
+    // A vacuous lower bound at depth 0 (eval INT_MIN), the move kept for the
+    // ordering: it never cuts and gives way to anything the search stores, since
+    // insert() keeps a position's deeper entry. A proof stays, and so does a book
+    // entry. True if the entry was demoted.
+    static bool demote(TT_slot& slot)
+    {
+        if(slot.is_from_opening_book)
+        return false;
+        TT_Result& r = slot.pv_line;
+        const bool vacuous = r.depth==0 && r.bound_type==-1 && r.eval==INT_MIN;
+        if(tt_proven(r) || vacuous)
+        return false;
+        r.depth = 0;
+        r.bound_type = -1;
+        r.eval = INT_MIN;
+        return true;
+    }
+};
+
 struct UCI_Limits
 {
     int depth = 0;              // 0 = no depth limit
@@ -70,7 +149,7 @@ class UCI_Engine
     int loop();  // reads stdin until "quit" or EOF
 
     private:
-    lookup_table* table;
+    UCI_Table* table;
     BB* wfh;
     BB* path_history;   // [MAX_SEARCH_PLY], repetition context for minimax()
     BB* pv_buf;         // scratch for walking the PV / applying moves

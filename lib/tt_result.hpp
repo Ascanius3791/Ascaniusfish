@@ -2,6 +2,8 @@
 #ifndef TT_RESULT_HPP
 #define TT_RESULT_HPP
 #include "move_generation.hpp"
+#include "Settings.hpp"
+#include <climits>
 #include <cstdint>
 
 // What a transposition-table entry keeps of a node's result (#82): its best move,
@@ -61,5 +63,12 @@ struct TT_Result
     }
 };
 #endif
+
+// An exact mate or table score (#78, #39): it holds at every depth, which is why
+// minimax() cuts on it at any depth. Works for both TT_Result layouts.
+inline bool tt_proven(const TT_Result& r)
+{
+    return r.bound_type==0 && (r.eval<=INT_MIN+max_mating_seq || r.eval>=INT_MAX-max_mating_seq);
+}
 
 #endif // TT_RESULT_HPP
