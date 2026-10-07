@@ -534,6 +534,32 @@ select:focus, input:focus { outline: none; border-color: var(--accent); }
 }
 
 #analysis-panel.running .score { color: var(--accent); }
+
+/* Correspondence mode (#101): the root's search, the mark and the saves. The
+   line and the stats hold their height, like the Engine panel's, so the panel
+   below does not move with every iteration. */
+#corr-panel.running .score { color: var(--accent); }
+#corr-panel .note.bad { color: var(--bad); }
+.corr-root-label { font-size: 12px; font-weight: normal; color: var(--muted); margin-left: 6px; }
+#corr-stats { min-height: 1.5em; margin: 0 0 4px; }
+.corr-line {
+  margin: 0 0 8px;
+  font-size: 12px;
+  height: 3.2em;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+}
+.corr-controls { align-items: center; flex-wrap: wrap; }
+.corr-mark { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; color: var(--muted); }
+.corr-mark input { width: 6ch; }
+.corr-saves { margin: 8px 0 0; padding-left: 1.6em; font-size: 12px; max-height: 9em; overflow-y: auto; }
+.corr-save { margin: 2px 0; }
+.corr-save.linked { cursor: pointer; }
+.corr-save.linked:hover .corr-save-label { color: var(--accent); }
+.corr-save-result { display: block; color: var(--muted); font-variant-numeric: tabular-nums; }
+.corr-notes { margin: 6px 0 0; font-size: 11px; }
+.corr-enter { margin-top: 8px; }
+.corr-enter[hidden] { display: none; }
 #analysis-panel .note.bad { color: var(--bad); }
 
 /* Depth, nodes and nps: two lines' worth, for the same reason as .engine. */

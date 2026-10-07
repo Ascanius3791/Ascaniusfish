@@ -40,8 +40,9 @@
 
 // Which of the GUI's modes a session is in. Analyse is free play plus a live
 // analysis, Play is a game against the engine, Watch is Ascaniusfish against
-// itself with a setting per side.
-enum class Mode { ANALYSE, PLAY, WATCH };
+// itself with a setting per side. Correspondence (#101) is Analyse on the board,
+// plus a second engine that keeps deepening one position, the root.
+enum class Mode { ANALYSE, PLAY, WATCH, CORRESPONDENCE };
 
 // What a session's engines are busy with. A session runs at most one search at
 // a time — in Watch mode the two sides think in turn, never together — so this
@@ -51,7 +52,7 @@ enum class Search_Kind { NONE, PLAY, WATCH, ANALYSIS };
 
 inline const char* mode_name(Mode m)
 {
-    return m==Mode::PLAY ? "play" : m==Mode::WATCH ? "watch" : "analyse";
+    return m==Mode::PLAY ? "play" : m==Mode::WATCH ? "watch" : m==Mode::CORRESPONDENCE ? "correspondence" : "analyse";
 }
 
 inline bool mode_from_name(const std::string& name, Mode& out)
@@ -59,6 +60,7 @@ inline bool mode_from_name(const std::string& name, Mode& out)
     if(name=="analyse") { out = Mode::ANALYSE; return true; }
     if(name=="play")    { out = Mode::PLAY;    return true; }
     if(name=="watch")   { out = Mode::WATCH;   return true; }
+    if(name=="correspondence") { out = Mode::CORRESPONDENCE; return true; }
     return false;
 }
 
@@ -140,11 +142,33 @@ struct Eval_View
     std::vector<Line> more;
 };
 
+// One "Save to root" of the correspondence mode (#101): a position the Searcher
+// looked at, the result shown there and the user's mark, as the root engine's
+// "ttmark" gets it. The score is the side to move's view, as UCI has it.
+struct Corr_Save
+{
+    int node = 0;               // where it was saved, for clicking back to it
+    Position_Key key{};         // the position: a second save of it replaces this one
+    std::string fen;
+    std::string label;          // the moves to it, numbered
+    int mark = 1;
+    int depth = 0;
+    std::string score_kind;     // "cp"/"mate"
+    long long score_value = 0;
+    bool white = true;          // the side to move, for showing the score in white's view
+    std::string move, move_san; // the best move shown, "" for none
+};
+
+constexpr int CORR_MARK_MAX = 32767;   // the mark is a short in the TT entry
+constexpr int CORR_NOTES = 6;          // the root engine's ttmark/ttdemote answers kept
+
 class Session
 {
     public:
     std::string id;
     Mode mode = Mode::ANALYSE;
+    // The board and the analysis behave as in Analyse: true in Correspondence too.
+    bool analyse_like() const { return mode==Mode::ANALYSE || mode==Mode::CORRESPONDENCE; }
     bool flipped = false;   // board orientation: UI state, but kept here so a reload keeps it
 
     // What the gear in the header switches: the eval gauge beside the board and
@@ -316,6 +340,26 @@ class Session
     bool watch_step = false;
     bool watch_pure = true;
 
+    // Correspondence mode (#101). A root engine of its own (gui_server.cpp's
+    // SLOT_ROOT) runs "go infinite" on the root, a node of the tree, while the
+    // board and the Analyse engine (the Searcher) are free to look around.
+    // "Save to root" hands the result on show to the root's TT with the mark;
+    // "Return to root" demotes the root's unmarked entries and starts a fresh
+    // Searcher holding every save. The root engine's state is here, its
+    // process and token in the server's Engine_Set.
+    int corr_root = 0;                      // node id; a dead one means the start
+    int corr_serial = 0;                    // bumped with every new root: its engine starts a new game
+    int corr_mark = 1;                      // the panel's mark, 1..CORR_MARK_MAX
+    std::vector<Corr_Save> corr_saves;
+    std::vector<std::string> corr_prelude;  // what the root engine gets before its next "go"
+    bool corr_restart = false;              // the root search starts again (with the prelude)
+    bool corr_running = false;              // a root search is out
+    bool corr_finished = false;             // it ended by itself (out of depth, or a mate)
+    std::string corr_error;
+    Search_Info corr_info;                  // its last iteration, the root's mover's view
+    bool corr_info_valid = false;
+    std::vector<std::string> corr_notes;    // the engine's answers to ttmark/ttdemote
+
     // The Clock/Fixed-depth switch and the clock it is set to, one pair per
     // mode (Play's applies to both colours from a preset, or per colour from
     // Custom; Watch's the same, scoped by the existing per-side setting
@@ -459,6 +503,135 @@ class Session
     {
         mode = Mode::ANALYSE;
         set_start(start_pos, start_halfmove, start_fullmove);
+    }
+
+    // ------------------------------------------------- correspondence (#101)
+
+    // Picking the mode directly: a fresh board, like Analyse, whose start is the root.
+    void start_correspondence()
+    {
+        mode = Mode::CORRESPONDENCE;
+        set_start(start_pos, start_halfmove, start_fullmove);   // sets the root, see there
+    }
+
+    // "Analyse position in correspondence mode": the game stays, the position
+    // on the board becomes the root. In Correspondence it moves the root here.
+    void corr_enter()
+    {
+        mode = Mode::CORRESPONDENCE;
+        corr_set_root(tree.cursor_id());
+    }
+
+    // The root node, or the start once its node is gone (a deleted line, a new tree).
+    int corr_root_id() const
+    {
+        return corr_root>=0 && corr_root<tree.size() && tree.node(corr_root).alive ? corr_root : 0;
+    }
+
+    // The moves from the game's start to the root: the root engine sees the
+    // game's path, and with it the repetitions.
+    std::vector<std::string> corr_root_moves() const
+    {
+        std::vector<std::string> moves;
+        for(int k=corr_root_id(); k>0; k=tree.node(k).parent)
+        moves.push_back(tree.node(k).uci);
+        std::reverse(moves.begin(), moves.end());
+        return moves;
+    }
+
+    bool corr_at_root() const { return tree.cursor_id()==corr_root_id(); }
+
+    // Why "Save to root" cannot save now, or "" when it can: it saves the
+    // analysis on show, live or kept, if the current eval found it.
+    std::string corr_save_refusal() const
+    {
+        if(mode!=Mode::CORRESPONDENCE)
+        return "not in correspondence mode";
+        if(!analysis_valid || analysis.score_kind.empty())
+        return "no search result for this position yet";
+        if(analysis_older)
+        return "the result on show is from another eval";
+        if(analysis.score_kind!="cp" && analysis.score_kind!="mate")
+        return "the result on show has no score";
+        return "";
+    }
+
+    // "Save to root": the position on the board goes to the root's TT with the
+    // mark and the result on show (depth, score, its first move). A second
+    // save of a position replaces the first, its mark the higher of the two,
+    // as the engine keeps it (UCI_Table::import_marked()).
+    bool corr_save(std::string& error)
+    {
+        error = corr_save_refusal();
+        if(!error.empty())
+        return false;
+        Corr_Save save;
+        save.node = tree.cursor_id();
+        save.key = tree.current().key;
+        save.fen = tree.fen();
+        save.label = corr_label(save.node, corr_root_id());
+        save.mark = corr_mark;
+        save.depth = analysis.depth;
+        save.score_kind = analysis.score_kind;
+        save.score_value = std::atoll(analysis.score_value.c_str());
+        save.white = white_to_move();
+        if(!analysis_uci.empty())
+        {
+            save.move = analysis_uci[0];
+            save.move_san = analysis_san[0];
+        }
+        auto held = std::find_if(corr_saves.begin(), corr_saves.end(), [&](const Corr_Save& c) { return c.key==save.key; });
+        if(held!=corr_saves.end())
+        {
+            save.mark = std::max(save.mark, held->mark);
+            *held = save;
+        }
+        else
+        corr_saves.push_back(save);
+        corr_prelude.push_back(corr_ttmark(save));
+        corr_restart = true;
+        return true;
+    }
+
+    // "Return to root": the board goes back to the root; the root engine demotes
+    // every unmarked entry and gets every save again; the server starts a new
+    // Searcher, whose new game is given every save (corr_all_marks()).
+    void corr_return()
+    {
+        tree.go_to(corr_root_id());
+        clear_analysis();
+        corr_prelude.clear();
+        corr_prelude.push_back("ttdemote");
+        for(const std::string& line : corr_all_marks())
+        corr_prelude.push_back(line);
+        corr_restart = true;
+        analysis_on = true;
+    }
+
+    // The engine's "ttmark" for one save.
+    static std::string corr_ttmark(const Corr_Save& c)
+    {
+        std::string line = "ttmark mark " + std::to_string(c.mark) + " depth " + std::to_string(c.depth)
+                         + " score " + c.score_kind + " " + std::to_string(c.score_value);
+        if(!c.move.empty())
+        line += " move " + c.move;
+        return line + " fen " + c.fen;
+    }
+
+    std::vector<std::string> corr_all_marks() const
+    {
+        std::vector<std::string> lines;
+        for(const Corr_Save& c : corr_saves)
+        lines.push_back(corr_ttmark(c));
+        return lines;
+    }
+
+    // An answer of the root engine to a ttmark/ttdemote, the newest kept.
+    void corr_note(const std::string& note)
+    {
+        corr_notes.push_back(note);
+        if((int)corr_notes.size()>CORR_NOTES)
+        corr_notes.erase(corr_notes.begin());
     }
 
     // Plays a UCI move ("e2e4", "e7e8q", "e1g1" for castling) from wherever the
@@ -888,7 +1061,7 @@ class Session
     bool analysis_wanted() const
     {
         std::string reason, game;
-        bool standing = mode==Mode::ANALYSE || paused_now() || result(game)!=Outcome::ONGOING;
+        bool standing = analyse_like() || paused_now() || result(game)!=Outcome::ONGOING;
         return standing && analysis_on && !analysis_finished
             && engine_error.empty() && tree.outcome(reason)==Outcome::ONGOING;
     }
@@ -1033,6 +1206,8 @@ class Session
         live_valid = false;
         watch_pause();
         forget_analysis();
+        if(mode==Mode::CORRESPONDENCE)
+        corr_set_root(0);
         recall_analysis();
         reseed_clock(0);
         reseed_clock(1);
@@ -1104,7 +1279,7 @@ class Session
         return analysis_view();
         if((thinking() || watching()) && live_valid)
         return live_view();
-        if(mode==Mode::ANALYSE && analysis_valid)
+        if(analyse_like() && analysis_valid)
         return analysis_view();
         Eval_View move = move_view();
         if(move.from!=Eval_From::NONE)
@@ -1199,7 +1374,7 @@ class Session
         // Analyse mode lists every legal move with what the tables say of it.
         o.key("tbMoves").arr();
         std::vector<Tb_Move> tb_list;
-        if(mode==Mode::ANALYSE && tb_active() && tb_moves(pos, legal, n_legal, tb_limit, tb_list))
+        if(analyse_like() && tb_active() && tb_moves(pos, legal, n_legal, tb_limit, tb_list))
         {
             // With the DTM tables a result's moves are ranked by the mate, the
             // quickest win and the slowest loss first (#77); DTZ is what's left.
@@ -1316,6 +1491,8 @@ class Session
         o.key("error").str(engine_error);
         o.key("lines").num(analysis_lines);
         o.end_obj();
+
+        write_corr(o);
 
         // The one score and line the page draws, in every mode, always for the
         // position on the board and never for one it has left. "source" says
@@ -1915,6 +2092,121 @@ class Session
         o.end_arr();
     }
 
+    // A new root (#101): the saves were for the old one, and its engine starts
+    // a new game, which empties its TT.
+    void corr_set_root(int node)
+    {
+        corr_root = node;
+        corr_serial++;
+        corr_saves.clear();
+        corr_prelude.clear();
+        corr_restart = true;
+        corr_info_valid = false;
+        corr_finished = false;
+        corr_error.clear();
+        corr_notes.clear();
+    }
+
+    // The moves from node `from` to node `id` as a score sheet ("14...Nf6
+    // 15.Bg5"), the last CORR_LABEL_MOVES of them. A node not beyond `from` is
+    // counted from the start and says so.
+    static constexpr int CORR_LABEL_MOVES = 8;
+    std::string corr_label(int id, int from) const
+    {
+        std::vector<int> path;
+        int k = id;
+        for(; k>0 && k!=from; k=tree.node(k).parent)
+        path.push_back(k);
+        if(path.empty())
+        return id==from && from>0 ? "the root" : "the start";
+        std::reverse(path.begin(), path.end());
+        const bool cut = (int)path.size()>CORR_LABEL_MOVES;
+        if(cut)
+        path.erase(path.begin(), path.end()-CORR_LABEL_MOVES);
+        std::string label = k==from ? "" : "off the root: ";
+        if(cut)
+        label += "… ";
+        for(size_t i=0;i<path.size();i++)
+        {
+            const Tree_Node& n = tree.node(path[i]);
+            const bool white = tree.node(n.parent).pos.white_move;
+            const std::string number = std::to_string(tree.fullmove_of(n.parent));
+            if(white)
+            label += number + ".";
+            else if(i==0)
+            label += number + "...";
+            label += n.san + (i+1<path.size() ? " " : "");
+        }
+        return label;
+    }
+
+    // The correspondence panel's state (#101). Scores in white's view.
+    void write_corr(json::Out& o) const
+    {
+        o.key("corr").obj();
+        const int root = corr_root_id();
+        o.key("on").boolean(mode==Mode::CORRESPONDENCE);
+        o.key("root").num(root);
+        o.key("rootLabel").str(corr_label(root, 0));
+        o.key("atRoot").boolean(corr_at_root());
+        o.key("running").boolean(corr_running);
+        o.key("finished").boolean(corr_finished);
+        o.key("error").str(corr_error);
+        o.key("mark").num(corr_mark);
+        o.key("canSave").str(corr_save_refusal());
+        o.key("search");
+        if(corr_info_valid)
+        {
+            const Tree_Node& at = tree.node(root);
+            const bool white = at.pos.white_move;
+            o.obj();
+            o.key("depth").num(corr_info.depth);
+            o.key("nodes").num(corr_info.nodes);
+            o.key("nps").num(corr_info.nps);
+            o.key("time").num(corr_info.time_ms);
+            o.key("score");
+            if(corr_info.score_kind.empty())
+            o.null();
+            else
+            {
+                const long long v = std::atoll(corr_info.score_value.c_str());
+                o.obj().key("kind").str(corr_info.score_kind).key("value").num(white ? v : -v).end_obj();
+            }
+            Game walk;
+            walk.start(at.pos, at.halfmove_clock, tree.fullmove_of(root));
+            o.key("line").arr();
+            for(const std::string& move : corr_info.pv)
+            {
+                if(!walk.play(move))
+                break;
+                o.str(walk.san_moves.back());
+            }
+            o.end_arr();
+            o.end_obj();
+        }
+        else
+        o.null();
+        o.key("saves").arr();
+        for(const Corr_Save& c : corr_saves)
+        {
+            const bool here = c.node<tree.size() && tree.node(c.node).alive && tree.node(c.node).key==c.key;
+            o.obj();
+            o.key("node").num(here ? c.node : -1);
+            o.key("label").str(c.label);
+            o.key("mark").num(c.mark);
+            o.key("depth").num(c.depth);
+            o.key("score").obj().key("kind").str(c.score_kind).key("value").num(c.white ? c.score_value : -c.score_value).end_obj();
+            o.key("move").str(c.move_san);
+            o.end_obj();
+        }
+        o.end_arr();
+        o.key("notes").arr();
+        for(const std::string& note : corr_notes)
+        o.str(note);
+        o.end_arr();
+        o.end_obj();
+    }
+
     void set_start(const BB& pos, int halfmove, int fullmove)
     {
         serial++;
@@ -1932,6 +2224,8 @@ class Session
         forget_analysis();
         tree.start(start_pos, start_halfmove, start_fullmove);
         start_fen = tree.fen();
+        if(mode==Mode::CORRESPONDENCE)   // a new game's start is the new root (#101)
+        corr_set_root(0);
         recall_analysis();   // the PTT may know the new start position (#79)
         // Re-seeds the live clock from whichever mode's setting is current
         // (mode is already set by the time start_play()/start_watch() get

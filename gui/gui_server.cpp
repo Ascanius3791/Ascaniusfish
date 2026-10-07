@@ -38,7 +38,9 @@
 // sides (Pure watch, #91) or, in tournament mode, two, one per side, and plays
 // them against each other; when the last page watching a
 // session goes away its game is paused and its engines are let go, so a closed
-// tab never leaves two searches running for nobody.
+// tab never leaves two searches running for nobody. Correspondence mode (#101)
+// runs one more, the root engine, on a position of the user's choosing beside
+// the Analyse engine.
 #include "http_server.hpp"
 #include "session.hpp"
 
@@ -309,7 +311,10 @@ static void stop_tunnel()
 // so each search starts from the table the other side's just filled. Neither
 // is also the analysis engine. Each starts on the first search it is asked
 // for, so a session that never watches never forks the extra processes.
-enum { SLOT_SOLO = 0, SLOT_WHITE = 1, SLOT_BLACK = 2, N_SLOTS = 3 };
+// Correspondence mode (#101) adds SLOT_ROOT, the root engine, which searches
+// beside the solo one (the Searcher) rather than in turn with it, so it has a
+// token of its own and is not the session's one search (`active`).
+enum { SLOT_SOLO = 0, SLOT_WHITE = 1, SLOT_BLACK = 2, SLOT_ROOT = 3, N_SLOTS = 4 };
 
 static int watch_slot(const Session& session)
 {
@@ -321,9 +326,17 @@ struct Engine_Set
     std::unique_ptr<Engine_Link> links[N_SLOTS];
     int active = -1;                         // the slot whose search is running
     long long awaiting = 0;                  // its token; an aborted search's answer is dropped
-    int slot_game[N_SLOTS] = {-1, -1, -1};   // the game each slot last searched in
+    int slot_game[N_SLOTS] = {-1, -1, -1, -1};   // the game each slot last searched in (SLOT_ROOT: the root's corr_serial)
     long long alone_since = 0;               // when the last page left; 0 while one is watching
+    long long root_awaiting = 0;             // the root search's token (#101); 0 = none out
 };
+
+constexpr long long ENGINE_IDLE_MS = 5000;   // see release_idle_engines()
+
+static bool abandoned(const Engine_Set& set)
+{
+    return set.alone_since && now_ms()-set.alone_since>=ENGINE_IDLE_MS;
+}
 
 static std::map<std::string, std::unique_ptr<Engine_Set>> engines;
 
@@ -452,6 +465,9 @@ static bool maybe_start_search(Session& session)
     // Watch mode each process meets the game once, and in Analyse mode
     // moving around a game is not a reason to throw its table away.
     request.new_game = set.slot_game[slot]!=session.game_serial();
+    // A new Searcher (#101) holds every save to the root, with its mark.
+    if(kind==Search_Kind::ANALYSIS && session.mode==Mode::CORRESPONDENCE && request.new_game)
+    request.prelude = session.corr_all_marks();
     long long token = link_of(set, slot).start_search(request);
     if(!token)
     return false;
@@ -530,12 +546,106 @@ static void collect_search(Session& session)
     broadcast(session);
 }
 
+// ------------------------------------------------------ correspondence root (#101)
+//
+// The root engine runs "go infinite" on the root for as long as the session is
+// in Correspondence mode and a page is watching. A Save or a Return asks for a
+// restart (Session::corr_restart): the search is stopped, and once its bestmove
+// is in, a new one starts with the prelude (ttmark/ttdemote) in front. A new
+// root, or a new process, starts a new game holding every save instead.
+
+static void abort_root(Engine_Set& set, Session& session)
+{
+    if(set.root_awaiting && set.links[SLOT_ROOT])
+    set.links[SLOT_ROOT]->abort();
+    set.root_awaiting = 0;
+    session.corr_running = false;
+}
+
+static bool maybe_start_root(Session& session)
+{
+    Engine_Set& set = engines_of(session);
+    if(session.mode!=Mode::CORRESPONDENCE || abandoned(set))
+    {
+        if(set.root_awaiting)
+        abort_root(set, session);
+        return false;
+    }
+    if(set.root_awaiting)
+    {
+        if(!session.corr_restart)
+        return false;
+        abort_root(set, session);   // its bestmove comes back and is dropped; then the new one starts
+    }
+    if(!session.corr_restart && (session.corr_finished || !session.corr_error.empty()))
+    return false;
+    Engine_Link& link = link_of(set, SLOT_ROOT);
+    if(link.searching_now())
+    return false;
+    Search_Request request;
+    request.start_fen = session.root_fen();
+    request.moves = session.corr_root_moves();
+    request.limits = Go_Limits::analysis();
+    request.options = session.engine_options();
+    request.options.push_back({"MultiPV", "1"});
+    request.new_game = set.slot_game[SLOT_ROOT]!=session.corr_serial;
+    request.prelude = request.new_game ? session.corr_all_marks() : session.corr_prelude;
+    long long token = link.start_search(request);
+    if(!token)
+    return false;
+    set.slot_game[SLOT_ROOT] = session.corr_serial;
+    set.root_awaiting = token;
+    session.corr_prelude.clear();
+    session.corr_restart = false;
+    session.corr_running = true;
+    session.corr_finished = false;
+    session.corr_error.clear();
+    return true;
+}
+
+// The root search's iterations and answers, and its end. True when the page
+// has something new to show.
+static bool collect_root(Session& session)
+{
+    Engine_Set& set = engines_of(session);
+    if(!set.links[SLOT_ROOT])
+    return false;
+    Engine_Link& link = *set.links[SLOT_ROOT];
+    bool changed = false;
+    std::vector<std::string> notes;
+    if(link.take_notes(notes))
+    {
+        for(const std::string& note : notes)
+        session.corr_note(note);
+        changed = true;
+    }
+    Search_Info progress;
+    if(set.root_awaiting && link.take_progress(progress))
+    {
+        session.corr_info = progress;
+        session.corr_info_valid = true;
+        changed = true;
+    }
+    Search_Result result;
+    if(!link.take_result(result) || result.token!=set.root_awaiting)
+    return changed;
+    set.root_awaiting = 0;
+    session.corr_running = false;
+    if(!result.error.empty())
+    {
+        session.corr_error = result.error;
+        set.slot_game[SLOT_ROOT] = -1;   // a new process, which gets every save
+    }
+    else
+    session.corr_finished = true;    // out of depth: starting it again would only spin
+    return true;
+}
+
 // A closed tab must not leave engines thinking. Once no page has been on a
 // session's stream for this long, its self-play game is paused, its analysis
 // toggle goes off, and all its engine processes are let go; opening the page
-// again starts them back up. The grace period is what keeps a page reload —
-// which drops the stream for a moment — from counting as leaving.
-constexpr long long ENGINE_IDLE_MS = 5000;
+// again starts them back up. The grace period (ENGINE_IDLE_MS) is what keeps a
+// page reload — which drops the stream for a moment — from counting as leaving.
 
 // Which engines the session's mode can still use. An engine this says nothing
 // about is a process sitting on a transposition table for no one, so it goes:
@@ -546,6 +656,8 @@ static bool slot_wanted(const Session& session, int slot)
     if(session.mode==Mode::WATCH)      // the solo engine only to analyse a paused game
     return slot==SLOT_WHITE || (slot==SLOT_BLACK && !session.watch_pure)
         || (slot==SLOT_SOLO && session.analysis_on);
+    if(session.mode==Mode::CORRESPONDENCE)
+    return slot==SLOT_SOLO || slot==SLOT_ROOT;
     return slot==SLOT_SOLO;
 }
 
@@ -556,19 +668,20 @@ static void release_idle_engines(const std::string& id, Session& session)
     set.alone_since = 0;
     else if(!set.alone_since)
     set.alone_since = now_ms();
-    bool abandoned = set.alone_since && now_ms()-set.alone_since>=ENGINE_IDLE_MS;
+    const bool gone = abandoned(set);
 
     // Nobody is watching: stop whatever is thinking first. Its bestmove still
     // has to arrive before the worker is idle, so the processes themselves go
-    // on a later tick, through the loop below.
-    if(abandoned && (session.watch_running || session.watch_step || session.analysis_on || set.active>=0))
+    // on a later tick, through the loop below. The root search (#101) stops by
+    // itself (maybe_start_root()) and starts again when a page comes back.
+    if(gone && (session.watch_running || session.watch_step || session.analysis_on || set.active>=0))
     {
         session.analysis_on = false;
         abort_search(session);
         return;
     }
     for(int slot=0;slot<N_SLOTS;slot++)
-    if(set.links[slot] && (abandoned || !slot_wanted(session, slot)) && !set.links[slot]->searching_now())
+    if(set.links[slot] && (gone || !slot_wanted(session, slot)) && !set.links[slot]->searching_now())
     {
         set.links[slot].reset();     // ~Engine_Link joins its idle worker and quits the process
         set.slot_game[slot] = -1;    // a new process knows no game: it gets a "ucinewgame"
@@ -600,6 +713,9 @@ static void collect_all()
             collect_search(session);
             if(maybe_start_search(session))
             broadcast(session);   // a search that had to wait for the last one
+            bool root_news = collect_root(session);
+            if(maybe_start_root(session) || root_news)
+            broadcast(session);
         }
         ticking = ticking || session.clock_ticking();
         release_idle_engines(id, session);
@@ -961,7 +1077,7 @@ static Response handle_post_authed(const Request& req)
         if(given==body.end() || (given->second!="white" && given->second!="black" && given->second!="draw"))
         return Response::json(json::error("result must be white, black or draw"), 400);
         std::string reason;
-        if(session.mode==Mode::ANALYSE)
+        if(session.analyse_like())
         return Response::json(json::error("there is no game to adjudicate in Analyse mode"), 409);
         if(session.result(reason)!=Outcome::ONGOING)
         return Response::json(json::error("the game is already over"), 409);
@@ -974,7 +1090,7 @@ static Response handle_post_authed(const Request& req)
         auto mode = body.find("mode");
         Mode parsed;
         if(mode==body.end() || !mode_from_name(mode->second, parsed))
-        return Response::json(json::error("mode must be analyse, play or watch"), 400);
+        return Response::json(json::error("mode must be analyse, play, watch or correspondence"), 400);
         // "Analyse this game", after a Play or Watch game ends, wants the tree
         // kept; a plain click on the mode selector wants a fresh board, the
         // same as switching into Play always does.
@@ -985,6 +1101,8 @@ static Response handle_post_authed(const Request& req)
         session.start_play();
         else if(parsed==Mode::ANALYSE && !keep_game)
         session.start_analyse();
+        else if(parsed==Mode::CORRESPONDENCE)
+        session.start_correspondence();   // a fresh board whose start is the root; a FEN moves it
         else
         {
             session.mode = parsed;
@@ -1135,6 +1253,42 @@ static Response handle_post_authed(const Request& req)
             return Response::json(json::error("action must be start, pause or step"), 400);
         }
     }
+    else if(req.path=="/api/corr")
+    {
+        // Correspondence mode (#101). "mark" (1..CORR_MARK_MAX) sets the panel's
+        // mark, alone or with an action: enter (the position on the board
+        // becomes the root), save (Save to root) or return (Return to root).
+        auto mark = body.find("mark");
+        if(mark!=body.end())
+        {
+            int n = std::atoi(mark->second.c_str());
+            if(n<1 || n>CORR_MARK_MAX)
+            return Response::json(json::error("mark must be 1 to " + std::to_string(CORR_MARK_MAX)), 400);
+            session.corr_mark = n;
+        }
+        auto action = body.find("action");
+        if(action!=body.end())
+        {
+            if(action->second=="enter")
+            {
+                if(!session.analyse_like())
+                return Response::json(json::error("correspondence mode starts from Analyse"), 409);
+                session.corr_enter();
+            }
+            else if(session.mode!=Mode::CORRESPONDENCE)
+            return Response::json(json::error("not in correspondence mode"), 409);
+            else if(action->second=="save")
+            ok = session.corr_save(error);
+            else if(action->second=="return")
+            {
+                abort_search(session);
+                engines_of(session).slot_game[SLOT_SOLO] = -1;   // a new Searcher: a new game, every save in it
+                session.corr_return();
+            }
+            else
+            return Response::json(json::error("action must be enter, save or return"), 400);
+        }
+    }
     else if(req.path=="/api/flip")
     session.flipped = !session.flipped;
     else if(req.path=="/api/settings")
@@ -1282,6 +1436,7 @@ static Response handle_post_authed(const Request& req)
     // A move the human just made, or a fresh game the engine has white in:
     // ask for its reply before answering, so the page sees "thinking" at once.
     maybe_start_search(session);
+    maybe_start_root(session);                        // a Save or a Return restarts the root (#101)
     broadcast(session);                               // every other open page follows along
     return Response::json(session.state_json());
 }

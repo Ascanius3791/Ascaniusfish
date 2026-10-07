@@ -99,6 +99,9 @@ struct Search_Request
     // "route <moves>" lines for an analysis's path refresh (#100,
     // Session::transposition_routes()), sent after the position.
     std::vector<std::string> routes;
+    // Lines sent after "ucinewgame" and before "position": the correspondence
+    // mode's "ttmark"/"ttdemote" (#101), which change the engine's TT.
+    std::vector<std::string> prelude;
 };
 
 struct Search_Result
@@ -184,6 +187,18 @@ class Engine_Link
         return true;
     }
 
+    // The engine's answers to the prelude's "ttmark"/"ttdemote" (#101), as
+    // "ttmark stored, mark 3 depth 24", once each.
+    bool take_notes(std::vector<std::string>& out)
+    {
+        std::lock_guard<std::mutex> lock(m);
+        if(notes.empty())
+        return false;
+        out.swap(notes);
+        notes.clear();
+        return true;
+    }
+
     // The newest "info depth" line of the running search, once per new line.
     bool take_progress(Search_Info& out)
     {
@@ -203,6 +218,7 @@ class Engine_Link
     Search_Request pending;
     Search_Result result;
     Search_Info progress;
+    std::vector<std::string> notes;    // see take_notes()
     std::map<std::string, std::string> options_sent;   // what this process has been told; worker only
     long long next_token = 0, token = 0;
     long long progress_seq = 0, taken_progress = 0;
@@ -254,6 +270,8 @@ class Engine_Link
                 }
                 if(request.new_game)
                 send_locked("ucinewgame");
+                for(const std::string& line : request.prelude)
+                send_locked(line);
                 std::string position = "position fen " + request.start_fen;
                 if(!request.moves.empty())
                 position += " moves";
@@ -300,6 +318,12 @@ class Engine_Link
             Search_Info info;
             if(parse_provenance(line, prov))
             continue;
+            if(line.compare(0, 18, "info string ttmark")==0 || line.compare(0, 20, "info string ttdemote")==0)
+            {
+                std::lock_guard<std::mutex> lock(m);
+                notes.push_back(line.substr(12));
+                continue;
+            }
             if(parse_info(line, info))
             {
                 info.prov = prov;

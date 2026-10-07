@@ -26,6 +26,7 @@
     <button data-mode="analyse">Analyse</button>
     <button data-mode="play">Play</button>
     <button data-mode="watch">Watch</button>
+    <button data-mode="correspondence" title="One engine deepens a root position while you explore on another (#101)">Correspondence</button>
   </nav>
   <!-- How many pages are open on this server (#68), and how many came from
        elsewhere: the tunnel's shareable link, or the LAN. -->
@@ -294,6 +295,30 @@
       of your own — the side to move in it plays first.</p>
     </section>
 
+    <!-- Correspondence mode (#101): the root engine's search of the root, and
+         what the Searcher (the Engine panel below) has handed to it. -->
+    <section class="panel" id="corr-panel" hidden>
+      <h2>Root <span id="corr-root-label" class="corr-root-label"></span></h2>
+      <div class="analysis-head">
+        <span id="corr-state" class="note"></span>
+        <span id="corr-score" class="score"></span>
+      </div>
+      <p id="corr-stats" class="note"></p>
+      <p id="corr-line" class="corr-line"></p>
+      <div class="controls corr-controls">
+        <label class="corr-mark" title="The mark the next save gets. A higher mark outlives a lower one in the root's TT at any depth; only a proven mate outlives a mark.">
+          Mark <input id="corr-mark" type="number" min="1" max="32767" step="1">
+        </label>
+        <button id="corr-mark-up" type="button" title="Mark + 1">+1</button>
+        <button id="corr-save" type="button"
+                title="Put the position on the board into the root's TT, with the result shown in the Engine panel and the mark">Save to root</button>
+        <button id="corr-return" type="button"
+                title="Back to the root: its unmarked TT entries become move-ordering hints, and a new Searcher starts holding every save">Return to root</button>
+      </div>
+      <ol id="corr-saves" class="corr-saves"></ol>
+      <p id="corr-notes" class="note corr-notes"></p>
+    </section>
+
     <!-- What the engine thinks of the position on the board, in every mode: the
          score, the depth it reached and its best line. The on/off toggle is
          Analyse mode's own — Play and Watch search because it is someone's
@@ -333,6 +358,8 @@
       <!-- With more than one line: a row per line, its score first (#69). -->
       <div id="analysis-lines" class="mpv-lines" hidden></div>
       <div id="tb-moves" class="tb-moves" hidden></div>
+      <!-- Correspondence mode (#101): this position becomes the root. -->
+      <button id="corr-enter" class="corr-enter" type="button" hidden></button>
     </section>
 
     <!-- The plan term (#44): per piece the square it would most like to be on

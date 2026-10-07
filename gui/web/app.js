@@ -115,6 +115,11 @@ function halted(s) {
   return s.paused || s.outcome.state !== 'ongoing';
 }
 
+// Correspondence mode (#101) is Analyse on the board, plus the root's panel.
+function analyseLike(s) {
+  return s.mode === 'analyse' || s.mode === 'correspondence';
+}
+
 function matchPreset(baseMs, incMs) {
   return [...CLOCK_PRESETS, ...HYPERBULLET_PRESETS].find(p => p.baseMs === baseMs && p.incMs === incMs);
 }
@@ -849,17 +854,18 @@ function render(s) {
   el('pause').textContent = s.paused ? 'Resume' : 'Pause';
   el('resign').hidden = !playing;
   el('resign').disabled = over;
-  el('adjudicate').hidden = s.mode === 'analyse';
+  el('adjudicate').hidden = analyseLike(s);
   el('adjudicate').disabled = over;
-  if (over || s.mode === 'analyse') adjudicateOpen = false;
+  if (over || analyseLike(s)) adjudicateOpen = false;
   el('adjudicate').classList.toggle('active', adjudicateOpen);
   el('adjudicate-choices').hidden = !adjudicateOpen;
-  el('to-analyse').hidden = !over || s.mode === 'analyse';
+  el('to-analyse').hidden = !over || analyseLike(s);
 
   renderMaterial(s);
   renderClockVisibility(s);
   renderPlayPanel(s);
   renderWatchPanel(s);
+  renderCorrPanel(s);
   renderEngine(s);
   renderPlans(s);
   renderTerms(s);
@@ -1080,8 +1086,76 @@ function watchLine(s) {
 // it is what the move you are looking at was played on. `source` is 'none' for a
 // position no search has ever been at, and then the bar and the box say nothing
 // at all: an equal bar would be a claim, and a stale one a lie.
+// ------------------------------------------------------- correspondence (#101)
+
+// The root engine's search, the mark and the saves. The Engine panel below is
+// the Searcher, as in Analyse; its result is what Save to root hands over.
+function renderCorrPanel(s) {
+  const c = s.corr;
+  el('corr-panel').hidden = !c.on;
+  el('corr-enter').hidden = !analyseLike(s) || (c.on && c.atRoot);
+  el('corr-enter').textContent = c.on ? 'Make this position the root' : 'Analyse position in correspondence mode';
+  if (!c.on) return;
+
+  el('corr-root-label').textContent = c.rootLabel;
+  const search = c.search;
+  el('corr-panel').classList.toggle('running', c.running && !c.error);
+  el('corr-score').textContent = search && search.score ? scoreText(search.score) : '';
+  el('corr-state').textContent = c.error ? `Engine: ${c.error}`
+    : c.running ? 'Searching the root' : c.finished ? 'The root search has ended' : 'Starting…';
+  el('corr-state').classList.toggle('bad', !!c.error);
+  el('corr-stats').textContent = !search ? '' : [
+    `depth ${search.depth}`,
+    `${search.nodes.toLocaleString()} nodes`,
+    search.nps ? `${Math.round(search.nps / 1000).toLocaleString()} knps` : '',
+    `${Math.round(search.time / 1000)} s`,
+  ].filter(Boolean).join(' · ');
+  el('corr-line').textContent = search ? search.line.join(' ') : '';
+
+  if (document.activeElement !== el('corr-mark')) el('corr-mark').value = c.mark;
+  el('corr-save').disabled = c.canSave !== '';
+  el('corr-save').title = c.canSave
+    ? `Cannot save: ${c.canSave}`
+    : 'Put the position on the board into the root’s TT, with the result shown in the Engine panel and the mark';
+  el('corr-return').disabled = c.atRoot && !c.saves.length;
+
+  const list = el('corr-saves');
+  list.replaceChildren();
+  for (const save of c.saves) {
+    const item = document.createElement('li');
+    item.className = 'corr-save' + (save.node >= 0 ? ' linked' : '');
+    if (save.node >= 0) item.dataset.node = save.node;
+    const what = document.createElement('span');
+    what.className = 'corr-save-label';
+    what.textContent = save.label;
+    const result = document.createElement('span');
+    result.className = 'corr-save-result';
+    result.textContent = [`mark ${save.mark}`, `d${save.depth}`, scoreText(save.score), save.move]
+      .filter(Boolean).join(' · ');
+    item.append(what, result);
+    list.append(item);
+  }
+  el('corr-notes').textContent = c.notes.length ? c.notes[c.notes.length - 1] : '';
+  el('corr-notes').title = c.notes.join('\n');
+}
+
+function corrMark() {
+  const n = Math.round(Number(el('corr-mark').value));
+  return Number.isFinite(n) && n >= 1 ? Math.min(n, 32767) : 1;
+}
+
+el('corr-enter').addEventListener('click', () => command('/api/corr', { action: 'enter' }));
+el('corr-mark').addEventListener('change', () => command('/api/corr', { mark: corrMark() }));
+el('corr-mark-up').addEventListener('click', () => command('/api/corr', { mark: Math.min(corrMark() + 1, 32767) }));
+el('corr-save').addEventListener('click', () => command('/api/corr', { action: 'save', mark: corrMark() }));
+el('corr-return').addEventListener('click', () => { clearQueueSilently(); command('/api/corr', { action: 'return' }); });
+el('corr-saves').addEventListener('click', event => {
+  const item = event.target.closest('.corr-save.linked');
+  if (item) { clearQueueSilently(); command('/api/goto', { node: Number(item.dataset.node) }); }
+});
+
 function renderEngine(s) {
-  const analysing = s.mode === 'analyse';
+  const analysing = analyseLike(s);
   const a = s.analysis;
   const ev = s.eval;
   const known = ev.source !== 'none';
@@ -1099,7 +1173,7 @@ function renderEngine(s) {
   // whatever the gear says. In Play and Watch the panel is only the line box, so
   // with that switch off there is nothing for it to hold and the two modes look
   // exactly as they did before this existed.
-  const canToggle = analysing || (halted(s) && s.mode !== 'analyse');
+  const canToggle = analysing || halted(s);
   panel.hidden = !canToggle && !showLine;
   renderTbMoves(s);
   if (panel.hidden) { hidePreview(); shownLineKey = shownLinesKey = null; return; }
@@ -1163,10 +1237,10 @@ function engineStats(s) {
   const ev = s.eval;
   // Every mode shows the engine's error in its own panel; here it belongs to the
   // analysis, which has no other line to say it in.
-  if (a.error && s.mode === 'analyse') return `Engine: ${a.error}`;
+  if (a.error && analyseLike(s)) return `Engine: ${a.error}`;
   if (ev.source === 'none') {
     if (s.outcome.state !== 'ongoing') return 'The game is over — nothing to search.';
-    if (s.mode !== 'analyse') return 'No search of this position yet.';
+    if (!analyseLike(s)) return 'No search of this position yet.';
     return a.on ? 'Starting the search\u2026' : 'The engine is off.';
   }
   if (ev.source === 'tb') return tbSentence(ev.score);
@@ -1222,7 +1296,7 @@ const TB_LABEL = { 2: 'Win', 1: 'Cursed win', 0: 'Draw', '-1': 'Blessed loss', '
 // plays it, best first. Clicking one plays it.
 function renderTbMoves(s) {
   const box = el('tb-moves');
-  const moves = s.mode === 'analyse' ? s.tbMoves : [];
+  const moves = analyseLike(s) ? s.tbMoves : [];
   box.hidden = !moves.length;
   box.replaceChildren();
   for (const m of moves) {
