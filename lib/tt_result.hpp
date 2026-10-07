@@ -78,11 +78,17 @@ inline int16_t tt_mark(const TT_Result& r) { return r.mark; }
 inline void set_tt_mark(TT_Result& r, int16_t mark) { r.mark = mark; }
 #endif
 
-// An exact mate or table score (#78, #39): it holds at every depth, which is why
-// minimax() cuts on it at any depth. Works for both TT_Result layouts.
+// An exact mate or table score (#78, #39), or a mate claim: a bound saying the
+// side that mates does at least that well (a lower bound in white's band, an
+// upper bound in black's, #100). Either holds at every depth, which is why
+// minimax() cuts on it at any depth. A bound on the other side ("no faster
+// mate") is no proof: a pruned search only failed to find one. Works for both
+// TT_Result layouts.
 inline bool tt_proven(const TT_Result& r)
 {
-    return r.bound_type==0 && (r.eval<=INT_MIN+max_mating_seq || r.eval>=INT_MAX-max_mating_seq);
+    return (r.bound_type==0 && (r.eval<=INT_MIN+max_mating_seq || r.eval>=INT_MAX-max_mating_seq))
+        || (r.bound_type==-1 && r.eval>=INT_MAX-max_mating_seq)
+        || (r.bound_type==1 && r.eval<=INT_MIN+max_mating_seq);
 }
 
 #endif // TT_RESULT_HPP

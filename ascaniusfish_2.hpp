@@ -407,11 +407,13 @@ PV_Line minimax(const BB*const original ,BB* const wfh ,int depth = 0, const WEI
                 bool is_proven_mate = readout.pv_line.bound_type==0
                     && (readout.pv_line.eval <= INT_MIN + max_mating_seq
                         || readout.pv_line.eval >= INT_MAX - max_mating_seq);
-                if((depth<=readout.pv_line.depth || is_proven_mate) && (readout.pv_line.current_lenght>0 || ply!=effective_root_ply))//a move-less entry (null-move cutoff, mate/stalemate) cuts too, except at the root, which has to name a move (#76)
+                bool is_mate_claim = (readout.pv_line.bound_type==-1 && readout.pv_line.eval >= INT_MAX - max_mating_seq)
+                    || (readout.pv_line.bound_type==1 && readout.pv_line.eval <= INT_MIN + max_mating_seq);//"at least mate in n" for the side that mates: a proof like an exact mate, at every depth ("no faster mate" bounds are not, they keep their depth)
+                if((depth<=readout.pv_line.depth || is_proven_mate || is_mate_claim) && (readout.pv_line.current_lenght>0 || ply!=effective_root_ply))//a move-less entry (null-move cutoff, mate/stalemate) cuts too, except at the root, which has to name a move (#76)
                 {
                     if(readout.pv_line.bound_type==0)//exact
                     return readout.pv_line;
-                    else if(depth==readout.pv_line.depth || tt_deeper_cuts || (!tt_bounds_never_narrow && tt_narrowing>=2))//only on exact depth a bound can cut off, or on a deeper one with TTDeeperCuts (#93)
+                    else if(depth==readout.pv_line.depth || tt_deeper_cuts || is_mate_claim || (!tt_bounds_never_narrow && tt_narrowing>=2))//only on exact depth a bound can cut off, or on a deeper one with TTDeeperCuts (#93)
                     {
                         //a bound only cuts, it never narrows alpha and beta (#64): a node searched in a
                         //narrowed window returns bounds its parent reads as exact scores

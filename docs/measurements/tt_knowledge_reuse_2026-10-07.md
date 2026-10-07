@@ -357,3 +357,19 @@ mixed: jumps, a side line and revisits, 1.0 s per position
   m10    ply  0  no mate      +0.59    depth 16  engine -        refresh 0
 mixed: 4 of 7 steps showed a mate
 ```
+
+## Step 7: mate claims are proofs too
+
+`tt_proven()` (`lib/tt_result.hpp`) also counts a **mate claim**: a lower bound in white's mate
+band or an upper bound in black's ("the side that mates does at least that well"). An exact
+mate's proof is made of such bounds (every defending reply after the first comes back from a
+null window), so a claim is exactly as sound; null move, LMP and quiescence cannot make one
+(checked in `minimax()`). With Ascanius's approval the probe cuts on a claim at any depth
+(`is_mate_claim` in `minimax()`), and through `tt_proven()` `insert()` keeps a claim over an
+unproven entry and the path refresh leaves it alone. Bounds on the other side ("no faster mate")
+are no proof and keep their depth. Bench unchanged at 31041.
+
+Walks `off,on,fwd,mixed`: the same steps show a mate as in step 6 (off 3/4, on 3/4, fwd 14/14,
+mixed 4/7). The M7 key position took 3.7 s (off), 0.1 s (on) and 2.0 s (mixed), against 1.4,
+1.0 and 2.1 s in step 6: within the spread of 1 s searches, so the claims change nothing
+measurable here.

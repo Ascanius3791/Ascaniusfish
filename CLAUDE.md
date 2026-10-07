@@ -85,7 +85,7 @@ When editing engine internals, `lib/*.hpp` is the declaration/interface layer an
 
 ### Search
 `minimax()` in `ascaniusfish_2.hpp` is alpha-beta with:
-- Transposition table probing/storing via `lookup_table` (`lib/lookup_table.hpp`), keyed by `Zobrist::compute_Zobrist_Hash` (`lib/zobrist.hpp`) truncated to `exponent_for_size` bits, with bucketed replacement (`find_victim_index`) and bound-type-aware alpha/beta tightening. For one position `insert()` keeps the deeper entry, except that a proof (an exact mate or table score, `tt_proven()`) replaces an unproven entry however deep and only a deeper proof replaces it (#100's Patch A); a probe cuts on a proof at any depth.
+- Transposition table probing/storing via `lookup_table` (`lib/lookup_table.hpp`), keyed by `Zobrist::compute_Zobrist_Hash` (`lib/zobrist.hpp`) truncated to `exponent_for_size` bits, with bucketed replacement (`find_victim_index`) and bound-type-aware alpha/beta tightening. For one position `insert()` keeps the deeper entry, except that a proof (`tt_proven()`: an exact mate or table score, or a mate claim, a bound saying the side that mates does at least that well) replaces an unproven entry however deep and only a deeper proof replaces it (#100's Patch A); a probe cuts on a proof at any depth, and the path refresh never demotes one. A bound on the other side ("no faster mate") is no proof and keeps its depth.
 - Move ordering via `sorting_moves()`, which scores moves with `sorting_eval` and promotes the PV move from `PV_Line` to the front.
 - Dynamic per-move depth allocation via `assign_depth()` (`ascaniusfish.hpp`) — captures of more valuable pieces get `INT_MAX` (searched at full remaining depth), other moves get a fraction of `free_depth` weighted by `tactical_potential`.
 
