@@ -328,6 +328,77 @@ int UCI_Engine::refresh_routes()
     return demoted;
 }
 
+// "ttmark mark M depth D score cp N|mate N [move m] fen <fen>" (#101, the
+// correspondence mode's "Save to root"): the position gets an exact entry at
+// depth D with the user's mark M (UCI_Table::import_marked()). The score is in
+// the side to move's view as this engine prints it; cp ±TB_WIN_CP is a table
+// result again. Self-contained, so it leaves the "position" set alone.
+void UCI_Engine::handle_ttmark(const std::vector<std::string>& tokens)
+{
+    int mark = 0, depth = -1, value = 0;
+    std::string kind, move, fen;
+    for(size_t k=1;k<tokens.size();k++)
+    {
+        const bool more = k+1<tokens.size();
+        if(tokens[k]=="mark" && more) mark = std::atoi(tokens[++k].c_str());
+        else if(tokens[k]=="depth" && more) depth = std::atoi(tokens[++k].c_str());
+        else if(tokens[k]=="score" && k+2<tokens.size()) { kind = tokens[++k]; value = std::atoi(tokens[++k].c_str()); }
+        else if(tokens[k]=="move" && more) move = tokens[++k];
+        else if(tokens[k]=="fen")
+        {
+            for(k++; k<tokens.size(); k++)
+            fen += tokens[k] + " ";
+        }
+    }
+    BB pos;
+    if(depth<0 || (kind!="cp" && kind!="mate") || !uci_parse_fen(fen, pos))
+    {
+        send("info string ttmark: expected 'ttmark mark M depth D score cp|mate N [move m] fen <fen>'");
+        return;
+    }
+    mark = std::max(0, std::min((int)INT16_MAX, mark));
+    int eval;
+    if(kind=="cp")
+    eval = std::abs(value)>=TB_WIN_CP ? ((value>0)==pos.white_move ? TB_WIN_SCORE : TB_LOSS_SCORE)
+                                      : (pos.white_move ? value : -value);
+    else
+    {
+        // as uci_score(): the mover mates in N moves = 2N-1 plies, is mated in N = 2N
+        const int plies = value>0 ? 2*value-1 : -2*value;
+        eval = (value>0)==pos.white_move ? INT_MAX-plies : INT_MIN+plies;
+    }
+    TT_entry entry;
+    entry.initialized = true;
+    entry.zobrist_hash = pos.zobrist_hash;
+    entry.pv_line = PV_Line(eval);
+    if(!move.empty())
+    {
+        auto result = all_moves(&pos, pv_buf);
+        for(int i=0;i<std::get<0>(result);i++)
+        if(get_UCI(&pos, pv_buf+i)==move)
+        {
+            entry.pv_line = PV_Line(std::get<1>(result)[i], depth);
+            entry.pv_line.eval = eval;
+            break;
+        }
+    }
+    entry.pv_line.depth = depth;
+    entry.pv_line.bound_type = 0;
+    const bool stored = table->import_marked(entry, (int16_t)mark);
+    const TT_slot* slot = table->find_slot(pos.zobrist_hash);
+    send("info string ttmark " + std::string(stored ? "stored" : "not stored, its bucket holds only entries worth more")
+         + (slot ? ", mark " + std::to_string(tt_mark(slot->pv_line)) + " depth " + std::to_string(slot->pv_line.depth) : std::string()));
+}
+
+// "ttdemote" (#101, "Return to root"): every unmarked entry becomes a vacuous
+// bound that keeps its move (UCI_Table::demote_unmarked()).
+void UCI_Engine::handle_ttdemote()
+{
+    int marked = 0;
+    const int demoted = table->demote_unmarked(marked);
+    send("info string ttdemote " + std::to_string(demoted) + " entries demoted, " + std::to_string(marked) + " marked kept");
+}
+
 // What the scores of the coming search are found with (#79), sent as
 // "info string provenance ..." before its first "info depth": the eval version,
 // the weight set's version (#85), the net (its file hash, or off), how many
@@ -1133,6 +1204,16 @@ int UCI_Engine::loop()
             stop_search();
             if(tokens.size()>1)
             routes.emplace_back(tokens.begin()+1, tokens.end());
+        }
+        else if(cmd=="ttmark" || cmd=="ttdemote")
+        {
+            // the correspondence mode's TT commands (#101); the TT is the search's
+            stop_search();
+            ensure_table();
+            if(cmd=="ttmark")
+            handle_ttmark(tokens);
+            else
+            handle_ttdemote();
         }
         else if(cmd=="stop")
         stop_search();

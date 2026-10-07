@@ -22,8 +22,10 @@
 // the non-standard "go perft N" for checking move generation from any FEN,
 // the non-standard "hint depth D pv <moves>" (#79): a line found earlier for
 // the position just set, seeded into the TT before the next "go" (see seed_hint()),
-// and the non-standard "route <moves>" (#100): another route to a position on
-// the path, which an analysis search's path refresh refreshes too.
+// the non-standard "route <moves>" (#100): another route to a position on
+// the path, which an analysis search's path refresh refreshes too, and the
+// correspondence mode's (#101) "ttmark" (an entry with the user's mark) and
+// "ttdemote" (every unmarked entry becomes a move-ordering hint).
 // The search runs on its own thread so "stop"/"isready" are answered while
 // it thinks; see lib/search_control.hpp for how a search is aborted.
 
@@ -85,17 +87,91 @@ struct UCI_Table : lookup_table
         }
         entry.pv_line.depth = std::max(entry.pv_line.depth, s->pv_line.depth);
         entry.search_id = current_search_id;
+        set_tt_mark(entry.pv_line, tt_mark(s->pv_line));
         *s = TT_slot(entry);
+    }
+
+    // The correspondence mode (#101): the user's marks. A table that holds one
+    // ranks its victims by tier (value_for_victim_index()); one that never did
+    // is lookup_table, victim for victim.
+    bool marks_held = false;
+
+    void reset()
+    {
+        lookup_table::reset();
+        marks_held = false;
+    }
+
+    // "Save to root": `entry` goes in with `mark`. Where the position has an
+    // entry already, the result insert() would keep stays (the deeper, a proof
+    // over a score) and the higher mark of the two is the entry's. False if the
+    // bucket is full of entries worth more (higher marks, proofs).
+    bool import_marked(TT_entry entry, int16_t mark)
+    {
+        if(mark>0)
+        marks_held = true;
+        TT_slot* s = find_slot(entry.zobrist_hash);
+        if(!s)
+        {
+            set_tt_mark(entry.pv_line, mark);
+            insert(entry);
+            return find_slot(entry.zobrist_hash)!=nullptr;
+        }
+        const TT_Result& held = s->pv_line;
+        const bool proof = tt_proven(entry.pv_line), held_proof = tt_proven(held);
+        const bool take = (proof && !held_proof) || (entry.pv_line.depth>held.depth && (proof || !held_proof))
+                       || (entry.pv_line.depth==held.depth && entry.pv_line.bound_type==0 && held.bound_type!=0);
+        const int16_t keep = std::max(mark, tt_mark(held));
+        if(take)
+        {
+            entry.search_id = current_search_id;
+            *s = TT_slot(entry);
+        }
+        set_tt_mark(s->pv_line, keep);
+        return true;
+    }
+
+    // "Return to root": every unmarked entry becomes a move-ordering hint
+    // (demote()), the whole table over. Returns the entries demoted; `marked`
+    // gets how many marked ones there are.
+    int demote_unmarked(int& marked)
+    {
+        int demoted = 0;
+        marked = 0;
+        for(int i=0;i<size;i++)
+        for(int j=0;j<table[i].fill_count();j++)
+        {
+            if(tt_mark(table[i].slot[j].pv_line)>0)
+            marked++;
+            else
+            demoted += demote(table[i].slot[j]);
+        }
+        return demoted;
+    }
+
+    protected:
+    // With marks held: a proof first, then a mark (the higher first), then
+    // lookup_table's value (depth, less the age). Within a tier the deeper.
+    float value_for_victim_index(const TT_slot& slot) const override
+    {
+        if(!marks_held)
+        return lookup_table::value_for_victim_index(slot);
+        const TT_Result& r = slot.pv_line;
+        if(tt_proven(r))
+        return 1.2e7f + r.depth;
+        if(tt_mark(r)>0)
+        return 4e6f + 128.0f*tt_mark(r) + r.depth;
+        return lookup_table::value_for_victim_index(slot);
     }
 
     private:
     // A vacuous lower bound at depth 0 (eval INT_MIN), the move kept for the
     // ordering: it never cuts and gives way to anything the search stores, since
-    // insert() keeps a position's deeper entry. A proof stays, and so does a book
-    // entry. True if the entry was demoted.
+    // insert() keeps a position's deeper entry. A proof stays, and so do a book
+    // entry and a marked one (#101). True if the entry was demoted.
     static bool demote(TT_slot& slot)
     {
-        if(slot.is_from_opening_book)
+        if(slot.is_from_opening_book || tt_mark(slot.pv_line)>0)
         return false;
         TT_Result& r = slot.pv_line;
         const bool vacuous = r.depth==0 && r.bound_type==-1 && r.eval==INT_MIN;
@@ -212,6 +288,8 @@ class UCI_Engine
     // too. Dropped by the next "position", like the hint.
     std::vector<std::vector<std::string>> routes;
     int refresh_routes();
+    void handle_ttmark(const std::vector<std::string>& tokens);
+    void handle_ttdemote();
     std::string provenance() const;
 };
 

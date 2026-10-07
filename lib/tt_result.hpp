@@ -29,10 +29,12 @@ struct TT_Result
     int depth = 0;
     int8_t bound_type = 2;     // as PV_Line: 0 exact, -1 lower, 1 upper, 2 not set
     int8_t current_lenght = 0; // 1 with a best move, 0 without (null-move cutoff, mate, stalemate, book eval)
+    int16_t mark = 0;          // the user's mark (#101), 0 = not set by the user; in what was padding
     uint32_t move = 0;         // packed, see pack()
 
     TT_Result() = default;
     TT_Result(const PV_Line& line) { *this = line; }
+    // A search result, so the mark (which belongs to the position) stays.
     TT_Result& operator=(const PV_Line& line)
     {
         eval = line.eval;
@@ -62,6 +64,18 @@ struct TT_Result
         return Move(p & 63, (p>>6) & 63, (int)((p>>12) & 7) - 1, (p>>15) & 1, (p>>16) & 1);
     }
 };
+static_assert(sizeof(TT_Result)==16, "the mark lives in what was padding");
+#endif
+
+// The user's mark on an entry (#101, the correspondence mode): a marked entry
+// outlives deeper unmarked ones (UCI_Table::value_for_victim_index()). A whole
+// PV_Line (TT_FULL_PV) has no room for one, so there every entry is unmarked.
+#if TT_FULL_PV
+inline int16_t tt_mark(const TT_Result&) { return 0; }
+inline void set_tt_mark(TT_Result&, int16_t) {}
+#else
+inline int16_t tt_mark(const TT_Result& r) { return r.mark; }
+inline void set_tt_mark(TT_Result& r, int16_t mark) { r.mark = mark; }
 #endif
 
 // An exact mate or table score (#78, #39): it holds at every depth, which is why
