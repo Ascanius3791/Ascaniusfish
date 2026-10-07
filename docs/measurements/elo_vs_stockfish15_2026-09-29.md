@@ -39,6 +39,17 @@ likelihood interval 2013–2184). Both of Stockfish's two time losses were at 19
     optionsA="UCI_LimitStrength=true,UCI_Elo=2100" optionsB="UseNNE=true,NNEFile=$PWD/nets/nne_d6.bin"
 ```
 
+### The same at 60+0.6, the calibrated time control
+
+Two matches side by side against `UCI_Elo=2100` (8 games in parallel; the second on
+`tools/openings_ccrl.epd`), 15 min:
+
+| `UCI_Elo` | Games | Ascaniusfish W/D/L | Elo B−A (95% CI) | Implied rating |
+|---|---|---|---|---|
+| 2100 | 32 | 15 / 3 / 14 | +11 [−107, +131] | **~2110 (1990–2230)** |
+
+It agrees with the 20+0.2 estimate. No time losses on either side.
+
 ## Rerunning
 
 Stockfish 15 is built natively for Linux at `~/stockfish15/src/stockfish`, from the
