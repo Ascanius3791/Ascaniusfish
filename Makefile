@@ -36,10 +36,10 @@ GUI_BIND ?=
 GUI_TUNNEL ?=
 SYZYGY_PATH ?= $(HOME)/syzygy-nr
 SYZYGY_RANDOM ?=
-TOOL_TARGETS := tools/perft tools/bench tools/speed_compare tools/match tools/make_openings tools/make_ccrl_openings tools/make_endgames tools/gui_match tools/tt_stats tools/syzygy_reference tools/tb_suite tools/tb_trade_suite tools/nne_data tools/tune_data tools/tune tools/wdl_fit tools/tempo_swing tools/gaviota_reference tools/mate_suite tools/ptt_seed tools/watch_tt
+TOOL_TARGETS := tools/perft tools/bench tools/speed_compare tools/match tools/make_openings tools/make_ccrl_openings tools/make_endgames tools/gui_match tools/tt_stats tools/syzygy_reference tools/tb_suite tools/tb_trade_suite tools/nne_data tools/tune_data tools/tune tools/wdl_fit tools/tempo_swing tools/gaviota_reference tools/mate_suite tools/ptt_seed tools/watch_tt tools/walkback
 PROFILE_CXXFLAGS ?= -O2 -mpopcnt -g -pg -Wall -Wno-unknown-pragmas -Wno-parentheses -Wno-unused-variable
 
-.PHONY: all run play asm tests debug profile-startpos perft bench speed-compare match gui-match gui tt-stats tempo-swing syzygy-test gaviota-test nne-test nne-retrain tb-suite tb-trade-suite mate-suite ptt-seed clean rebuild
+.PHONY: all run play asm tests debug profile-startpos perft bench speed-compare match gui-match gui tt-stats tempo-swing syzygy-test gaviota-test nne-test nne-retrain tb-suite tb-trade-suite mate-suite ptt-seed walkback clean rebuild
 
 all: $(TARGET) $(UCI_TARGET)
 
@@ -228,6 +228,15 @@ tb-trade-suite: $(UCI_TARGET) tools/tb_trade_suite
 # a prebuilt chessground bundle, and the HTTP/SSE server is gui/http_server.hpp.
 GUI_TARGET := gui/ascaniusfish_gui
 GUI_HEADERS := gui/http_server.hpp gui/session.hpp gui/move_tree.hpp gui/json.hpp gui/engine_link.hpp gui/analysis_store.hpp gui/tablebase_view.hpp gui/ptt.hpp
+
+# Stepping back along the 3.Bc2+ study in Analyse mode (#100): time until each
+# parent shows its mate, engine off / on / on with forget (~25 min).
+tools/walkback: tools/walkback.cpp $(GUI_HEADERS) tools/game_rules.hpp tools/uci_engine.hpp $(HEADERS) $(SOURCES)
+	$(CXX) $(CXXFLAGS) -pthread -o $@ tools/walkback.cpp
+
+WALKBACK_ARGS ?=
+walkback: $(UCI_TARGET) tools/walkback
+	./tools/walkback $(WALKBACK_ARGS)
 
 $(GUI_TARGET): gui/gui_server.cpp $(GUI_HEADERS) tools/game_rules.hpp tools/uci_engine.hpp $(HEADERS) $(SOURCES) $(GTB_LIB)
 	$(CXX) $(CXXFLAGS) -pthread -o $@ gui/gui_server.cpp $(WITH_GTB)
