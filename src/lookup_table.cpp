@@ -112,7 +112,7 @@
                     if(bucket.holds(i, new_entry.zobrist_hash))//if they are equal
                     {
                         is_already_in_table=1;
-                        if(new_entry.pv_line.depth>old_entry.pv_line.depth)
+                        if((new_entry.pv_line.depth>old_entry.pv_line.depth && (tt_proven(new_entry.pv_line) || !tt_proven(old_entry.pv_line))) || (tt_proven(new_entry.pv_line) && !tt_proven(old_entry.pv_line)))//a proof holds at every depth: it replaces an unproven entry however deep, and only a deeper proof replaces it
                         {
                             old_entry=new_entry;
                         }
