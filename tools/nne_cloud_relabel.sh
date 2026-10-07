@@ -30,7 +30,9 @@ if [ "$(ls "$tables"/*.rtbw 2>/dev/null | wc -l)" -ne 145 ]; then
     echo "tables: $(ls "$tables"/*.rtbw | wc -l) files, $(du -sh "$tables" | cut -f1)"
 fi
 if ! command -v zstdcat >/dev/null; then
-    apt-get install -y zstd >/dev/null 2>&1 || sudo apt-get install -y zstd >/dev/null
+    # A fresh container may have no package lists yet.
+    { apt-get update -q && apt-get install -y zstd; } >/dev/null 2>&1 \
+        || { sudo apt-get update -q && sudo apt-get install -y zstd; } >/dev/null
 fi
 if [ ! -s "$fens" ]; then
     mkdir -p data
