@@ -42,7 +42,7 @@ make tt-stats DEPTH=5 GAMES=4   # TT discards later re-requested, by depth (only
 make gaviota-test # Gaviota DTM probe vs Lichess and vs its children (#77, needs ~/gaviota)
 make mate-suite   # 430 Lichess mate puzzles at 1 s each: hit rate per N, exact N (#78)
 make ptt-seed     # time to stored depth + 1, seeded with the stored line vs cold (#79, ~10 min)
-make walkback     # Analyse stepping back along the 3.Bc2+ study, 1 s per step: which parents show their mate (#100, ~2 min)
+make walkback     # Analyse stepping back along the 3.Bc2+ study, 1 s per step: which parents show their mate (#100, ~1 min)
 make gui          # build + run the browser GUI server (GUI_PORT=8173 to pick the port)
 make gui NARROW=1 # the same, driving ./ascaniusfish_uci_narrow (-DTT_BOUNDS_NEVER_NARROW=0, #65)
 make nne-retrain  # after an eval() change: relabel the NNE dataset, retrain, check (docs/NNE_RELABEL.md; FROM=<branch> takes a cloud session's labels)

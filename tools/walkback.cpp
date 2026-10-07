@@ -6,7 +6,7 @@
 // "forget at ..." and "go infinite", and every iteration goes through
 // Session::set_analysis(). No PTT (none is opened), no tablebases.
 //
-//   tools/walkback [engine=./ascaniusfish_uci] [walks=off,on,forget] [step_ms=1000] [key_ms=20000] [back_ms=1000] [back=11]
+//   tools/walkback [engine=./ascaniusfish_uci] [walks=off,on,forget] [step_ms=1000] [key_ms=10000] [back_ms=1000] [back=4]
 //
 // Two key positions are analysed until they show their mate (at most key_ms):
 // the M9 position at the end of the main line (5.Ke6 Nxd8+ 6.Kf5), then 5...Kg4
@@ -37,6 +37,7 @@ struct Step
     bool stored = false;      // that mate was a kept result, shown before the engine answered
     std::string score;        // what showed at the end
     int depth = 0;
+    bool late = false;        // a mate showed only in the stop's last iteration
     int forgot_positions = 0, forgot_entries = 0;
 };
 
@@ -106,6 +107,7 @@ static Step analyse(Engine& engine, Session& s, bool forget, long long run_ms, b
     {
         step.score = score_text(s.analysis);
         step.depth = s.analysis.depth;
+        step.late = step.mate_ms<0 && s.analysis.score_kind=="mate";
     }
     return step;
 }
@@ -113,7 +115,7 @@ static Step analyse(Engine& engine, Session& s, bool forget, long long run_ms, b
 static void print_step(const char* what, const Step& st, bool forget)
 {
     std::printf("  %-4s ply %2d  %-11s %-8s depth %2d%s", what, st.ply,
-                st.mate_ms<0 ? "no mate" : ("mate " + seconds(st.mate_ms)).c_str(),
+                st.mate_ms<0 ? (st.late ? "mate at stop" : "no mate") : ("mate " + seconds(st.mate_ms)).c_str(),
                 st.score.c_str(), st.depth, st.stored ? " (kept)" : "");
     if(forget)
     std::printf("  forgot %d positions, %d entries", st.forgot_positions, st.forgot_entries);
@@ -152,6 +154,12 @@ static bool walk(const std::string& engine_path, const std::string& name, long l
         std::cerr << error << "\n";
         return error.empty();
     };
+    auto key = [&]() {
+        Step st = analyse(engine, s, forget, key_ms, true);
+        print_step("key", st, forget);
+        if(st.mate_ms<0 && !st.late)
+        std::printf("  (no mate within key_ms: the steps back have nothing to build on)\n");
+    };
     std::printf("\n%s: the engine %s\n", name.c_str(),
                 engine_on ? ("on everywhere, " + seconds(step_ms) + " per position").c_str() : "off but at the key positions");
     for(int i=0;i<STUDY_PLIES;i++)
@@ -161,7 +169,7 @@ static bool walk(const std::string& engine_path, const std::string& name, long l
         if(!play(STUDY_LINE[i]))
         return false;
     }
-    print_step("key", analyse(engine, s, forget, key_ms, true), forget);
+    key();
     while((int)s.moves().size()>SIDE_FROM)
     {
         s.navigate(Nav::BACK, error);
@@ -175,7 +183,7 @@ static bool walk(const std::string& engine_path, const std::string& name, long l
         if(engine_on && i+1<SIDE_PLIES)
         print_step("side", analyse(engine, s, forget, step_ms, false), forget);
     }
-    print_step("key", analyse(engine, s, forget, key_ms, true), forget);
+    key();
 
     std::printf("%s: back, %s per step\n", name.c_str(), seconds(back_ms).c_str());
     int mates = 0;
@@ -196,8 +204,8 @@ int main(int argc, char** argv)
 {
     std::string engine_path = "./ascaniusfish_uci";
     std::string walks = "off,on,forget";
-    long long step_ms = 1000, key_ms = 20000, back_ms = 1000;
-    int back = SIDE_FROM+SIDE_PLIES;
+    long long step_ms = 1000, key_ms = 10000, back_ms = 1000;
+    int back = 4;   // plies 10-7: before ply 7 nothing shows a mate in seconds (4...Kg4)
     for(int i=1;i<argc;i++)
     {
         std::string arg = argv[i];
@@ -211,7 +219,7 @@ int main(int argc, char** argv)
         else if(key=="back") back = std::max(1, std::atoi(value.c_str()));
         else
         {
-            std::cerr << "usage: tools/walkback [engine=./ascaniusfish_uci] [walks=off,on,forget] [step_ms=1000] [key_ms=20000] [back_ms=1000] [back=11]\n";
+            std::cerr << "usage: tools/walkback [engine=./ascaniusfish_uci] [walks=off,on,forget] [step_ms=1000] [key_ms=10000] [back_ms=1000] [back=4]\n";
             return 2;
         }
     }
