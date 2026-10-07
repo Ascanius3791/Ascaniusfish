@@ -87,21 +87,22 @@ static void test_recall()
 // before: a depth that fell back to 1 on every step would be worse than useless.
 static void test_catching_up()
 {
-    std::printf("a shallower live search does not replace a deeper kept result\n");
+    std::printf("a live search is shown at once, a deeper kept result stays kept\n");
     Session session;
     session.analysis_on = true;
     session.set_analysis(iteration(9, 35, {"e2e4"}));
     play(session, "d2d4");
     navigate(session, Nav::BACK);
+    check(session.analysis_stored && session.analysis.depth==9, "coming back, the kept result shows");
 
     session.set_analysis(iteration(3, -10, {"b1c3"}));
-    check(session.analysis_stored, "at depth 3 the kept result is still the one shown");
-    check_eq(session.analysis.depth, 9, "the depth shown does not go backwards");
+    check(!session.analysis_stored, "the search's depth 3 replaces it on the page (#100: the rebuild shows)");
+    check_eq(std::atoll(session.analysis.score_value.c_str()), -10, "with its own score");
     check_eq(session.analysis_live_depth, 3, "how far the search has got is known");
 
-    session.set_analysis(iteration(9, -10, {"b1c3"}));
-    check(!session.analysis_stored, "reaching that depth, the search takes over");
-    check_eq(std::atoll(session.analysis.score_value.c_str()), -10, "with its own score");
+    play(session, "d2d4");
+    navigate(session, Nav::BACK);
+    check_eq(session.analysis.depth, 9, "the store still keeps the deeper result");
 
     session.set_analysis(iteration(11, -20, {"b1c3"}));
     play(session, "d2d4");
@@ -138,6 +139,24 @@ static void test_mates()
     store.put(key, iteration(9, -10, {"b1c3"}));
     Search_Info got;
     check(store.get(key, got) && got.score_value=="-10", "a fresh result of equal depth replaces the kept one");
+}
+
+// The engine's "route" lines (#100): another route in the tree to a position
+// on the cursor's path, only with the Transpositions switch on.
+static void test_routes()
+{
+    std::printf("the tree's other routes to the path, for the engine's refresh\n");
+    Session session;
+    for(const char* m : {"g1f3", "g8f6", "b1c3", "b8c6"})
+    play(session, m);
+    navigate(session, Nav::START);
+    for(const char* m : {"b1c3", "b8c6", "g1f3", "g8f6", "e2e4"})
+    play(session, m);
+    check(session.transposition_routes().empty(), "switched off, none");
+    session.routes_on = true;
+    const std::vector<std::string> routes = session.transposition_routes();
+    check(routes.size()==1 && routes[0]=="route g1f3 g8f6 b1c3 b8c6", "on, the other move order to the path's position",
+          routes.empty() ? "none" : routes[0]);
 }
 
 // The entries are positions, not moves: the same position reached another way
@@ -261,6 +280,7 @@ int main()
     test_nothing_stale();
     test_lines();
     test_mates();
+    test_routes();
 
     std::printf("\n%s\n", failures ? "FAIL" : "PASS");
     return failures ? 1 : 0;

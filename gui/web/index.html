@@ -315,6 +315,11 @@
                title="Use kept searches (PTT): play a stored move at once, seed searches with a stored line, show stored evals. Off: the engine finds everything itself; long searches are still stored.">
           <input type="checkbox" id="ptt-use-box"><span>PTT</span>
         </label>
+        <!-- Whether an analysis also refreshes the tree's other routes to this position (#100). -->
+        <label id="routes" class="ptt-use" hidden
+               title="Transpositions: before each analysis, also refresh the old results along every other route in the move tree to a position on this one, so what was found here shows there too. Only routes in the tree; counts from the next search.">
+          <input type="checkbox" id="routes-box"><span>Transp.</span>
+        </label>
         <span id="analysis-score" class="score"></span>
       </div>
       <p id="analysis-stats" class="note"></p>

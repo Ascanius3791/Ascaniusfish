@@ -204,6 +204,47 @@ class Session
     // so the engine can be watched finding everything itself.
     bool ptt_use = true;
 
+    // Whether an analysis also refreshes the other routes in the tree to a
+    // position on the cursor's path (#100, transposition_routes()). Off by
+    // default: the Engine panel's "Transpositions" checkbox, to try it out.
+    bool routes_on = false;
+
+    // Every other route in the tree to a position on the cursor's path, as the
+    // engine's "route <moves>" lines: a node off the path holding the same
+    // position as a node on it, the moves from the root to it. A transposition
+    // inside the tree only; one the engine finds by itself it cannot name. At
+    // most ROUTES_MAX, in the order the nodes were played.
+    static constexpr int ROUTES_MAX = 32;
+    std::vector<std::string> transposition_routes() const
+    {
+        std::vector<std::string> routes;
+        if(!routes_on)
+        return routes;
+        const std::vector<int> path = tree.path_ids();
+        std::vector<bool> on_path(tree.size(), false);
+        for(int id : path)
+        on_path[id] = true;
+        for(int id=1; id<tree.size() && (int)routes.size()<ROUTES_MAX; id++)
+        {
+            const Tree_Node& n = tree.node(id);
+            if(!n.alive || on_path[id])
+            continue;
+            bool meets = false;
+            for(int p : path)
+            if(tree.node(p).key==n.key) { meets = true; break; }
+            if(!meets)
+            continue;
+            std::vector<std::string> moves;
+            for(int k=id; k>0; k=tree.node(k).parent)
+            moves.push_back(tree.node(k).uci);
+            std::string route = "route";
+            for(auto m=moves.rbegin(); m!=moves.rend(); ++m)
+            route += " " + *m;
+            routes.push_back(route);
+        }
+        return routes;
+    }
+
     // The UCI options this session's engines should have. With the tables off
     // the path is the engine's own "empty" default, which is how it lets go.
     std::vector<std::pair<std::string, std::string>> engine_options() const
@@ -519,16 +560,16 @@ class Session
         analysis_store.clear();
     }
 
-    // Records one analysis iteration. A kept result deeper than the search has
-    // got stays up — the depth shown never goes backwards — and the search
-    // takes over as soon as it reaches that depth, or at once with a mate the
-    // kept one does not have (Analysis_Store::covers()).
+    // Records one analysis iteration. The live search takes over from a kept
+    // result at once, however much deeper that was, so the page shows the
+    // engine rebuilding what a path refresh demoted (#100); only a kept mate
+    // stays up until the search has one too.
     void set_analysis(const Search_Info& info)
     {
         analysis_live_depth = info.depth;
         if(info.more.empty())
         ptt_offer(info);
-        if(analysis_valid && analysis_stored && !analysis_older && Analysis_Store::covers(analysis, info))
+        if(analysis_valid && analysis_stored && !analysis_older && Analysis_Store::proven(analysis) && !Analysis_Store::proven(info))
         return;
         show_analysis(info);
         analysis_stored = false;
@@ -1303,6 +1344,7 @@ class Session
         o.key("narrowDeeper").boolean(narrow_deeper);
         o.key("pttAvailable").boolean(persistent_tt().on());
         o.key("pttUse").boolean(ptt_use);
+        o.key("routes").boolean(routes_on);
         o.end_obj();
 
         o.end_obj();

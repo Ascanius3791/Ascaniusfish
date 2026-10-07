@@ -623,6 +623,8 @@ el('mpv-more').addEventListener('click', () => {
 el('mpv-all').addEventListener('click', () => setLines(MPV_ALL));
 el('ptt-use-box').addEventListener('change', event =>
   command('/api/settings', { pttUse: event.target.checked }));
+el('routes-box').addEventListener('change', event =>
+  command('/api/settings', { routes: event.target.checked }));
 
 el('settings-toggle').addEventListener('click', () => openSettings(el('settings').hidden));
 el('share-toggle').addEventListener('click', () => openShare(el('share').hidden));
@@ -1140,6 +1142,8 @@ function renderEngine(s) {
   el('mpv-all').disabled = a.lines >= legal;
   el('ptt-use').hidden = !s.settings.pttAvailable;
   el('ptt-use-box').checked = s.settings.pttUse;
+  el('routes').hidden = !canToggle;
+  el('routes-box').checked = s.settings.routes;
   const multi = showLine && canToggle && wanted > 1 && (ev.source === 'live' || ev.source === 'stored'
     || (a.on && ev.source === 'none'));
   panel.classList.toggle('multi', multi);

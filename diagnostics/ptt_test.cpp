@@ -216,7 +216,7 @@ static void test_session(const std::string& path)
         clock.wtime_ms = 3600000;
         check(!s.ptt_move_now(clock, out), "not for a move of a one-hour game");
         s.set_analysis(iteration(10, 0, {"d2d4"}));
-        check(s.analysis_stored && s.eval_view().depth==16, "a shallower live search does not replace it");
+        check(!s.analysis_stored && s.eval_view().depth==10, "a live search replaces it on the page at once (#100)");
     }
     engine_build().eval_version = 2;   // the eval changed since
     {

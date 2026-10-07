@@ -446,6 +446,8 @@ static bool maybe_start_search(Session& session)
     // Any other current entry seeds the search with its line (PTT_SEED).
     if(kind==Search_Kind::ANALYSIS ? session.analysis_lines_now()==1 : true)
     request.hint = session.ptt_hint();
+    if(kind==Search_Kind::ANALYSIS)
+    request.routes = session.transposition_routes();
     // A "ucinewgame" only when this engine has not seen this game before: in
     // Watch mode each process meets the game once, and in Analyse mode
     // moving around a game is not a reason to throw its table away.
@@ -1228,6 +1230,15 @@ static Response handle_post_authed(const Request& req)
                 session.ptt_use = ptt_use->second=="true";
                 session.recall_kept();
             }
+        }
+        // Whether an analysis refreshes the tree's other routes too (#100), from
+        // the Engine panel. Counts from the next search on.
+        auto routes = body.find("routes");
+        if(routes!=body.end())
+        {
+            if(routes->second!="true" && routes->second!="false")
+            return Response::json(json::error("routes must be true or false"), 400);
+            session.routes_on = routes->second=="true";
         }
         // Narrowing on stored bounds (#65), only in an engine built with it.
         // Deeper is a step on top of narrow: it cannot be on alone, and turning

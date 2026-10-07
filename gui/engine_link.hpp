@@ -96,6 +96,9 @@ struct Search_Request
     // A stored line for this position (#79, gui/ptt.hpp), as the engine's
     // "hint depth D pv ..." command; empty = search cold.
     std::string hint;
+    // "route <moves>" lines for an analysis's path refresh (#100,
+    // Session::transposition_routes()), sent after the position.
+    std::vector<std::string> routes;
 };
 
 struct Search_Result
@@ -259,6 +262,8 @@ class Engine_Link
                 send_locked(position);
                 if(!request.hint.empty())
                 send_locked(request.hint);
+                for(const std::string& route : request.routes)
+                send_locked(route);
                 send_locked(request.limits.go_command());
                 go_sent = true;
                 if(abort_requested)   // aborted before the "go" was out: end it now
