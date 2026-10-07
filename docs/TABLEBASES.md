@@ -1,0 +1,16 @@
+<!-- OWNERSHIP=Claude -->
+# Tablebases
+
+Syzygy (WDL/DTZ, our own prober) and Gaviota (DTM, third-party). How the UCI engine uses them is in `docs/UCI.md`, how the GUI shows them in `docs/GUI.md` (`gui/tablebase_view.hpp`).
+
+## Syzygy
+`lib/syzygy.hpp` is our own prober (written from the file format, no Fathom) for 3-5 piece positions. API, all in namespace `Syzygy`: `init(dir)` maps every `*.rtbw`/`*.rtbz` file, `probe_wdl(pos, wdl)` gives the 5-valued WDL and `probe_dtz(pos, dtz, &rounded)` the DTZ in plies, both for the side to move and as if the halfmove clock were 0; they return false for castling rights, too many pieces or a missing table. WDL files leave captures as "don't care", so every probe searches the captures first (en passant included, it is not in the files); a DTZ file stores one side to move only, so the other side is a 1-ply search.
+
+The files are `mmap`'d and their headers are parsed **lazily**: `init()` costs ~6 ms and ~90 kB RSS, the first probe of a table ~1 ms, later ones 4 us (WDL) / 14 us (DTZ). An eager background read is possible if wanted. Numbers: `docs/measurements/syzygy_probe_2026-09-30.md`.
+
+The table set is `~/syzygy-nr` (default `SYZYGY_PATH`): the standard `.rtbw` files (symlinked from `~/syzygy`) plus the 3-4-5 **dtz-nr** ("no rounding") `.rtbz` files. The standard DTZ files store some distances in moves, so a probe can be one ply short; the nr files store plies and match all 1039 reference positions exactly. `make syzygy-test` checks the prober against `tools/syzygy_reference.txt` (Lichess-recorded, rebuilt with `tools/syzygy_reference`, needs curl) and against its own children on random positions (`SYZYGY_RANDOM=n` per table).
+
+## Gaviota DTM (#77)
+Syzygy has no distance to mate, so a won ≤5-piece root also reads the Gaviota tables (`~/gaviota`, 145 `*.gtb.cp4` files, 7.0 GB, from `tablebase.lichess.ovh/tables/standard/Gaviota/`). The prober is **third-party** C (`third_party/gaviota`, MIT; see `third_party/README.md`: vendored as published, no ownership markers, not edited here), built by the Makefile with gcc into `third_party/gaviota/libgtb.a` and linked only into the UCI engines and `diagnostics/gaviota_test` (`$(WITH_GTB)` = `-DWITH_GAVIOTA` + the library). `lib/gaviota.hpp` is our interface (`init(dir, cache_mb)`, `probe_dtm(pos, result, plies)`); without `-DWITH_GAVIOTA` it is stubs that find nothing, so every other tool still builds with the plain g++ line. The tables are read through the prober's own cache (`GaviotaTbCache`, 32 MB), not mmap'd.
+
+UCI `setoption name GaviotaTbPath value <dir>` loads them. `UCI_Engine::dtm_root()` (`src/uci.cpp`) answers a won or lost root before the Syzygy filter: the quickest mate (the longest resistance when lost), played at once and reported as `score mate N` with the whole line as the PV. With Syzygy loaded, a win is only played along moves that still win under the 50-move rule (`tb_classes()`), and a cursed win or blessed loss is left to the DTZ path; drawn roots never reach it. `make gaviota-test` checks the probe against Lichess's DTM (`tools/gaviota_reference.txt`, recorded by `tools/gaviota_reference`) and against its own children; `make tb-suite GAVIOTA=~/gaviota` also requires a shrinking `mate N` in every won game (`TB_SUITE_ARGS=opp_gaviota=on`: by exactly one).
