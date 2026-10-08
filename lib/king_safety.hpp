@@ -10,8 +10,10 @@
 // Two halves, both from the defending side's point of view:
 //
 // - Attack: enemy knights, bishops, rooks and queens whose attacks reach the
-//   king ring (the 3x3 block around the king, pushed off the edge). One piece
-//   there is harmless, so fewer than ks_min_attackers attackers score nothing.
+//   king ring (the 3x3 block around the king, pushed off the edge), plus one
+//   attacker per ring square an enemy pawn attacks and not two own pawns defend
+//   (#102). One piece there is harmless, so fewer than ks_min_attackers
+//   attackers score nothing.
 //   From two on, danger units add up (attacker weights, hits next to the king,
 //   weak ring squares, safe checks) and the penalty is danger^2 / ks_danger_div,
 //   so every piece that joins costs more than the one before.
@@ -27,7 +29,7 @@
 
 struct King_Safety_Detail
 {
-    int attackers;       // enemy N/B/R/Q whose attacks reach the ring
+    int attackers;       // enemy N/B/R/Q whose attacks reach the ring, + ring squares enemy pawns attack (#102)
     int danger_units;    // before the attacker gate and the square
     int attack_penalty;  // >= 0, what the attack half costs
     int shelter_penalty; // >= 0, what the shelter half costs (after material scaling)

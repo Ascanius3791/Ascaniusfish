@@ -11,6 +11,7 @@ struct KS_Maps
     uint64_t all[2] = {0, 0};     // [1] = white
     uint64_t twice[2] = {0, 0};   // attacked at least twice
     uint64_t by_type[2][6] = {};  // by piece index
+    uint64_t pawn_twice[2] = {0, 0};  // attacked by two of [c]'s own pawns
     int attackers[2] = {0, 0};    // on the ring of [c]'s king
     int weight[2] = {0, 0};       // their summed W.ks_attacker_weight
     int hits[2] = {0, 0};         // their attacks on squares next to [c]'s king
@@ -42,6 +43,7 @@ static void ks_attack_maps(const BB* const original, KS_Maps& m, const int ksq[2
         uint64_t left  = c ? (p & ~mask_column[0]) << 7 : (p & ~mask_column[0]) >> 9;
         uint64_t right = c ? (p & ~mask_column[7]) << 9 : (p & ~mask_column[7]) >> 7;
         m.by_type[c][0] = left | right;
+        m.pawn_twice[c] = left & right;
         ks_add(m, c, left);
         ks_add(m, c, right);
 
@@ -71,6 +73,11 @@ static void ks_attack_maps(const BB* const original, KS_Maps& m, const int ksq[2
         m.by_type[c][5] = K_template[ksq[c]];
         ks_add(m, c, K_template[ksq[c]]);
     }
+    // Pawns (#102): as in classical Stockfish, every ring square an enemy pawn attacks counts
+    // as one attacker, with no weight or hits of its own, except squares two of the king's own
+    // pawns defend (Stockfish takes those out of the whole ring; here only out of this count).
+    for(int d = 0; d < 2; d++)
+    m.attackers[d] += count(ring[d] & m.by_type[!d][0] & ~m.pawn_twice[d]);
 }
 
 // Attack penalty for side `d`'s king, once the maps are complete.

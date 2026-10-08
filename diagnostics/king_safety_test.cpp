@@ -1,6 +1,7 @@
 // OWNERSHIP=Claude
 // King safety (#42, lib/king_safety.hpp). Checks:
-//  1. attack: one piece at the king is no danger, a second one joining is;
+//  1. attack: one piece at the king is no danger, a second one joining is, and so is
+//     a pawn joining (#102) unless the ring square it hits two own pawns defend;
 //  2. shelter: intact cover < an advanced pawn < a missing pawn < an open file,
 //     and no cover penalty once the enemy has no pieces;
 //  3. colour symmetry: a colour-mirrored position (ranks flipped, colours and
@@ -97,6 +98,7 @@ static void attack_cases()
         {"6k1/5ppp/8/8/7q/8/5PPP/6K1 w - - 0 1", "lone queen at the castled king"},
         {"6k1/5ppp/8/8/6n1/8/5PPP/6K1 w - - 0 1", "lone knight at the castled king"},
         {"6k1/5ppp/8/8/8/8/5PPP/4r1K1 w - - 0 1", "lone rook on the back rank"},
+        {"6k1/5ppp/8/8/6np/8/5PPP/6K1 w - - 0 1", "knight + pawn h4 hitting only g3, which f2 and h2 defend"},
     };
     for(const Case& c : harmless)
     {
@@ -109,6 +111,13 @@ static void attack_cases()
     expect(qn.attackers == 2 && qn.attack_penalty >= 50,
            "queen + knight at the castled king: attackers " + std::to_string(qn.attackers)
            + ", penalty " + std::to_string(qn.attack_penalty) + " (want >= 50)");
+    // The queen on d8 does not reach the ring; it only keeps ks_no_queen out of it.
+    King_Safety_Detail n = detail("3q2k1/5ppp/8/8/6n1/8/5PPP/6K1 w - - 0 1", true);
+    King_Safety_Detail np = detail("3q2k1/5ppp/8/8/4p1n1/8/5PPP/6K1 w - - 0 1", true);
+    expect(n.attackers == 1 && n.attack_penalty == 0 && np.attackers == 2 && np.attack_penalty > 0,
+           "a pawn on e4 (hitting f3) joining the knight opens the gate: attackers " + std::to_string(n.attackers)
+           + " -> " + std::to_string(np.attackers) + ", penalty " + std::to_string(n.attack_penalty)
+           + " -> " + std::to_string(np.attack_penalty) + " (want 1 -> 2, 0 -> > 0)");
     King_Safety_Detail qnb = detail("6k1/5ppp/8/2b5/6nq/8/5PPP/6K1 w - - 0 1", true);
     expect(qnb.attackers == 3 && qnb.attack_penalty > qn.attack_penalty,
            "a bishop joining makes it worse: penalty " + std::to_string(qnb.attack_penalty));
