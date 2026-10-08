@@ -102,6 +102,10 @@ struct Search_Request
     // Lines sent after "ucinewgame" and before "position": the correspondence
     // mode's "ttmark"/"ttdemote" (#101), which change the engine's TT.
     std::vector<std::string> prelude;
+    // What a new game gets instead, when it turns out to be one (a fresh
+    // process): the Searcher keeps its TT across Returns (#100), and a new
+    // process must get every save, not just the generation's.
+    std::vector<std::string> prelude_new;
 };
 
 struct Search_Result
@@ -270,7 +274,7 @@ class Engine_Link
                 }
                 if(request.new_game)
                 send_locked("ucinewgame");
-                for(const std::string& line : request.prelude)
+                for(const std::string& line : request.new_game && !request.prelude_new.empty() ? request.prelude_new : request.prelude)
                 send_locked(line);
                 std::string position = "position fen " + request.start_fen;
                 if(!request.moves.empty())

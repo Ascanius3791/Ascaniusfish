@@ -306,15 +306,16 @@
       <p id="corr-stats" class="note"></p>
       <p id="corr-line" class="corr-line"></p>
       <div class="controls corr-controls">
-        <label class="corr-mark" title="The mark the next save gets. A higher mark outlives a lower one in the root's TT at any depth; only a proven mate outlives a mark.">
-          Mark <input id="corr-mark" type="number" min="1" max="32767" step="1">
-        </label>
-        <button id="corr-mark-up" type="button" title="Mark + 1">+1</button>
+        <span id="corr-generation" class="corr-generation"
+              title="Saves are marked with the generation: how many Returns brought saves, plus one. A newer mark replaces an older one at any depth; only a mate it does not shorten holds against it."></span>
         <button id="corr-save" type="button"
-                title="Put the position on the board into the root's TT, with the result shown in the Engine panel and the mark">Save to root</button>
+                title="Put the position on the board into the root's TT, with the result shown in the Engine panel, marked with the generation">Save to root</button>
         <button id="corr-return" type="button"
-                title="Back to the root: its unmarked TT entries become move-ordering hints, and a new Searcher starts holding every save">Return to root</button>
+                title="Back to the root. After new saves the next generation starts: the Searcher's unmarked entries become move-ordering hints, and it gets every save">Return to root</button>
+        <button id="corr-update" type="button"
+                title="Search every save that is no mate again at its depth, deepest first, each saved with a new generation's mark, so an older save above a newer one learns what the newer one knows">Full update</button>
       </div>
+      <p id="corr-warning" class="note corr-warning"></p>
       <ol id="corr-saves" class="corr-saves"></ol>
       <p id="corr-notes" class="note corr-notes"></p>
     </section>

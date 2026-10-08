@@ -143,8 +143,9 @@ struct Eval_View
 };
 
 // One "Save to root" of the correspondence mode (#101): a position the Searcher
-// looked at, the result shown there and the user's mark, as the root engine's
-// "ttmark" gets it. The score is the side to move's view, as UCI has it.
+// looked at, the result shown there and its mark (the generation it was saved
+// in, #100), as the root engine's "ttmark" gets it. The score is the side to
+// move's view, as UCI has it.
 struct Corr_Save
 {
     int node = 0;               // where it was saved, for clicking back to it
@@ -157,7 +158,28 @@ struct Corr_Save
     long long score_value = 0;
     bool white = true;          // the side to move, for showing the score in white's view
     std::string move, move_san; // the best move shown, "" for none
+    int ply = 0;                // the node's distance from the game's start: the full update goes deepest first
 };
+
+// A save as the TT holds it (UCI_Engine::handle_ttmark()): white's view, exact.
+// The GUI's list keeps a save by the engine's rule (tt_improves_marked()).
+inline TT_Result corr_tt_result(const Corr_Save& c)
+{
+    TT_Result r;
+    const long long v = c.score_value;
+    if(c.score_kind=="mate")
+    {
+        const int plies = v>0 ? (int)(2*v-1) : (int)(-2*v);
+        r.eval = (v>0)==c.white ? INT_MAX-plies : INT_MIN+plies;
+    }
+    else if(std::llabs(v)>=TB_WIN_CP)
+    r.eval = (v>0)==c.white ? TB_WIN_SCORE : TB_LOSS_SCORE;
+    else
+    r.eval = (int)(c.white ? v : -v);
+    r.depth = c.depth;
+    r.bound_type = 0;
+    return r;
+}
 
 constexpr int CORR_MARK_MAX = 32767;   // the mark is a short in the TT entry
 constexpr int CORR_NOTES = 6;          // the root engine's ttmark/ttdemote answers kept
@@ -343,15 +365,32 @@ class Session
     // Correspondence mode (#101). A root engine of its own (gui_server.cpp's
     // SLOT_ROOT) runs "go infinite" on the root, a node of the tree, while the
     // board and the Analyse engine (the Searcher) are free to look around.
-    // "Save to root" hands the result on show to the root's TT with the mark;
-    // "Return to root" demotes the root's unmarked entries and starts a fresh
-    // Searcher holding every save. The root engine's state is here, its
-    // process and token in the server's Engine_Set.
+    // "Save to root" hands the result on show to the root's TT, marked with the
+    // generation (#100): the number of Returns that brought saves, plus one. A
+    // save demotes the root engine's unmarked entries, which were found
+    // without it. "Return to root" after new saves starts the next generation:
+    // the Searcher, which keeps its TT, demotes its unmarked entries and gets
+    // every save. So every search in generation g holds every mark below g.
+    // The root engine's state is here, its process and token in the server's
+    // Engine_Set.
     int corr_root = 0;                      // node id; a dead one means the start
     int corr_serial = 0;                    // bumped with every new root: its engine starts a new game
-    int corr_mark = 1;                      // the panel's mark, 1..CORR_MARK_MAX
+    int corr_generation = 1;                // the mark the next save gets
+    bool corr_gen_saves = false;            // a save since the generation began
     std::vector<Corr_Save> corr_saves;
     std::vector<std::string> corr_prelude;  // what the root engine gets before its next "go"
+    std::vector<std::string> corr_searcher_prelude;   // what the Searcher gets before its next "go"
+    bool corr_searcher_fresh = false;       // the Searcher starts a new game (a new root, or marks left behind)
+    bool corr_searcher_marked = false;      // the Searcher's TT holds marks
+    std::string corr_warning;               // about the last save, until the next save or Return
+    // The full update (#100): every save that is no mate, deepest first,
+    // searched again at its depth and saved with a new generation's mark, so
+    // an older save above a newer one learns what the newer one knows.
+    bool corr_updating = false;
+    std::vector<Position_Key> corr_update_queue;
+    int corr_update_node = -1, corr_update_depth = 0;   // the step on the board
+    int corr_update_done = 0, corr_update_total = 0;
+    std::string corr_update_note;           // how the last full update ended
     bool corr_restart = false;              // the root search starts again (with the prelude)
     bool corr_running = false;              // a root search is out
     bool corr_finished = false;             // it ended by itself (out of depth, or a mate)
@@ -557,9 +596,11 @@ class Session
     }
 
     // "Save to root": the position on the board goes to the root's TT with the
-    // mark and the result on show (depth, score, its first move). A second
-    // save of a position replaces the first, its mark the higher of the two,
-    // as the engine keeps it (UCI_Table::import_marked()).
+    // generation's mark and the result on show (depth, score, its first move).
+    // A second save of a position replaces the first only where the engine's
+    // entry would take it (tt_improves_marked(), or a higher mark over no
+    // proof); its mark is the higher of the two either way. The root engine
+    // first demotes its unmarked entries: they were found without this save.
     bool corr_save(std::string& error)
     {
         error = corr_save_refusal();
@@ -570,12 +611,14 @@ class Session
         save.key = tree.current().key;
         save.fen = tree.fen();
         save.label = corr_label(save.node, corr_root_id());
-        save.mark = corr_mark;
+        save.mark = std::min(corr_generation, CORR_MARK_MAX);
         save.depth = analysis.depth;
         save.score_kind = analysis.score_kind;
         save.score_value = std::atoll(analysis.score_value.c_str());
+        for(int k=save.node; k>0; k=tree.node(k).parent)
+        save.ply++;
         // An exact mate in the root's TT is a proof: it cuts at any depth and
-        // nothing but a deeper proof replaces it. One the engine did not confirm
+        // nothing but a shorter mate replaces it. One the engine did not confirm
         // goes in as the largest score short of the tables' instead (#100).
         if(save.score_kind=="mate" && !analysis.mate_confirmed)
         {
@@ -588,32 +631,173 @@ class Session
             save.move = analysis_uci[0];
             save.move_san = analysis_san[0];
         }
+        corr_warning.clear();
         auto held = std::find_if(corr_saves.begin(), corr_saves.end(), [&](const Corr_Save& c) { return c.key==save.key; });
         if(held!=corr_saves.end())
         {
-            save.mark = std::max(save.mark, held->mark);
-            *held = save;
+            const TT_Result now = corr_tt_result(save), was = corr_tt_result(*held);
+            const bool take = tt_improves_marked(now, was) || (save.mark>held->mark && !tt_proven(was));
+            const int mark = std::max(save.mark, held->mark);
+            if(take)
+            {
+                if(save.depth<held->depth && !tt_proven(now))
+                corr_warning = "Saved at depth " + std::to_string(save.depth) + " over the held depth "
+                             + std::to_string(held->depth) + ": a newer mark replaces at any depth.";
+                *held = save;
+            }
+            else
+            corr_warning = tt_proven(was) ? "Kept the held save: it is a mate this one does not shorten."
+                                          : "Kept the held save: this one is neither deeper nor of a newer generation.";
+            held->mark = mark;
         }
         else
         corr_saves.push_back(save);
+        if(corr_warning.empty())
+        corr_warning = corr_older_above(save);
+        corr_prelude.push_back("ttdemote");
         corr_prelude.push_back(corr_ttmark(save));
         corr_restart = true;
+        corr_gen_saves = true;
         return true;
     }
 
-    // "Return to root": the board goes back to the root; the root engine demotes
-    // every unmarked entry and gets every save again; the server starts a new
-    // Searcher, whose new game is given every save (corr_all_marks()).
+    // The gap (#100): an older save above this one, no mate, was found
+    // without what this one knows, and cuts before the search reaches it.
+    // Names the nearest such save, or "".
+    std::string corr_older_above(const Corr_Save& save) const
+    {
+        for(int k=tree.node(save.node).parent; k>0; k=tree.node(k).parent)
+        for(const Corr_Save& c : corr_saves)
+        if(c.node==k && tree.node(k).key==c.key && c.mark<save.mark && !tt_proven(corr_tt_result(c)))
+        return "The older save " + c.label + " (mark " + std::to_string(c.mark) + ") lies above this one and was found "
+               "without it; it cuts before the search gets here. Full update searches every save again, deepest first.";
+        return "";
+    }
+
+    // "Return to root": the board goes back to the root. After new saves the
+    // next generation starts (corr_next_generation()); without any, both
+    // engines keep what they have, since nothing they hold is out of date.
     void corr_return()
     {
+        corr_update_stop("Return to root");
         tree.go_to(corr_root_id());
         clear_analysis();
-        corr_prelude.clear();
-        corr_prelude.push_back("ttdemote");
-        for(const std::string& line : corr_all_marks())
-        corr_prelude.push_back(line);
-        corr_restart = true;
         analysis_on = true;
+        corr_warning.clear();
+        if(corr_gen_saves)
+        corr_next_generation();
+    }
+
+    // The Searcher keeps its TT: its unmarked entries, found without this
+    // generation's saves, become move-ordering hints (mates stay), and it gets
+    // every save. The root engine has them already.
+    void corr_next_generation()
+    {
+        corr_generation = std::min(corr_generation+1, CORR_MARK_MAX);
+        corr_gen_saves = false;
+        corr_searcher_prelude.clear();
+        corr_searcher_prelude.push_back("ttdemote");
+        for(const std::string& line : corr_all_marks())
+        corr_searcher_prelude.push_back(line);
+    }
+
+    // ---------------------------------------------- the full update (#100)
+
+    // Starts it: a new generation, so every step's save outranks what it
+    // replaces, and the Searcher demotes what it found before. False, with
+    // the reason, when there is nothing to search again.
+    bool corr_update_start(std::string& error)
+    {
+        std::vector<const Corr_Save*> steps;
+        for(const Corr_Save& c : corr_saves)
+        if(corr_save_here(c) && !tt_proven(corr_tt_result(c)))
+        steps.push_back(&c);
+        if(steps.empty())
+        {
+            error = "no save to search again (mates hold as they are, and a save whose move was deleted has no board)";
+            return false;
+        }
+        std::stable_sort(steps.begin(), steps.end(), [](const Corr_Save* a, const Corr_Save* b) { return a->ply>b->ply; });
+        corr_next_generation();
+        if(corr_searcher_prelude.empty())
+        corr_searcher_prelude.push_back("ttdemote");
+        corr_update_queue.clear();
+        for(const Corr_Save* c : steps)
+        corr_update_queue.push_back(c->key);
+        corr_updating = true;
+        corr_update_done = 0;
+        corr_update_total = (int)steps.size();
+        corr_update_note.clear();
+        corr_warning.clear();
+        corr_update_next();
+        return true;
+    }
+
+    // The next step: its position on the board, searched to the save's depth
+    // (the server's maybe_start_search()). After the last, Return to root.
+    void corr_update_next()
+    {
+        while(!corr_update_queue.empty())
+        {
+            const Position_Key key = corr_update_queue.front();
+            corr_update_queue.erase(corr_update_queue.begin());
+            auto c = std::find_if(corr_saves.begin(), corr_saves.end(), [&](const Corr_Save& x) { return x.key==key; });
+            if(c==corr_saves.end() || !corr_save_here(*c))
+            continue;
+            corr_update_node = c->node;
+            corr_update_depth = c->depth;
+            tree.go_to(c->node);
+            clear_analysis();
+            analysis_on = true;
+            return;
+        }
+        corr_updating = false;
+        corr_update_node = -1;
+        corr_update_note = "Full update done: " + std::to_string(corr_update_done) + " of "
+                         + std::to_string(corr_update_total) + " saves searched again.";
+        corr_return();
+    }
+
+    // The step's search has ended: its result is saved, and the Searcher
+    // gets it too, so the saves above it see it.
+    void corr_update_step_done()
+    {
+        if(!corr_updating)
+        return;
+        std::string error;
+        if(tree.cursor_id()!=corr_update_node || !corr_save(error))
+        {
+            corr_update_stop(error.empty() ? "the board moved" : error);
+            return;
+        }
+        auto c = std::find_if(corr_saves.begin(), corr_saves.end(), [&](const Corr_Save& x) { return x.key==tree.current().key; });
+        corr_searcher_prelude.push_back(corr_ttmark(*c));
+        corr_warning.clear();   // an older save above is what the next steps are for
+        corr_update_done++;
+        corr_update_next();
+    }
+
+    void corr_update_stop(const std::string& why)
+    {
+        if(!corr_updating)
+        return;
+        corr_updating = false;
+        corr_update_queue.clear();
+        corr_update_node = -1;
+        corr_update_note = "Full update stopped after " + std::to_string(corr_update_done) + " of "
+                         + std::to_string(corr_update_total) + ": " + why + ".";
+    }
+
+    // The update's step on the board, searched to this depth; 0 for none.
+    int corr_update_limit() const
+    {
+        return corr_updating && tree.cursor_id()==corr_update_node ? corr_update_depth : 0;
+    }
+
+    // Whether a save's node is still in the tree, holding its position.
+    bool corr_save_here(const Corr_Save& c) const
+    {
+        return c.node<tree.size() && tree.node(c.node).alive && tree.node(c.node).key==c.key;
     }
 
     // The engine's "ttmark" for one save.
@@ -658,6 +842,7 @@ class Session
             error = "illegal move: " + uci;
             return false;
         }
+        corr_update_stop("the board moved");
         clear_analysis();
         return true;
     }
@@ -670,6 +855,7 @@ class Session
             error = "there is nowhere to go from here";
             return false;
         }
+        corr_update_stop("the board moved");
         clear_analysis();
         return true;
     }
@@ -683,6 +869,7 @@ class Session
             error = "that move is not in the game any more";
             return false;
         }
+        corr_update_stop("the board moved");
         clear_analysis();
         return true;
     }
@@ -2104,8 +2291,15 @@ class Session
     // a new game, which empties its TT.
     void corr_set_root(int node)
     {
+        corr_update_stop("a new root");
         corr_root = node;
         corr_serial++;
+        corr_generation = 1;
+        corr_gen_saves = false;
+        corr_searcher_prelude.clear();
+        corr_searcher_fresh = corr_searcher_fresh || corr_searcher_marked;
+        corr_warning.clear();
+        corr_update_note.clear();
         corr_saves.clear();
         corr_prelude.clear();
         corr_restart = true;
@@ -2160,8 +2354,17 @@ class Session
         o.key("running").boolean(corr_running);
         o.key("finished").boolean(corr_finished);
         o.key("error").str(corr_error);
-        o.key("mark").num(corr_mark);
+        o.key("generation").num(corr_generation);
+        o.key("newSaves").boolean(corr_gen_saves);
         o.key("canSave").str(corr_save_refusal());
+        o.key("warning").str(corr_warning);
+        o.key("update").obj();
+        o.key("on").boolean(corr_updating);
+        o.key("done").num(corr_update_done);
+        o.key("total").num(corr_update_total);
+        o.key("depth").num(corr_update_depth);
+        o.key("note").str(corr_update_note);
+        o.end_obj();
         o.key("search");
         if(corr_info_valid)
         {
@@ -2197,7 +2400,7 @@ class Session
         o.key("saves").arr();
         for(const Corr_Save& c : corr_saves)
         {
-            const bool here = c.node<tree.size() && tree.node(c.node).alive && tree.node(c.node).key==c.key;
+            const bool here = corr_save_here(c);
             o.obj();
             o.key("node").num(here ? c.node : -1);
             o.key("label").str(c.label);

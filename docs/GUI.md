@@ -275,14 +275,28 @@ aborts every search and quits the engines rather than orphaning them.
 start), with the game's path to it. The Engine panel's "Analyse position in correspondence mode"
 makes the position on the board the root and keeps the game; picking the mode directly starts a
 fresh board whose start is the root, and a FEN, PGN or reset moves it there. The Analyse engine is
-the **Searcher**. `POST /api/corr` takes `mark` (1–32767, the panel's field and +1) and `action`:
-`enter`; `save` puts the position on the board into the root's TT with the mark and the analysis
-result on show (depth, score, first move; not an older eval's) as the engine's `ttmark` (a mate
-only if the engine confirmed it, `Search_Info::mate_confirmed`, since an exact mate there is a
-proof; an unconfirmed one goes in as ±9999 cp, #100), and the
-GUI keeps the list (`corr_saves`, one per position, the higher mark); `return` sends the cursor to
-the root, the root engine `ttdemote` plus every save, and starts a new Searcher (`ucinewgame` plus
-every save, `Search_Request::prelude`). The root is restarted for each, since the TT is the
-search's (`maybe_start_root()`/`collect_root()` in `gui_server.cpp`); the engine's `info string
+the **Searcher**. `POST /api/corr` takes `action`: `enter`; `save` puts the position on the board
+into the root's TT, marked with the **generation** (`corr_generation`: the Returns that brought
+saves, plus one, #100), with the analysis result on show (depth, score, first move; not an older
+eval's) as the engine's `ttmark` (a mate only if the engine confirmed it,
+`Search_Info::mate_confirmed`, since an exact mate there is a proof; an unconfirmed one goes in as
+±9999 cp), after a `ttdemote`, since the root engine's unmarked entries were found without it. The
+GUI keeps the list (`corr_saves`, one per position) by the engine's rule (`corr_tt_result()`,
+`tt_improves_marked()`): a second save replaces the first if it is a shorter mate, a deeper exact
+result, or of a newer generation over no mate, and the mark is the higher either way. The panel
+warns when a save replaces a deeper one, when it is kept out, and when an older save that is no
+mate lies above it on its path (`corr_older_above()`): that one was found without it and cuts
+before the search gets there. `return` sends the cursor to the root; after new saves the next
+generation starts (`corr_next_generation()`): the Searcher, which keeps its TT, gets `ttdemote` and
+every save before its next search (`corr_searcher_prelude`; a fresh process gets every save,
+`Search_Request::prelude_new`), so every search in generation g holds every mark below g. A Return
+without new saves changes nothing in either engine. A new root starts the Searcher over
+(`corr_searcher_fresh`), as does leaving the mode with marks in it. `update` is the **full update**:
+the next generation, then every save that is no mate and still on the board, deepest first, is
+searched again to its depth (`corr_update_limit()`, a `go depth`) and saved, the Searcher getting
+each one, and a Return at the end; moving the board, Return or `stop-update` stops it. Every
+analysis is sent `UCI_AnalyseMode`, so the engine sets a marked root's own result aside at any
+limit (`docs/UCI.md`). The root is restarted for each save, since the TT is the search's
+(`maybe_start_root()`/`collect_root()` in `gui_server.cpp`); the engine's `info string
 ttmark…`/`ttdemote…` answers show at the panel's foot. The root search stops when the mode is left
 or no page watches, and its results are not offered to the PTT.

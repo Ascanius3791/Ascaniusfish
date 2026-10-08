@@ -184,6 +184,54 @@ static void test_corr_save_mates()
           && session.corr_saves.back().score_value==4, "as the mate, replacing the first save");
 }
 
+// The generation is the mark (#100): a save gets it, the list keeps a save by
+// the engine's rule, a Return after new saves starts the next generation and
+// queues the Searcher's ttdemote and saves, a Return without any does nothing,
+// and an older save above a newer one is warned about.
+static void test_corr_generations()
+{
+    std::printf("saves are marked with the generation\n");
+    Session session;
+    session.mode = Mode::CORRESPONDENCE;
+    session.analysis_on = true;
+    std::string error;
+    auto save_here = [&](int depth, int cp) {
+        session.set_analysis(iteration(depth, cp, {session.white_to_move() ? "a2a3" : "a7a6"}));
+        return session.corr_save(error);
+    };
+    play(session, "e2e4");
+    check(save_here(20, 30), "a save at depth 20", error);
+    check_eq(session.corr_saves.back().mark, 1, "generation 1 marks 1");
+    check(session.corr_prelude.size()==2 && session.corr_prelude[0]=="ttdemote", "the root engine demotes first");
+    check(save_here(15, 40), "a shallower save, same generation", error);
+    check_eq(session.corr_saves.back().depth, 20, "the list keeps depth 20");
+    check(!session.corr_warning.empty(), "and says so", session.corr_warning);
+
+    session.corr_return();
+    check_eq(session.corr_generation, 2, "Return after a save: generation 2");
+    check(session.corr_searcher_prelude.size()==2 && session.corr_searcher_prelude[0]=="ttdemote",
+          "the Searcher gets ttdemote and the save");
+    session.corr_searcher_prelude.clear();
+    session.corr_return();
+    check(session.corr_generation==2 && session.corr_searcher_prelude.empty(), "Return without saves: nothing");
+
+    play(session, "e2e4");
+    play(session, "e7e5");
+    check(save_here(10, 5), "a newer save below the older one", error);
+    check(session.corr_warning.find("older save")!=std::string::npos, "warns of the older save above", session.corr_warning);
+    navigate(session, Nav::BACK);
+    check(save_here(12, 50), "the older position again, generation 2, shallower", error);
+    check(session.corr_saves[0].depth==12 && session.corr_saves[0].mark==2, "taken: a newer mark at any depth");
+    check(session.corr_warning.find("over the held depth")!=std::string::npos, "with a warning", session.corr_warning);
+
+    check(session.corr_update_start(error), "full update starts", error);
+    check(session.corr_generation==3 && session.corr_update_total==2 && session.corr_update_node==session.corr_saves[1].node,
+          "generation 3, two steps, the deepest first");
+    check_eq(session.corr_update_limit(), 10, "on the board, to its depth");
+    navigate(session, Nav::BACK);
+    check(!session.corr_updating && session.corr_update_note.find("stopped")!=std::string::npos, "moving the board stops it", session.corr_update_note);
+}
+
 // The entries are positions, not moves: the same position reached another way
 // has the same analysis, and a position never looked at has none.
 static void test_positions_not_nodes()
@@ -307,6 +355,7 @@ int main()
     test_mates();
     test_routes();
     test_corr_save_mates();
+    test_corr_generations();
 
     std::printf("\n%s\n", failures ? "FAIL" : "PASS");
     return failures ? 1 : 0;

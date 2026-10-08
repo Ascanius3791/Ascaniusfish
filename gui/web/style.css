@@ -550,8 +550,10 @@ select:focus, input:focus { outline: none; border-color: var(--accent); }
   overflow-wrap: anywhere;
 }
 .corr-controls { align-items: center; flex-wrap: wrap; }
-.corr-mark { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; color: var(--muted); }
-.corr-mark input { width: 6ch; }
+.corr-generation { font-size: 13px; color: var(--muted); }
+.corr-warning { margin: 6px 0 0; font-size: 12px; }
+.corr-warning:empty { display: none; }
+.corr-warning.bad { color: var(--bad); }
 .corr-saves { margin: 8px 0 0; padding-left: 1.6em; font-size: 12px; max-height: 9em; overflow-y: auto; }
 .corr-save { margin: 2px 0; }
 .corr-save.linked { cursor: pointer; }

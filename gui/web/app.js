@@ -1088,7 +1088,7 @@ function watchLine(s) {
 // at all: an equal bar would be a claim, and a stale one a lie.
 // ------------------------------------------------------- correspondence (#101)
 
-// The root engine's search, the mark and the saves. The Engine panel below is
+// The root engine's search, the generation and the saves. The Engine panel below is
 // the Searcher, as in Analyse; its result is what Save to root hands over.
 function renderCorrPanel(s) {
   const c = s.corr;
@@ -1112,12 +1112,18 @@ function renderCorrPanel(s) {
   ].filter(Boolean).join(' · ');
   el('corr-line').textContent = search ? search.line.join(' ') : '';
 
-  if (document.activeElement !== el('corr-mark')) el('corr-mark').value = c.mark;
-  el('corr-save').disabled = c.canSave !== '';
+  const u = c.update;
+  el('corr-generation').textContent = `Generation ${c.generation}`;
+  el('corr-save').disabled = c.canSave !== '' || u.on;
   el('corr-save').title = c.canSave
     ? `Cannot save: ${c.canSave}`
-    : 'Put the position on the board into the root’s TT, with the result shown in the Engine panel and the mark';
-  el('corr-return').disabled = c.atRoot && !c.saves.length;
+    : 'Put the position on the board into the root’s TT, with the result shown in the Engine panel, marked with the generation';
+  el('corr-return').disabled = c.atRoot && !c.newSaves && !u.on;
+  el('corr-update').disabled = !u.on && !c.saves.length;
+  el('corr-update').textContent = u.on ? 'Stop update' : 'Full update';
+  el('corr-warning').textContent = u.on ? `Full update: ${u.done + 1} of ${u.total}, to depth ${u.depth}`
+    : c.warning || u.note;
+  el('corr-warning').classList.toggle('bad', !u.on && !!c.warning);
 
   const list = el('corr-saves');
   list.replaceChildren();
@@ -1139,15 +1145,12 @@ function renderCorrPanel(s) {
   el('corr-notes').title = c.notes.join('\n');
 }
 
-function corrMark() {
-  const n = Math.round(Number(el('corr-mark').value));
-  return Number.isFinite(n) && n >= 1 ? Math.min(n, 32767) : 1;
-}
-
 el('corr-enter').addEventListener('click', () => command('/api/corr', { action: 'enter' }));
-el('corr-mark').addEventListener('change', () => command('/api/corr', { mark: corrMark() }));
-el('corr-mark-up').addEventListener('click', () => command('/api/corr', { mark: Math.min(corrMark() + 1, 32767) }));
-el('corr-save').addEventListener('click', () => command('/api/corr', { action: 'save', mark: corrMark() }));
+el('corr-save').addEventListener('click', () => command('/api/corr', { action: 'save' }));
+el('corr-update').addEventListener('click', () => {
+  clearQueueSilently();
+  command('/api/corr', { action: state && state.corr.update.on ? 'stop-update' : 'update' });
+});
 el('corr-return').addEventListener('click', () => { clearQueueSilently(); command('/api/corr', { action: 'return' }); });
 el('corr-saves').addEventListener('click', event => {
   const item = event.target.closest('.corr-save.linked');

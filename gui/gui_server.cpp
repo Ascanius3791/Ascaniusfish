@@ -455,7 +455,16 @@ static bool maybe_start_search(Session& session)
     // a process.
     request.options.push_back({"MultiPV", std::to_string(kind==Search_Kind::ANALYSIS ? session.analysis_lines : 1)});
     request.lines = kind==Search_Kind::ANALYSIS ? session.analysis_lines_now() : 1;
+    // A full update's step (#100) searches to its save's depth.
+    if(kind==Search_Kind::ANALYSIS && session.corr_update_limit()>0)
+    {
+        limits.infinite = false;
+        limits.depth = session.corr_update_limit();
+    }
     request.limits = limits;
+    // An analysis is one at any limit (the path refresh and a marked root's
+    // set-aside, #100); named every time, since Play and Analyse share a process.
+    request.options.push_back({"UCI_AnalyseMode", kind==Search_Kind::ANALYSIS ? "true" : "false"});
     // Any other current entry seeds the search with its line (PTT_SEED).
     if(kind==Search_Kind::ANALYSIS ? session.analysis_lines_now()==1 : true)
     request.hint = session.ptt_hint();
@@ -465,9 +474,23 @@ static bool maybe_start_search(Session& session)
     // Watch mode each process meets the game once, and in Analyse mode
     // moving around a game is not a reason to throw its table away.
     request.new_game = set.slot_game[slot]!=session.game_serial();
-    // A new Searcher (#101) holds every save to the root, with its mark.
-    if(kind==Search_Kind::ANALYSIS && session.mode==Mode::CORRESPONDENCE && request.new_game)
-    request.prelude = session.corr_all_marks();
+    // The Searcher (#101) keeps its TT across Returns (#100) and starts over
+    // for a new root, or once it holds marks outside the mode. A new one holds
+    // every save to the root; one going on gets what the generation brought.
+    const bool corr = session.mode==Mode::CORRESPONDENCE;
+    if(slot==SLOT_SOLO && (session.corr_searcher_fresh || (!corr && session.corr_searcher_marked)))
+    {
+        request.new_game = true;
+        session.corr_searcher_fresh = false;
+        session.corr_searcher_marked = false;
+    }
+    if(kind==Search_Kind::ANALYSIS && corr)
+    {
+        request.prelude_new = session.corr_all_marks();
+        request.prelude = request.new_game ? request.prelude_new : session.corr_searcher_prelude;
+        session.corr_searcher_prelude.clear();
+        session.corr_searcher_marked = session.corr_searcher_marked || !session.corr_saves.empty();
+    }
     long long token = link_of(set, slot).start_search(request);
     if(!token)
     return false;
@@ -538,6 +561,7 @@ static void collect_search(Session& session)
         // depth. Its last line stays on the page; starting the same search
         // again would only spin, so the position is left as analysed.
         session.analysis_finished = true;
+        session.corr_update_step_done();   // a full update's step (#100): saved, then the next
         broadcast(session);
         return;
     }
@@ -1259,17 +1283,9 @@ static Response handle_post_authed(const Request& req)
     }
     else if(req.path=="/api/corr")
     {
-        // Correspondence mode (#101). "mark" (1..CORR_MARK_MAX) sets the panel's
-        // mark, alone or with an action: enter (the position on the board
-        // becomes the root), save (Save to root) or return (Return to root).
-        auto mark = body.find("mark");
-        if(mark!=body.end())
-        {
-            int n = std::atoi(mark->second.c_str());
-            if(n<1 || n>CORR_MARK_MAX)
-            return Response::json(json::error("mark must be 1 to " + std::to_string(CORR_MARK_MAX)), 400);
-            session.corr_mark = n;
-        }
+        // Correspondence mode (#101): enter (the position on the board becomes
+        // the root), save (Save to root, marked with the generation, #100),
+        // return (Return to root), update (the full update) or stop-update.
         auto action = body.find("action");
         if(action!=body.end())
         {
@@ -1285,12 +1301,18 @@ static Response handle_post_authed(const Request& req)
             ok = session.corr_save(error);
             else if(action->second=="return")
             {
-                abort_search(session);
-                engines_of(session).slot_game[SLOT_SOLO] = -1;   // a new Searcher: a new game, every save in it
+                abort_search(session);   // the Searcher starts again with its prelude
                 session.corr_return();
             }
+            else if(action->second=="update")
+            {
+                abort_search(session);
+                ok = session.corr_update_start(error);
+            }
+            else if(action->second=="stop-update")
+            session.corr_update_stop("stopped");
             else
-            return Response::json(json::error("action must be enter, save or return"), 400);
+            return Response::json(json::error("action must be enter, save, return, update or stop-update"), 400);
         }
     }
     else if(req.path=="/api/flip")
