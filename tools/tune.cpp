@@ -5,7 +5,7 @@
 //                [jobs=6] [lambda=1e-9] [k=0] [tag=ccrl4040-3000-balanced]
 //                [method=gn] [iters=20] [mu=1e-3] [tol=1e-7] [check=0]   (Levenberg-Marquardt)
 //                [method=adam] [epochs=1500] [lr=2]                      (Adam)
-//                [gauge=pin|pin104|free] [se=1] [compare=<set>]
+//                [gauge=pin|pin104|free] [se=1] [compare=<set>] [spectrum=<file>]
 //
 // Reads #86's train/valid/test.tsv (fen and result columns only) and minimises the
 // mean of (sigma(eval/K) - r)^2 over train, eval = basic_eval() (static, net off) in
@@ -40,7 +40,7 @@
 // gauge=pin also holds the three directions the means leave exact or near-exact (#106,
 // regauge_degenerate(), docs/measurements/tune_pin3_2026-10-08.md): the endgame passed bonus
 // on the 7th against the pawn table, the knight's defend count against its mobility and
-// tables, and the ks_shelter constant against material (exact but for promotions). With them
+// tables, and the ks_shelter constant against material (exact since #107). With them
 // lambda=0 has finite SEs for every piece value; gauge=pin104 is the gauge without them.
 //
 // Two methods (#104), both keeping the step with the lowest valid loss of the model.
@@ -72,8 +72,10 @@
 // A weight is flagged "lambda" when its SE* shrinks by more than 1.5 with 10 lambda: the
 // prior gives it more than about 1/7 of its precision. "no-data": no position touches it.
 // If A is singular (lambda=0), the SEs take the smallest ridge (from 1e-15 * the largest
-// diagonal, x10) that lets Cholesky through; the report names the weakest direction
-// (inverse iteration) either way. They are written as '# se' lines after the report.
+// diagonal, x10) that lets Cholesky through. The report names the 40 weakest directions
+// either way (#107: A's eigenvalues, each with the SE sqrt(sigma^2/(n eigenvalue)) of the
+// weights' combination along it); spectrum=<file> writes all of them. The SEs are written as
+// '# se' lines after the report, with how often each weight fires in train.
 // compare=<set> (rewritten into the gauge too) counts the differences between that set
 // and the new one beyond 2 SE*.
 // Memory: one n_tuned^2 double matrix per thread (~9 MB each) and three more.
@@ -125,11 +127,13 @@ struct Options
     std::string compare;                // a set whose differences to the new one are judged by the SEs
     bool pin = true;                    // gauge=pin: table means and mobility constants in the piece values
     bool pin3 = true;                   // gauge=pin (not pin104): and the three degenerate directions (#106)
+    std::string spectrum;               // se=1: every eigenvalue of A and its direction, to this file
 };
 
 // ---- the parameters: every number of a weight set, flat, in weight_fields() order
 
 static const int MAX_PARAMS = 4096;
+static const int WEAK_DIRECTIONS = 40;  // the report names this many of the weakest directions
 static const uint32_t PARAM_MASK = MAX_PARAMS-1;   // a linear feature word's parameter bits
 static int n_params = 0;
 static std::string param_name[MAX_PARAMS];
@@ -204,11 +208,11 @@ static bool on_table(int piece, int sq) { return piece!=0 || (sq>=8 && sq<56); }
 //    has the same identity, but the held opening pawn value (the unit) already breaks it
 //    (SE 9.9 cp at lambda 0 with only the #104 pins): pinning it too would cost a real dof.
 //  - ks_shelter[2] (a king behind its home pawn) ~ 0. The shelter penalty is scaled by the
-//    enemy's phase material M = N+B+2R+4Q (capped at ks_full_piece_material = 12, the whole
-//    army: only promotions pass it), each of 3 files carrying one entry, so a constant d on
+//    enemy's phase material M = N+B+2R+4Q over ks_full_piece_material = 12 (the whole army;
+//    no cap since #107, a promotion takes it past 1), each of 3 files carrying one entry, so a constant d on
 //    the entries is 3d*M/12 = d*M/4 per king: d/4 on a knight and a bishop, d/2 on a rook, d
 //    on a queen, in both phases. d is ks_shelter[2] rounded to a multiple of 4, so those are
-//    integers. Exact but for that cap and the penalty's truncation.
+//    integers. Exact but for the penalty's truncation.
 // The rewrite is applied before the means, so both constraints hold after it.
 static bool PIN_DEGENERATE = true;
 static const int GAUGE_KS_SHELTER = 2;
@@ -703,6 +707,141 @@ static std::vector<double> cholesky_inverse(const std::vector<double>& U, int m)
     return S;
 }
 
+// The eigenvalues (ascending) and eigenvectors (row k of V for d[k]) of the symmetric m x m
+// matrix whose upper triangle A holds: Householder to tridiagonal form, then implicit QL
+// (JAMA's tred2 and tql2). O(m^3), a few seconds at m = 1000.
+static void symmetric_eigen(const std::vector<double>& A, int m, std::vector<double>& d, std::vector<double>& V)
+{
+    const int n = m;
+    std::vector<double> Z((size_t)n*n), e(n);
+    auto z = [&](int i, int j) -> double& { return Z[(size_t)i*n+j]; };
+    for(int i=0;i<n;i++) for(int j=0;j<n;j++) z(i, j) = i<=j ? A[(size_t)i*n+j] : A[(size_t)j*n+i];
+    d.assign(n, 0);
+    for(int j=0;j<n;j++) d[j] = z(n-1, j);
+    for(int i=n-1;i>0;i--)
+    {
+        double scale = 0, h = 0;
+        for(int k=0;k<i;k++) scale += std::fabs(d[k]);
+        if(scale==0)
+        {
+            e[i] = d[i-1];
+            for(int j=0;j<i;j++) { d[j] = z(i-1, j); z(i, j) = 0; z(j, i) = 0; }
+        }
+        else
+        {
+            for(int k=0;k<i;k++) { d[k] /= scale; h += d[k]*d[k]; }
+            double f = d[i-1], g = std::sqrt(h);
+            if(f>0) g = -g;
+            e[i] = scale*g;
+            h -= f*g;
+            d[i-1] = f-g;
+            for(int j=0;j<i;j++) e[j] = 0;
+            for(int j=0;j<i;j++)
+            {
+                f = d[j];
+                z(j, i) = f;
+                g = e[j] + z(j, j)*f;
+                for(int k=j+1;k<=i-1;k++) { g += z(k, j)*d[k]; e[k] += z(k, j)*f; }
+                e[j] = g;
+            }
+            f = 0;
+            for(int j=0;j<i;j++) { e[j] /= h; f += e[j]*d[j]; }
+            const double hh = f/(h+h);
+            for(int j=0;j<i;j++) e[j] -= hh*d[j];
+            for(int j=0;j<i;j++)
+            {
+                f = d[j]; g = e[j];
+                for(int k=j;k<=i-1;k++) z(k, j) -= f*e[k] + g*d[k];
+                d[j] = z(i-1, j);
+                z(i, j) = 0;
+            }
+        }
+        d[i] = h;
+    }
+    for(int i=0;i<n-1;i++)
+    {
+        z(n-1, i) = z(i, i);
+        z(i, i) = 1;
+        const double h = d[i+1];
+        if(h!=0)
+        {
+            for(int k=0;k<=i;k++) d[k] = z(k, i+1)/h;
+            for(int j=0;j<=i;j++)
+            {
+                double g = 0;
+                for(int k=0;k<=i;k++) g += z(k, i+1)*z(k, j);
+                for(int k=0;k<=i;k++) z(k, j) -= g*d[k];
+            }
+        }
+        for(int k=0;k<=i;k++) z(k, i+1) = 0;
+    }
+    for(int j=0;j<n;j++) { d[j] = z(n-1, j); z(n-1, j) = 0; }
+    z(n-1, n-1) = 1;
+    // QL on the rows of V = Z' (the rotations then run along memory)
+    V.assign((size_t)n*n, 0);
+    for(int i=0;i<n;i++) for(int j=0;j<n;j++) V[(size_t)j*n+i] = z(i, j);
+    std::vector<double>().swap(Z);
+    for(int i=1;i<n;i++) e[i-1] = e[i];
+    e[n-1] = 0;
+    double f = 0, tst1 = 0;
+    const double eps = std::ldexp(1.0, -52);
+    for(int l=0;l<n;l++)
+    {
+        tst1 = std::max(tst1, std::fabs(d[l])+std::fabs(e[l]));
+        int m2 = l;
+        while(m2<n && std::fabs(e[m2])>eps*tst1) m2++;
+        if(m2>l)
+        do
+        {
+            double g = d[l];
+            double p = (d[l+1]-g)/(2*e[l]);
+            double r = std::hypot(p, 1.0);
+            if(p<0) r = -r;
+            d[l] = e[l]/(p+r);
+            d[l+1] = e[l]*(p+r);
+            const double dl1 = d[l+1];
+            double h = g-d[l];
+            for(int i=l+2;i<n;i++) d[i] -= h;
+            f += h;
+            p = d[m2];
+            double c = 1, c2 = c, c3 = c, s = 0, s2 = 0;
+            const double el1 = e[l+1];
+            for(int i=m2-1;i>=l;i--)
+            {
+                c3 = c2; c2 = c; s2 = s;
+                g = c*e[i];
+                h = c*p;
+                r = std::hypot(p, e[i]);
+                e[i+1] = s*r;
+                s = e[i]/r;
+                c = p/r;
+                p = c*d[i] - s*g;
+                d[i+1] = h + s*(c*g + s*d[i]);
+                double* vi = &V[(size_t)i*n];
+                double* vi1 = &V[(size_t)(i+1)*n];
+                for(int k=0;k<n;k++) { h = vi1[k]; vi1[k] = s*vi[k] + c*h; vi[k] = c*vi[k] - s*h; }
+            }
+            p = -s*s2*c3*el1*e[l]/dl1;
+            e[l] = s*p;
+            d[l] = c*p;
+        }
+        while(std::fabs(e[l])>eps*tst1);
+        d[l] += f;
+        e[l] = 0;
+    }
+    std::vector<int> order(n);
+    for(int i=0;i<n;i++) order[i] = i;
+    std::sort(order.begin(), order.end(), [&](int a, int b) { return d[a]<d[b]; });
+    std::vector<double> ds(n), Vs((size_t)n*n);
+    for(int k=0;k<n;k++)
+    {
+        ds[k] = d[order[k]];
+        std::copy(&V[(size_t)order[k]*n], &V[(size_t)order[k]*n]+n, &Vs[(size_t)k*n]);
+    }
+    d.swap(ds);
+    V.swap(Vs);
+}
+
 // ---- the solver's coordinates: the tuned weights but one square per pinned table (its
 // anchor), which moves by minus the sum of the others' steps, so the mean stays put
 
@@ -905,6 +1044,7 @@ int main(int argc, char** argv)
         else if(k=="se") opt.se = std::atoi(v.c_str())!=0;
         else if(k=="check") opt.check = std::atoi(v.c_str())!=0;
         else if(k=="compare") opt.compare = v;
+        else if(k=="spectrum") opt.spectrum = v;
         else if(k=="gauge" && (v=="pin" || v=="pin104" || v=="free")) { opt.pin = v!="free"; opt.pin3 = v=="pin"; }
         else { std::fprintf(stderr, "unknown option %s\n", k.c_str()); return 2; }
     }
@@ -1009,7 +1149,7 @@ int main(int argc, char** argv)
         {
             const int idx = (p.w[k>>1] >> (16*(k&1))) & 511;
             touched[TO_BASE+idx] = touched[TE_BASE+idx] = 1;
-            seen[TO_BASE+idx]++;
+            seen[TO_BASE+idx]++; seen[TE_BASE+idx]++;
         }
         const uint32_t* w = p.w + (p.n_tab+1)/2;
         for(int k=0;k<p.n_lin+p.n_ks[0]+p.n_ks[1];k++) { touched[w[k] & PARAM_MASK] = 1; seen[w[k] & PARAM_MASK]++; }
@@ -1187,55 +1327,50 @@ int main(int argc, char** argv)
             if(pass==0)
             {
                 ridge = r;
-                // the weakest directions, by subspace inverse iteration (6 vectors)
-                const int nv = std::min(6, n_red);
-                std::vector<std::vector<double>> X(nv, std::vector<double>(n_red));
-                for(int v=0;v<nv;v++) for(int i=0;i<n_red;i++) X[v][i] = std::sin(1.0 + i*(v+1)*0.7);
-                auto orthonormalise = [&]
+                // the whole spectrum of A (#107); the weakest WEAK_DIRECTIONS in the report, each
+                // with the SE of the weights' combination along it, sqrt(sigma^2/(n eigenvalue))
+                std::vector<double> ev, V;
+                symmetric_eigen(Ar, n_red, ev, V);
+                const double sigma2n = sigma2/n;
+                double residual = 0;
+                std::FILE* spec = opt.spectrum.empty() ? nullptr : std::fopen(opt.spectrum.c_str(), "w");
+                if(spec) std::fprintf(spec, "# k eigenvalue direction_SE components (the 8 largest, of the tuned weights)\n");
+                for(int v=0;v<n_red;v++)
                 {
-                    for(int v=0;v<nv;v++)
-                    {
-                        for(int u=0;u<v;u++)
-                        {
-                            double d = 0;
-                            for(int i=0;i<n_red;i++) d += X[u][i]*X[v][i];
-                            for(int i=0;i<n_red;i++) X[v][i] -= d*X[u][i];
-                        }
-                        double norm = 0;
-                        for(double q : X[v]) norm += q*q;
-                        for(double& q : X[v]) q /= std::sqrt(norm);
-                    }
-                };
-                for(int k=0;k<60;k++)
-                {
-                    orthonormalise();
-                    for(int v=0;v<nv;v++) cholesky_solve(U, n_red, X[v].data());
-                }
-                orthonormalise();
-                for(int v=0;v<nv;v++)
-                {
-                    double q = 0;
+                    const double* x = &V[(size_t)v*n_red];
+                    const bool report_it = v<WEAK_DIRECTIONS;
+                    if(!report_it && !spec) break;
+                    if(report_it)
                     for(int i=0;i<n_red;i++)
                     {
                         double y = 0;
-                        for(int k=0;k<n_red;k++) y += (i<=k ? Ar[(size_t)i*n_red+k] : Ar[(size_t)k*n_red+i])*X[v][k];
-                        q += X[v][i]*y;
+                        for(int k=0;k<n_red;k++) y += (i<=k ? Ar[(size_t)i*n_red+k] : Ar[(size_t)k*n_red+i])*x[k];
+                        residual = std::max(residual, std::fabs(y-ev[v]*x[i]));
                     }
-                    if(v==0) weakest = q;
+                    if(v==0) weakest = ev[v];
                     std::vector<double> st;
-                    expand(X[v].data(), st, nt);
+                    expand(x, st, nt);
                     std::vector<std::pair<double,int>> big;
                     for(int t=0;t<nt;t++) big.push_back({-std::fabs(st[t]), t});
                     std::sort(big.begin(), big.end());
+                    const double dse = ev[v]>0 ? std::sqrt(sigma2n/ev[v]) : INFINITY;
+                    std::string text;
                     char part[160];
-                    std::snprintf(part, sizeof part, "%s  %.2e:", v ? "\n" : "", q);
-                    weakest_dir += part;
-                    for(int k=0;k<8;k++)
+                    for(int k=0;k<8 && k<nt;k++)
                     {
                         std::snprintf(part, sizeof part, "%s %+.2f %s", k ? "," : "", st[big[k].second], param_name[jof[big[k].second]].c_str());
-                        weakest_dir += part;
+                        text += part;
                     }
+                    if(report_it)
+                    {
+                        std::snprintf(part, sizeof part, "%s  %.2e (SE %.3g):", v ? "\n" : "", ev[v], dse);
+                        weakest_dir += part + text;
+                    }
+                    if(spec) std::fprintf(spec, "%d %.6e %.6g%s\n", v, ev[v], dse, text.c_str());
                 }
+                if(spec) std::fclose(spec);
+                std::printf("eigenvalues: %d, smallest %.3g, largest %.3g, residual of the weakest %d %.2g (%.0f s)\n",
+                            n_red, ev[0], ev[n_red-1], std::min(WEAK_DIRECTIONS, n_red), residual, secs());
             }
             S[pass] = cholesky_inverse(U, n_red);
             for(double& x : S[pass]) x *= sigma2/n;
@@ -1345,7 +1480,8 @@ int main(int argc, char** argv)
         say(report, "standard errors (* = gauge-free: a table or mobility entry against its table's mean, a piece value plus those means), sigma^2 %.6f", sigma2);
         char ridge_text[32];
         std::snprintf(ridge_text, sizeof ridge_text, "%.0e", top_diag ? ridge/top_diag : 0.0);
-        say(report, "weakest directions (Rayleigh quotients of 6 by subspace iteration; the first %.3g), largest diagonal %.3g, lambda %g%s:", weakest, top_diag, opt.lambda,
+        say(report, "weakest directions (the %d smallest eigenvalues of A, the first %.3g, and the SE along each), largest diagonal %.3g, lambda %g%s:",
+            std::min(WEAK_DIRECTIONS, n_red), weakest, top_diag, opt.lambda,
             ridge ? (", singular: SEs with a ridge of " + std::string(ridge_text) + " * largest diagonal").c_str() : "");
         report += weakest_dir + "\n";
         say(report, "  %-34s %5s %8s %8s %6s%s", "group", "n", "median", "median*", "lambda", cmp ? "  >2 SE* vs compare" : "");
@@ -1374,17 +1510,17 @@ int main(int argc, char** argv)
         say(report, "lambda: SE* shrinks by more than 1.5 with 10 lambda (%d weights); %d weights have no data", held, untouched);
         if(cmp)
         say(report, "set %d vs set %d: %d of %d gauge-free differences exceed 2 SE*, %d exceed 3", W_CMP.version, W_NEW.version, beyond2, total, beyond3);
-        se_lines = "\n# standard errors: weight, value, SE, SE* (see the report), flag\n";
+        se_lines = "\n# standard errors: weight, value, SE, SE* (see the report), fires (train positions and sides with a nonzero coefficient), flag\n";
         for(int t=0;t<nt;t++)
         {
-            std::snprintf(line, sizeof line, "# se %-34s %6d %8.2f %8.2f%s\n", param_name[jof[t]].c_str(), at(W_NEW, jof[t]), se[t], se_c[t],
-                          se_flag[t]==2 ? " lambda" : "");
+            std::snprintf(line, sizeof line, "# se %-34s %6d %8.2f %8.2f %8zu%s\n", param_name[jof[t]].c_str(), at(W_NEW, jof[t]), se[t], se_c[t],
+                          seen[jof[t]], se_flag[t]==2 ? " lambda" : "");
             se_lines += line;
         }
         for(int j=0;j<n_params;j++)
         if(param_tuned[j] && tix[j]<0)
         {
-            std::snprintf(line, sizeof line, "# se %-34s %6d        -        - no-data\n", param_name[j].c_str(), at(W_NEW, j));
+            std::snprintf(line, sizeof line, "# se %-34s %6d        -        -        0 no-data\n", param_name[j].c_str(), at(W_NEW, j));
             se_lines += line;
         }
     }
