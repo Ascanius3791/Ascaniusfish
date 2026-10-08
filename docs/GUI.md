@@ -230,7 +230,8 @@ sent `MultiPV 1`. `Engine_Link` gathers a depth's `multipv 1..K` lines into one 
 and a kept result stands in for the live search only with as many lines. `eval.lines` is every
 line with its score (white's view) and moves with `fen`, empty at K=1, where `eval.line` alone is drawn.
 `POST /api/analyse` is the engine on/off toggle; `POST /api/line` walks the board along a
-space-separated list of UCI `moves` (all of them or none), which is what clicking a move in the
+space-separated list of UCI `moves` (all of them or none), from the cursor or from `node` when
+given (the correspondence root's line, #100), which is what clicking a move in the
 analysis line does — the page sends the moves it drew rather than an index, so a deeper iteration
 arriving between the draw and the click cannot play a different move. Anything that changes the
 position under a running search aborts it and drops its `bestmove` by token.
@@ -300,3 +301,18 @@ limit (`docs/UCI.md`). The root is restarted for each save, since the TT is the 
 (`maybe_start_root()`/`collect_root()` in `gui_server.cpp`); the engine's `info string
 ttmark…`/`ttdemote…` answers show at the panel's foot. The root search stops when the mode is left
 or no page watches, and its results are not offered to the PTT.
+
+The root's line (#100) is a score sheet like the Engine panel's, numbered from the root
+(`corr.search.line` carries each move's `fen`, `write_line()` from the root node): hovering a move
+previews it, a click goes to the root and into the line (`/api/line` with `node`). A save keeps its
+whole line (`Corr_Save::line_uci`/`line_san`; `ttmark` still gets only the first move). When the
+board's position is a save's, by any route (`corr_save_on_board()`), `corr.here` has it and the panel
+shows "Saved here" with mark, depth, score and the line, hoverable and clickable from the board. The
+list sees only what was saved; the root's own search can store a deeper exact result over a mark.
+**Ask the root** (`action: probe`, `corr_probe_ask()`) sends the root engine `ttprobe` for the
+board's position (`docs/UCI.md`), and `corr.probe` shows its mark, depth, bound, score and TT line
+under the save (or alone, on a position not saved). The engine stops its search to read the table,
+so the root search restarts: that is why it is a button and not sent on every move of the board. The
+answer is a snapshot, dropped by the next save (whose `ttdemote` changes the table) or a new root.
+The preview is one mechanism for every box of moves: `LINE_BOXES` in `app.js` names each box, the
+line the preview reads in it and its panel; `renderChipLine()` draws a box that holds one line.

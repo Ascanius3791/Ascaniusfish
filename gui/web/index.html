@@ -304,7 +304,8 @@
         <span id="corr-score" class="score"></span>
       </div>
       <p id="corr-stats" class="note"></p>
-      <p id="corr-line" class="corr-line"></p>
+      <!-- The root's line, from the root: click a move to go there, hover to preview it (#100). -->
+      <p id="corr-line" class="line corr-line"></p>
       <div class="controls corr-controls">
         <span id="corr-generation" class="corr-generation"
               title="Saves are marked with the generation: how many Returns brought saves, plus one. A newer mark replaces an older one at any depth; only a mate it does not shorten holds against it."></span>
@@ -314,8 +315,18 @@
                 title="Back to the root. After new saves the next generation starts: the Searcher's unmarked entries become move-ordering hints, and it gets every save">Return to root</button>
         <button id="corr-update" type="button"
                 title="Search every save that is no mate again at its depth, deepest first, each saved with a new generation's mark, so an older save above a newer one learns what the newer one knows">Full update</button>
+        <button id="corr-probe" type="button"
+                title="What the root engine's TT holds for the position on the board now: its mark, depth, bound, score and line. The root's search may have improved a save since. The engine stops its search to read the table, so the root search starts again">Ask the root</button>
       </div>
       <p id="corr-warning" class="note corr-warning"></p>
+      <!-- The board on a saved position (#100): the save and its line, and the
+           root engine's own entry when it was asked. -->
+      <div id="corr-here" class="corr-here" hidden>
+        <p id="corr-here-what" class="corr-here-what"></p>
+        <p id="corr-here-line" class="line corr-subline"></p>
+        <p id="corr-probe-what" class="corr-here-what"></p>
+        <p id="corr-probe-line" class="line corr-subline"></p>
+      </div>
       <ol id="corr-saves" class="corr-saves"></ol>
       <p id="corr-notes" class="note corr-notes"></p>
     </section>

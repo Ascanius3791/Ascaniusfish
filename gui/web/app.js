@@ -607,7 +607,7 @@ el('line-deeper').addEventListener('click', () => {
   if (state && !state.analysis.on) command('/api/analyse', { on: true });
 });
 
-for (const id of ['analysis-line', 'analysis-lines'])
+for (const id of ['analysis-line', 'analysis-lines', 'corr-here-line', 'corr-probe-line'])
   el(id).addEventListener('click', event => {
     const button = event.target.closest('button.pv-move');
     if (button) command('/api/line', { moves: button.dataset.line });
@@ -1095,7 +1095,10 @@ function renderCorrPanel(s) {
   el('corr-panel').hidden = !c.on;
   el('corr-enter').hidden = !analyseLike(s) || (c.on && c.atRoot);
   el('corr-enter').textContent = c.on ? 'Make this position the root' : 'Analyse position in correspondence mode';
-  if (!c.on) return;
+  if (!c.on) {
+    if (previewIn('corr-panel')) hidePreview();
+    return;
+  }
 
   el('corr-root-label').textContent = c.rootLabel;
   const search = c.search;
@@ -1110,7 +1113,9 @@ function renderCorrPanel(s) {
     search.nps ? `${Math.round(search.nps / 1000).toLocaleString()} knps` : '',
     `${Math.round(search.time / 1000)} s`,
   ].filter(Boolean).join(' · ');
-  el('corr-line').textContent = search ? search.line.join(' ') : '';
+  // From the root (#100): a click goes there and into the line.
+  renderChipLine('corr-line', search || boardStart(s), search ? search.line : [], true);
+  renderCorrHere(s);
 
   const u = c.update;
   el('corr-generation').textContent = `Generation ${c.generation}`;
@@ -1145,6 +1150,37 @@ function renderCorrPanel(s) {
   el('corr-notes').title = c.notes.join('\n');
 }
 
+const BOUND_TEXT = { exact: 'exact', lower: 'lower bound', upper: 'upper bound', none: '' };
+
+// The board on a saved position (#100): the save as the list holds it, with
+// its line, and below it the root engine's own entry when it was asked here
+// (Ask the root). Both lines are from the board, as the Engine panel's are.
+function renderCorrHere(s) {
+  const here = s.corr.here, probe = s.corr.probe;
+  el('corr-here').hidden = !here && !probe;
+  el('corr-probe').disabled = !!(probe && probe.pending);
+  const what = el('corr-here-what');
+  what.replaceChildren();
+  if (here) {
+    const key = document.createElement('span');
+    key.className = 'corr-here-key';
+    key.textContent = 'Saved here';
+    what.append(key, ` · mark ${here.mark} · d${here.depth} · ${scoreText(here.score)}`);
+  }
+  renderChipLine('corr-here-line', boardStart(s), here ? here.line : [], true);
+
+  let text = '';
+  if (probe)
+    text = probe.pending ? 'Root TT: asking…'
+      : !probe.found ? 'Root TT: no entry for this position'
+      : ['Root TT', probe.mark ? `mark ${probe.mark}` : 'unmarked', `d${probe.depth}`, BOUND_TEXT[probe.bound],
+          probe.score ? scoreText(probe.score) : 'no score (a move hint)'].filter(Boolean).join(' · ');
+  if (probe && probe.found && here && probe.bound === 'exact' && probe.depth > here.depth)
+    text += ' — the root’s search went deeper than the save';
+  el('corr-probe-what').textContent = text;
+  renderChipLine('corr-probe-line', boardStart(s), probe && probe.found ? probe.line : [], true);
+}
+
 el('corr-enter').addEventListener('click', () => command('/api/corr', { action: 'enter' }));
 el('corr-save').addEventListener('click', () => command('/api/corr', { action: 'save' }));
 el('corr-update').addEventListener('click', () => {
@@ -1152,6 +1188,12 @@ el('corr-update').addEventListener('click', () => {
   command('/api/corr', { action: state && state.corr.update.on ? 'stop-update' : 'update' });
 });
 el('corr-return').addEventListener('click', () => { clearQueueSilently(); command('/api/corr', { action: 'return' }); });
+el('corr-probe').addEventListener('click', () => command('/api/corr', { action: 'probe' }));
+// The root's line starts at the root, wherever the board is (#100).
+el('corr-line').addEventListener('click', event => {
+  const button = event.target.closest('button.pv-move');
+  if (button && state) command('/api/line', { moves: button.dataset.line, node: state.corr.root });
+});
 el('corr-saves').addEventListener('click', event => {
   const item = event.target.closest('.corr-save.linked');
   if (item) { clearQueueSilently(); command('/api/goto', { node: Number(item.dataset.node) }); }
@@ -1179,7 +1221,7 @@ function renderEngine(s) {
   const canToggle = analysing || halted(s);
   panel.hidden = !canToggle && !showLine;
   renderTbMoves(s);
-  if (panel.hidden) { hidePreview(); shownLineKey = shownLinesKey = null; return; }
+  if (panel.hidden) { if (previewIn('analysis-panel')) hidePreview(); shownLineKey = shownLinesKey = null; return; }
 
   panel.classList.toggle('running', (a.running || s.play.thinking || s.watch.thinking) && !a.error);
   // A tablebase position has a line only with the DTM tables: the mating one (#77).
@@ -1230,7 +1272,7 @@ function renderEngine(s) {
   if (multi) renderLines(s, rows, wanted, analysing);
   else {
     shownLinesKey = null;
-    if (preview.on && preview.row >= 0) hidePreview();
+    if (preview.on && preview.box === 'analysis-lines') hidePreview();
   }
   renderLine(s, showLine && !multi ? ev : null, analysing);
 }
@@ -1356,11 +1398,11 @@ function renderLine(s, ev, clickable) {
   shownLineKey = key;
   shownLine = line;
   box.replaceChildren();
-  appendLineCells(box, s, line, clickable, -1);
+  appendLineCells(box, boardStart(s), line, clickable, -1);
   fitLine();
   // The line changed under a hover: the move under the pointer is the same ply
   // of the new line, since every cell is where it was.
-  if (preview.on && preview.row < 0) showPreview(preview.ply, -1);
+  if (preview.on && preview.box === 'analysis-line') showPreview('analysis-line', preview.ply, -1);
 }
 
 // MultiPV (#69): one row per line, best first, its score (white's view) in
@@ -1390,7 +1432,7 @@ function renderLines(s, lines, wanted, clickable) {
     score.textContent = l.score ? scoreText(l.score) : '';
     const moves = document.createElement('span');
     moves.className = 'mpv-moves';
-    appendLineCells(moves, s, l.line, clickable, row);
+    appendLineCells(moves, boardStart(s), l.line, clickable, row);
     const arrow = document.createElement('button');
     arrow.type = 'button';
     arrow.className = 'line-expand mpv-expand';
@@ -1399,14 +1441,20 @@ function renderLines(s, lines, wanted, clickable) {
     box.append(div);
   });
   fitLines();
-  if (preview.on && preview.row >= 0) showPreview(preview.ply, preview.row);
+  if (preview.on && preview.box === 'analysis-lines') showPreview('analysis-lines', preview.ply, preview.row);
 }
 
-// A line's moves as score-sheet cells (see above) into `box`; `row` is the
-// line's row under MultiPV, -1 for the single line.
-function appendLineCells(box, s, line, clickable, row) {
-  let fullmove = s.fullmove;
-  let white = s.turn === 'white';
+// Where a line from the position on the board starts: its move number and side.
+// The correspondence root's line starts at the root instead (#100).
+function boardStart(s) {
+  return { fullmove: s.fullmove, turn: s.turn };
+}
+
+// A line's moves as score-sheet cells (see above) into `box`, numbered from
+// `start`; `row` is the line's row under MultiPV, -1 for a single line.
+function appendLineCells(box, start, line, clickable, row) {
+  let fullmove = start.fullmove;
+  let white = start.turn === 'white';
   let unit = null;
   line.forEach((move, ply) => {
     if (white || ply === 0) {
@@ -1546,11 +1594,41 @@ new ResizeObserver(() => requestAnimationFrame(() => { fitLine(); fitLines(); })
 // between two moves, only when the pointer leaves the line altogether. A gap
 // between cells (there should be none) keeps whatever is shown.
 const HOVER_DELAY_MS = 100;
-const preview = { on: false, ply: -1, row: -1, timer: 0, board: null };   // row: see appendLineCells()
+// box: the id of the line box the hovered move is in (LINE_BOXES); row: see appendLineCells()
+const preview = { on: false, box: '', ply: -1, row: -1, timer: 0, board: null };
 
-// The box the hovered line is drawn in: the single line, or the MultiPV rows.
-function lineBox(row) {
-  return el(row < 0 ? 'analysis-line' : 'analysis-lines');
+// Every box of move cells on the page: the line the preview reads in it (a
+// row's under MultiPV) and the panel it sits in. The Engine panel's lines are
+// from the board; the correspondence panel's root line is from the root, and
+// a save's line and the root TT's from the board again (#100). Every move
+// carries the position after it, so the preview works nothing out itself.
+const LINE_BOXES = {
+  'analysis-line': { panel: 'analysis-panel', line: () => shownLine },
+  'analysis-lines': { panel: 'analysis-panel', line: row => shownLines[row] || [] },
+  'corr-line': { panel: 'corr-panel', line: () => chipLines['corr-line'] },
+  'corr-here-line': { panel: 'corr-panel', line: () => chipLines['corr-here-line'] },
+  'corr-probe-line': { panel: 'corr-panel', line: () => chipLines['corr-probe-line'] },
+};
+
+// The lines drawn by renderChipLine(), by box id, and what each was drawn from.
+const chipLines = {}, chipLineKeys = {};
+
+// One line of cells into box `id`, numbered from `start`. Left alone when
+// nothing changed, as renderLine() does, so the cell under the pointer stays
+// the same element while a search pushes iteration after iteration.
+function renderChipLine(id, start, line, clickable) {
+  const key = [clickable, start.fullmove, start.turn, ...line.map(m => m.uci)].join(' ');
+  if (key === chipLineKeys[id]) return;
+  chipLineKeys[id] = key;
+  chipLines[id] = line;
+  el(id).replaceChildren();
+  appendLineCells(el(id), start, line, clickable, -1);
+  if (preview.on && preview.box === id) showPreview(id, preview.ply, -1);
+}
+
+// Whether the preview shows a move of a line in that panel.
+function previewIn(panel) {
+  return preview.on && LINE_BOXES[preview.box].panel === panel;
 }
 
 function previewBoard() {
@@ -1565,10 +1643,11 @@ function previewBoard() {
   return preview.board;
 }
 
-function showPreview(ply, row) {
-  const move = (row < 0 ? shownLine : shownLines[row] || [])[ply];
+function showPreview(id, ply, row) {
+  const move = (LINE_BOXES[id].line(row) || [])[ply];
   if (!move || !move.fen) return hidePreview();
   preview.on = true;
+  preview.box = id;
   preview.ply = ply;
   preview.row = row;
   const box = el('line-preview');
@@ -1582,17 +1661,19 @@ function showPreview(ply, row) {
     lastMove: [move.uci.slice(0, 2), move.uci.slice(2, 4)],
     check: false,
   });
-  for (const chip of el('analysis-panel').querySelectorAll('.pv-move'))
-    chip.classList.toggle('previewed', Number(chip.dataset.ply) === ply && Number(chip.dataset.row) === row);
+  for (const chip of document.querySelectorAll('.pv-move'))
+    chip.classList.toggle('previewed', el(id).contains(chip)
+      && Number(chip.dataset.ply) === ply && Number(chip.dataset.row) === row);
 }
 
 function hidePreview() {
   clearTimeout(preview.timer);
   preview.on = false;
+  preview.box = '';
   preview.ply = -1;
   preview.row = -1;
   el('line-preview').classList.remove('shown');
-  for (const chip of el('analysis-panel').querySelectorAll('.pv-move.previewed'))
+  for (const chip of document.querySelectorAll('.pv-move.previewed'))
     chip.classList.remove('previewed');
 }
 
@@ -1613,8 +1694,8 @@ function placePreview(box) {
   }
   // Moved up as far as the window needs, over the open line box's empty rows,
   // but never over a move of the line that is shown.
-  const line = lineBox(preview.row).getBoundingClientRect();
-  const cells = lineBox(preview.row).querySelectorAll('.pv-move');
+  const line = el(preview.box).getBoundingClientRect();
+  const cells = el(preview.box).querySelectorAll('.pv-move');
   const lineEnd = cells.length ? Math.min(line.bottom, cells[cells.length - 1].getBoundingClientRect().bottom) : line.top;
   const top = Math.max(lineEnd + 8, Math.min(moves.top, window.innerHeight - size - 4));
   if (moves.top >= 4 && top + size <= window.innerHeight - 4) {
@@ -1622,22 +1703,23 @@ function placePreview(box) {
     box.style.left = `${moves.left}px`;
     return;
   }
-  const panel = el('analysis-panel').getBoundingClientRect();
+  const panel = el(LINE_BOXES[preview.box].panel).getBoundingClientRect();
   const above = line.top - size - 8;
   box.style.top = `${above >= 4 ? above : line.bottom + 8}px`;
   box.style.left = `${Math.max(4, panel.right - size)}px`;
 }
 
-for (const id of ['analysis-line', 'analysis-lines']) {
+for (const id of Object.keys(LINE_BOXES)) {
   el(id).addEventListener('mouseover', event => {
     const chip = event.target.closest('.pv-move');
     if (!chip) return;
     const ply = Number(chip.dataset.ply), row = Number(chip.dataset.row);
-    if (preview.on) return showPreview(ply, row);
+    if (preview.on) return showPreview(id, ply, row);
     clearTimeout(preview.timer);
+    preview.box = id;
     preview.ply = ply;
     preview.row = row;
-    preview.timer = setTimeout(() => showPreview(preview.ply, preview.row), HOVER_DELAY_MS);
+    preview.timer = setTimeout(() => showPreview(preview.box, preview.ply, preview.row), HOVER_DELAY_MS);
   });
   el(id).addEventListener('mouseleave', hidePreview);
   el(id).addEventListener('scroll', () => { if (preview.on) placePreview(el('line-preview')); });

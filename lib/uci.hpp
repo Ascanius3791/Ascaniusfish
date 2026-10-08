@@ -24,8 +24,9 @@
 // the position just set, seeded into the TT before the next "go" (see seed_hint()),
 // the non-standard "route <moves>" (#100): another route to a position on
 // the path, which an analysis search's path refresh refreshes too, and the
-// correspondence mode's (#101) "ttmark" (an entry with the user's mark) and
-// "ttdemote" (every unmarked entry becomes a move-ordering hint).
+// correspondence mode's (#101) "ttmark" (an entry with the user's mark),
+// "ttdemote" (every unmarked entry becomes a move-ordering hint) and
+// "ttprobe" (a position's entry, read only, #100).
 // The search runs on its own thread so "stop"/"isready" are answered while
 // it thinks; see lib/search_control.hpp for how a search is aborted.
 
@@ -328,6 +329,7 @@ class UCI_Engine
     int refresh_routes();
     void handle_ttmark(const std::vector<std::string>& tokens);
     void handle_ttdemote();
+    void handle_ttprobe(const std::vector<std::string>& tokens);
     std::string provenance() const;
 };
 

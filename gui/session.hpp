@@ -157,8 +157,27 @@ struct Corr_Save
     std::string score_kind;     // "cp"/"mate"
     long long score_value = 0;
     bool white = true;          // the side to move, for showing the score in white's view
-    std::string move, move_san; // the best move shown, "" for none
+    // The line shown, legal from here, both ways (#100); its first move is the
+    // one ttmark gets, since a TT entry keeps only that.
+    std::vector<std::string> line_uci, line_san;
     int ply = 0;                // the node's distance from the game's start: the full update goes deepest first
+};
+
+// "Ask the root" (#100): the root engine's own entry for a position, from its
+// "ttprobe" answer. The list only knows what was saved; the root's search can
+// have improved a marked entry since by a deeper exact result, and an unmarked
+// position can have one of its own. A snapshot: the search goes on.
+struct Corr_Probe
+{
+    Position_Key key{};
+    bool white = true;          // the side to move there, for the score in white's view
+    bool asked = false;
+    bool pending = false;       // asked, no answer yet
+    bool found = false;
+    int mark = 0, depth = 0, bound = 0;   // bound as PV_Line: 0 exact, -1 lower, 1 upper
+    std::string score_kind;     // "cp"/"mate", "" for a vacuous bound
+    long long score_value = 0;  // the side to move's view, as UCI has it
+    std::vector<std::string> pv;   // exact: the TT's line; a bound: its move only
 };
 
 // A save as the TT holds it (UCI_Engine::handle_ttmark()): white's view, exact.
@@ -398,6 +417,7 @@ class Session
     Search_Info corr_info;                  // its last iteration, the root's mover's view
     bool corr_info_valid = false;
     std::vector<std::string> corr_notes;    // the engine's answers to ttmark/ttdemote
+    Corr_Probe corr_probe;                  // the last "Ask the root" (#100)
 
     // The Clock/Fixed-depth switch and the clock it is set to, one pair per
     // mode (Play's applies to both colours from a preset, or per colour from
@@ -626,11 +646,9 @@ class Session
             save.score_value = save.score_value>0 ? TB_WIN_CP-1 : -(TB_WIN_CP-1);
         }
         save.white = white_to_move();
-        if(!analysis_uci.empty())
-        {
-            save.move = analysis_uci[0];
-            save.move_san = analysis_san[0];
-        }
+        save.line_uci = analysis_uci;
+        save.line_san = analysis_san;
+        corr_probe = Corr_Probe();   // the save's ttdemote changes what it read
         corr_warning.clear();
         auto held = std::find_if(corr_saves.begin(), corr_saves.end(), [&](const Corr_Save& c) { return c.key==save.key; });
         if(held!=corr_saves.end())
@@ -805,9 +823,79 @@ class Session
     {
         std::string line = "ttmark mark " + std::to_string(c.mark) + " depth " + std::to_string(c.depth)
                          + " score " + c.score_kind + " " + std::to_string(c.score_value);
-        if(!c.move.empty())
-        line += " move " + c.move;
+        if(!c.line_uci.empty())
+        line += " move " + c.line_uci[0];
         return line + " fen " + c.fen;
+    }
+
+    // The save of the position on the board (by position, so a transposition
+    // counts), or nullptr.
+    const Corr_Save* corr_save_on_board() const
+    {
+        for(const Corr_Save& c : corr_saves)
+        if(c.key==tree.current().key)
+        return &c;
+        return nullptr;
+    }
+
+    // "Ask the root" (#100): the root engine's entry for the position on the
+    // board, by "ttprobe". The engine stops its search to read the table (the
+    // search writes it without a lock), so this restarts the root, and it is
+    // asked for, never sent on every move of the board.
+    void corr_probe_ask()
+    {
+        corr_probe = Corr_Probe();
+        corr_probe.key = tree.current().key;
+        corr_probe.white = white_to_move();
+        corr_probe.asked = true;
+        corr_probe.pending = true;
+        corr_prelude.push_back("ttprobe fen " + tree.fen());
+        corr_restart = true;
+    }
+
+    // What the root engine gets before its next "go": the prelude, or every
+    // save when it starts a new game, and a probe asked for either way.
+    std::vector<std::string> corr_root_prelude(bool new_game) const
+    {
+        if(!new_game)
+        return corr_prelude;
+        std::vector<std::string> lines = corr_all_marks();
+        for(const std::string& line : corr_prelude)
+        if(line.compare(0, 8, "ttprobe ")==0)
+        lines.push_back(line);
+        return lines;
+    }
+
+    // The engine's "ttprobe mark M depth D bound B score cp N|mate N|none
+    // [pv ...]" or "ttprobe none" (src/uci.cpp), into the pending probe.
+    void corr_probe_answer(const std::string& note)
+    {
+        if(!corr_probe.pending)
+        return;
+        corr_probe.pending = false;
+        std::istringstream in(note);
+        std::string word;
+        in >> word;   // "ttprobe"
+        while(in >> word)
+        {
+            if(word=="mark") in >> corr_probe.mark;
+            else if(word=="depth") in >> corr_probe.depth;
+            else if(word=="bound") in >> corr_probe.bound;
+            else if(word=="score")
+            {
+                in >> corr_probe.score_kind;
+                if(corr_probe.score_kind=="none")
+                corr_probe.score_kind.clear();
+                else
+                in >> corr_probe.score_value;
+                corr_probe.found = true;
+            }
+            else if(word=="pv")
+            {
+                while(in >> word)
+                corr_probe.pv.push_back(word);
+            }
+        }
     }
 
     std::vector<std::string> corr_all_marks() const
@@ -821,6 +909,8 @@ class Session
     // An answer of the root engine to a ttmark/ttdemote, the newest kept.
     void corr_note(const std::string& note)
     {
+        if(note.compare(0, 7, "ttprobe")==0)
+        return corr_probe_answer(note);
         corr_notes.push_back(note);
         if((int)corr_notes.size()>CORR_NOTES)
         corr_notes.erase(corr_notes.begin());
@@ -1094,7 +1184,9 @@ class Session
     // an index into the line, so you get the move you clicked even if a deeper
     // iteration replaced the line in between. The line is checked through before
     // any of it is played, so a line that does not fit leaves the tree alone.
-    bool enter_line(const std::string& moves, std::string& error)
+    // From node `from` instead of the cursor when given: the correspondence
+    // root's line starts at the root (#100).
+    bool enter_line(const std::string& moves, std::string& error, int from = -1)
     {
         std::istringstream in(moves);
         std::vector<std::string> line;
@@ -1106,14 +1198,22 @@ class Session
             error = "no moves given";
             return false;
         }
+        if(from<0)
+        from = tree.cursor_id();
+        if(from>=tree.size() || !tree.node(from).alive)
+        {
+            error = "that line's start is no longer in the tree";
+            return false;
+        }
         Game walk;
-        walk.start(tree.position(), tree.halfmove_clock(), tree.fullmove());
+        walk.start(tree.node(from).pos, tree.node(from).halfmove_clock, tree.fullmove_of(from));
         for(const std::string& move : line)
         if(!walk.play(move))
         {
             error = "that line does not fit the position any more: illegal move " + move;
             return false;
         }
+        tree.go_to(from);
         for(const std::string& move : line)
         tree.play(move);
         clear_analysis();
@@ -2250,7 +2350,7 @@ class Session
         // preview board shows while a move of the line is hovered (#58); the page
         // plays no chess itself, so it cannot work that out on its own.
         o.key("line");
-        write_line(o, v.uci, v.san);
+        write_line(o, v.uci);
         // MultiPV (#69): every line with its score, line 1 first, when there
         // is more than one; empty otherwise, and the page draws `line` alone.
         o.key("lines").arr();
@@ -2267,22 +2367,29 @@ class Session
                 o.obj();
                 o.key("score").obj().key("kind").str(line.score_kind).key("value").num(line.score_value).end_obj();
                 o.key("line");
-                write_line(o, line.uci, line.san);
+                write_line(o, line.uci);
                 o.end_obj();
             }
         }
         o.end_arr();
     }
 
-    void write_line(json::Out& o, const std::vector<std::string>& uci, const std::vector<std::string>& sans) const
+    // A line of UCI moves as the page draws it: each move with its SAN and the
+    // position after it, which the preview board shows. Played from node
+    // `from` (the cursor by default; the correspondence root's line from the
+    // root, #100), ending where a move does not fit.
+    void write_line(json::Out& o, const std::vector<std::string>& uci, int from = -1) const
     {
+        if(from<0)
+        from = tree.cursor_id();
         Game walk;
-        walk.start(tree.position(), tree.halfmove_clock(), tree.fullmove());
+        walk.start(tree.node(from).pos, tree.node(from).halfmove_clock, tree.fullmove_of(from));
         o.arr();
-        for(size_t i=0;i<sans.size();i++)
+        for(const std::string& move : uci)
         {
-            walk.play(uci[i]);
-            o.obj().key("uci").str(uci[i]).key("san").str(sans[i]).key("fen").str(walk.fen()).end_obj();
+            if(!walk.play(move))
+            break;
+            o.obj().key("uci").str(move).key("san").str(walk.san_moves.back()).key("fen").str(walk.fen()).end_obj();
         }
         o.end_arr();
     }
@@ -2307,6 +2414,7 @@ class Session
         corr_finished = false;
         corr_error.clear();
         corr_notes.clear();
+        corr_probe = Corr_Probe();
     }
 
     // The moves from node `from` to node `id` as a score sheet ("14...Nf6
@@ -2383,16 +2491,52 @@ class Session
                 const long long v = std::atoll(corr_info.score_value.c_str());
                 o.obj().key("kind").str(corr_info.score_kind).key("value").num(white ? v : -v).end_obj();
             }
-            Game walk;
-            walk.start(at.pos, at.halfmove_clock, tree.fullmove_of(root));
-            o.key("line").arr();
-            for(const std::string& move : corr_info.pv)
-            {
-                if(!walk.play(move))
-                break;
-                o.str(walk.san_moves.back());
-            }
-            o.end_arr();
+            // From the root, as the analysis line is from the cursor (#100): a
+            // click goes to the root and into the line, a hover previews it.
+            o.key("fullmove").num(tree.fullmove_of(root));
+            o.key("turn").str(white ? "white" : "black");
+            o.key("line");
+            write_line(o, corr_info.pv, root);
+            o.end_obj();
+        }
+        else
+        o.null();
+        // The board on a saved position (#100): the save as the list holds it,
+        // with its line from here.
+        o.key("here");
+        if(const Corr_Save* c = corr_save_on_board())
+        {
+            o.obj();
+            o.key("label").str(c->label);
+            o.key("mark").num(c->mark);
+            o.key("depth").num(c->depth);
+            o.key("score").obj().key("kind").str(c->score_kind).key("value").num(c->white ? c->score_value : -c->score_value).end_obj();
+            o.key("line");
+            write_line(o, c->line_uci);
+            o.end_obj();
+        }
+        else
+        o.null();
+        // The root engine's own entry for the position on the board, when it
+        // was asked (#100): what the list cannot see, as a deeper exact result
+        // the root's search stored over a save.
+        o.key("probe");
+        if(corr_probe.asked && corr_probe.key==tree.current().key)
+        {
+            const Corr_Probe& p = corr_probe;
+            o.obj();
+            o.key("pending").boolean(p.pending);
+            o.key("found").boolean(p.found);
+            o.key("mark").num(p.mark);
+            o.key("depth").num(p.depth);
+            o.key("bound").str(p.bound==0 ? "exact" : p.bound==-1 ? "lower" : p.bound==1 ? "upper" : "none");
+            o.key("score");
+            if(p.score_kind.empty())
+            o.null();
+            else
+            o.obj().key("kind").str(p.score_kind).key("value").num(p.white ? p.score_value : -p.score_value).end_obj();
+            o.key("line");
+            write_line(o, p.pv);
             o.end_obj();
         }
         else
@@ -2407,7 +2551,7 @@ class Session
             o.key("mark").num(c.mark);
             o.key("depth").num(c.depth);
             o.key("score").obj().key("kind").str(c.score_kind).key("value").num(c.white ? c.score_value : -c.score_value).end_obj();
-            o.key("move").str(c.move_san);
+            o.key("move").str(c.line_san.empty() ? "" : c.line_san[0]);
             o.end_obj();
         }
         o.end_arr();

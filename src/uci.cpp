@@ -400,6 +400,59 @@ void UCI_Engine::handle_ttdemote()
     send("info string ttdemote " + std::to_string(demoted) + " entries demoted, " + std::to_string(marked) + " marked kept");
 }
 
+// "ttprobe fen <fen>" (#100, the correspondence mode's "Ask the root"): that
+// position's entry as the table holds it now, read only. Answers
+// "info string ttprobe mark M depth D bound B score cp N|mate N|none [pv ...]"
+// or "info string ttprobe none". The score is the side to move's view, "none"
+// for a vacuous bound (a hint, a demoted entry). An exact entry's line goes on
+// along the TT (extend_pv_from_tt()); a bound gives only its move, which only
+// failed high or low.
+void UCI_Engine::handle_ttprobe(const std::vector<std::string>& tokens)
+{
+    std::string fen;
+    for(size_t k=1;k<tokens.size();k++)
+    if(tokens[k]=="fen")
+    for(k++; k<tokens.size(); k++)
+    fen += tokens[k] + " ";
+    BB pos;
+    if(!uci_parse_fen(fen, pos))
+    {
+        send("info string ttprobe: expected 'ttprobe fen <fen>'");
+        return;
+    }
+    const TT_slot* slot = table->find_slot(pos.zobrist_hash);
+    if(!slot)
+    {
+        send("info string ttprobe none");
+        return;
+    }
+    const TT_Result r = slot->pv_line;
+    const bool vacuous = (r.bound_type==-1 && r.eval==INT_MIN) || (r.bound_type==1 && r.eval==INT_MAX);
+    std::string answer = "info string ttprobe mark " + std::to_string(tt_mark(r)) + " depth " + std::to_string(r.depth)
+                       + " bound " + std::to_string(r.bound_type) + " score " + (vacuous ? "none" : uci_score(r.eval, pos.white_move));
+    PV_Line line = r;
+    if(r.bound_type==0)
+    {
+        path_history[0] = pos;   // the walk's repetition context; every search sets it again
+        extend_pv_from_tt(pos, line, 0);
+    }
+    if(line.current_lenght>0)
+    answer += " pv";
+    BB cur = pos;
+    for(int k=0;k<line.current_lenght;k++)
+    {
+        auto result = all_moves(&cur, pv_buf);
+        int found = -1;
+        for(int i=0;i<std::get<0>(result);i++)
+        if(std::get<1>(result)[i]==line.at(k)) { found = i; break; }
+        if(found<0)
+        break;
+        answer += " " + get_UCI(&cur, pv_buf+found);
+        cur = pv_buf[found];
+    }
+    send(answer);
+}
+
 // What the scores of the coming search are found with (#79), sent as
 // "info string provenance ..." before its first "info depth": the eval version,
 // the weight set's version (#85), the net (its file hash, or off), how many
@@ -1222,13 +1275,16 @@ int UCI_Engine::loop()
             if(tokens.size()>1)
             routes.emplace_back(tokens.begin()+1, tokens.end());
         }
-        else if(cmd=="ttmark" || cmd=="ttdemote")
+        else if(cmd=="ttmark" || cmd=="ttdemote" || cmd=="ttprobe")
         {
-            // the correspondence mode's TT commands (#101); the TT is the search's
+            // the correspondence mode's TT commands (#101, #100); the TT is the
+            // search's, and it writes without a lock, so even a probe stops it
             stop_search();
             ensure_table();
             if(cmd=="ttmark")
             handle_ttmark(tokens);
+            else if(cmd=="ttprobe")
+            handle_ttprobe(tokens);
             else
             handle_ttdemote();
         }

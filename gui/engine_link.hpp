@@ -191,7 +191,7 @@ class Engine_Link
         return true;
     }
 
-    // The engine's answers to the prelude's "ttmark"/"ttdemote" (#101), as
+    // The engine's answers to the prelude's "ttmark"/"ttdemote"/"ttprobe" (#101, #100), as
     // "ttmark stored, mark 3 depth 24", once each.
     bool take_notes(std::vector<std::string>& out)
     {
@@ -328,7 +328,8 @@ class Engine_Link
                 mate_confirmed = line.find(" confirmed:")!=std::string::npos;
                 continue;
             }
-            if(line.compare(0, 18, "info string ttmark")==0 || line.compare(0, 20, "info string ttdemote")==0)
+            if(line.compare(0, 18, "info string ttmark")==0 || line.compare(0, 20, "info string ttdemote")==0
+               || line.compare(0, 19, "info string ttprobe")==0)
             {
                 std::lock_guard<std::mutex> lock(m);
                 notes.push_back(line.substr(12));

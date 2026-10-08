@@ -232,6 +232,54 @@ static void test_corr_generations()
     check(!session.corr_updating && session.corr_update_note.find("stopped")!=std::string::npos, "moving the board stops it", session.corr_update_note);
 }
 
+// A save keeps its whole line, the board on its position (by any route) finds
+// it, "Ask the root" queues a ttprobe and reads its answer, and the root's
+// line is entered from the root wherever the cursor is (#100).
+static void test_corr_lines()
+{
+    std::printf("a save's line, the board on a save, the root's probe and line\n");
+    Session session;
+    session.mode = Mode::CORRESPONDENCE;
+    session.analysis_on = true;
+    std::string error;
+    play(session, "g1f3");
+    play(session, "g8f6");
+    play(session, "b1c3");
+    session.set_analysis(iteration(14, 25, {"b8c6", "e2e4", "e7e5"}));
+    check(session.corr_save(error), "a save with a three-move line", error);
+    check(session.corr_saves.back().line_uci.size()==3 && session.corr_saves.back().line_san[1]=="e4",
+          "keeps the whole line, both ways");
+    check(session.corr_prelude.back().find(" move b8c6 fen ")!=std::string::npos, "ttmark gets its first move", session.corr_prelude.back());
+
+    navigate(session, Nav::START);
+    check(session.corr_save_on_board()==nullptr, "the start is no save");
+    play(session, "b1c3");
+    play(session, "g8f6");
+    play(session, "g1f3");
+    const Corr_Save* here = session.corr_save_on_board();
+    check(here && here->depth==14, "the same position by another route is the save");
+
+    session.corr_prelude.clear();
+    session.corr_probe_ask();
+    check(session.corr_prelude.size()==1 && session.corr_prelude[0].compare(0, 12, "ttprobe fen ")==0,
+          "Ask the root queues a ttprobe", session.corr_prelude.empty() ? "" : session.corr_prelude[0]);
+    check(session.corr_restart, "and restarts the root");
+    const std::vector<std::string> fresh = session.corr_root_prelude(true);
+    check(fresh.size()==2 && fresh.back()==session.corr_prelude[0], "a new game gets every save and the probe");
+    session.corr_note("ttprobe mark 1 depth 17 bound 0 score cp -30 pv b8c6 e2e4");
+    check(!session.corr_probe.pending && session.corr_probe.found && session.corr_probe.depth==17
+          && session.corr_probe.score_value==-30 && session.corr_probe.pv.size()==2, "the answer is read");
+    check(session.corr_notes.empty(), "and kept out of the notes");
+    session.corr_probe_ask();
+    session.corr_note("ttprobe none");
+    check(session.corr_probe.asked && !session.corr_probe.pending && !session.corr_probe.found, "a miss is found=false");
+    const std::vector<std::string> line = {"e2e4", "e7e5"};
+    check(session.enter_line("e2e4 e7e5", error, session.corr_root_id()), "the root's line from the root", error);
+    check(session.moves()==line, "the board is the root (the start) plus the line");
+    check(!session.enter_line("e2e4 e2e4", error, session.corr_root_id()), "an illegal line is refused");
+    check(session.moves()==line, "and leaves the board alone");
+}
+
 // The entries are positions, not moves: the same position reached another way
 // has the same analysis, and a position never looked at has none.
 static void test_positions_not_nodes()
@@ -356,6 +404,7 @@ int main()
     test_routes();
     test_corr_save_mates();
     test_corr_generations();
+    test_corr_lines();
 
     std::printf("\n%s\n", failures ? "FAIL" : "PASS");
     return failures ? 1 : 0;

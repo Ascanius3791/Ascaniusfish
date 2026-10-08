@@ -613,7 +613,7 @@ static bool maybe_start_root(Session& session)
     request.options = session.engine_options();
     request.options.push_back({"MultiPV", "1"});
     request.new_game = set.slot_game[SLOT_ROOT]!=session.corr_serial;
-    request.prelude = request.new_game ? session.corr_all_marks() : session.corr_prelude;
+    request.prelude = session.corr_root_prelude(request.new_game);
     long long token = link.start_search(request);
     if(!token)
     return false;
@@ -976,13 +976,15 @@ static Response handle_post_authed(const Request& req)
     else if(req.path=="/api/line")
     {
         // Walk the board along a line: the moves a click in the analysis line
-        // covers, as a space-separated list of UCI moves.
+        // covers, as a space-separated list of UCI moves. From the cursor, or
+        // from `node` (the correspondence root's line starts at the root, #100).
         auto moves = body.find("moves");
         if(moves==body.end())
         return Response::json(json::error("no moves given"), 400);
         if(session.thinking())
         return Response::json(json::error("the engine is still thinking"), 409);
-        ok = session.enter_line(moves->second, error);
+        auto node = body.find("node");
+        ok = session.enter_line(moves->second, error, node==body.end() ? -1 : std::atoi(node->second.c_str()));
         if(ok)
         abort_search(session);
     }
@@ -1285,7 +1287,8 @@ static Response handle_post_authed(const Request& req)
     {
         // Correspondence mode (#101): enter (the position on the board becomes
         // the root), save (Save to root, marked with the generation, #100),
-        // return (Return to root), update (the full update) or stop-update.
+        // return (Return to root), update (the full update), stop-update or
+        // probe (Ask the root, #100).
         auto action = body.find("action");
         if(action!=body.end())
         {
@@ -1311,8 +1314,10 @@ static Response handle_post_authed(const Request& req)
             }
             else if(action->second=="stop-update")
             session.corr_update_stop("stopped");
+            else if(action->second=="probe")
+            session.corr_probe_ask();   // the root engine's entry for the board's position (#100)
             else
-            return Response::json(json::error("action must be enter, save, return, update or stop-update"), 400);
+            return Response::json(json::error("action must be enter, save, return, update, stop-update or probe"), 400);
         }
     }
     else if(req.path=="/api/flip")
