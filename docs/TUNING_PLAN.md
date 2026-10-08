@@ -24,6 +24,17 @@ makes sense where no capture is pending.
 The fit only says that the eval predicts results better. Whether it plays better is decided
 once, at the end, by a match.
 
+**Optimiser (#104): Levenberg-Marquardt, `tools/tune method=gn` (the default).** The model
+is linear in every weight but king danger, so Gauss-Newton on the normal equations
+(J'J/n + lambda, ~1058², Cholesky) reaches the minimum in 3-4 steps: 1:19 wall on tune2
+against 8:01 for 1500 epochs of Adam, the same weights to ±1, and standard errors for every
+weight as `# se` lines in the set. Adam (`method=adam`) is kept for comparison. Restarting a
+fit from its own result is not "more of the same fit": lambda (a 6.8 cp prior around `from`
+on tune2) moves with the start, so each restart lowers the loss again, about half as much
+(w6 → w7). Whether to let the weights go further is lambda's question, and the SEs say
+which weights it is holding (most table squares, the opening/endgame split of material):
+`docs/measurements/tune_gn_2026-10-08.md`.
+
 ## Game source: CCRL 40/15
 
 The whole archive (`CCRL-4040.[2458744].pgn.7z`, 453 MB, 2.7 GB unpacked, downloaded
