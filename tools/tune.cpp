@@ -5,7 +5,7 @@
 //                [jobs=6] [lambda=1e-9] [k=0] [tag=ccrl4040-3000-balanced]
 //                [method=gn] [iters=20] [mu=1e-3] [tol=1e-7] [check=0]   (Levenberg-Marquardt)
 //                [method=adam] [epochs=1500] [lr=2]                      (Adam)
-//                [se=1] [compare=<set>]
+//                [gauge=pin] [se=1] [compare=<set>]
 //
 // Reads #86's train/valid/test.tsv (fen and result columns only) and minimises the
 // mean of (sigma(eval/K) - r)^2 over train, eval = basic_eval() (static, net off) in
@@ -26,9 +26,11 @@
 // Held fixed: the pawn's opening value (the centipawn), the king values (never
 // read by basic_eval()), ks_min_attackers (a gate),
 // ks_danger_div (its scale is the units' scale), ks_storm_blocked_div and
-// ks_full_piece_material (divisors). The table means against the piece values and
-// the king table (one king a side: a constant cancels) are degenerate; lambda keeps
-// such directions at the `from` set. It also holds back the rarely seen weights:
+// ks_full_piece_material (divisors), and the weights no train position touches. A
+// constant moved between a piece's value and its square table or mobility table leaves
+// the eval alone: gauge=pin (default, #104, "the gauge" below) fixes those directions,
+// so a piece value is the piece's whole value; with gauge=free only lambda holds them.
+// lambda also holds back the rarely seen weights:
 // lambda=0 fits valid best, but rare table squares and ks_storm entries run out to
 // +-400 cp; 1e-9 keeps the tables within +-150 for most of the gain
 // (docs/measurements/tune_w2_2026-10-04.md). A fit from its own result is therefore a
@@ -43,26 +45,31 @@
 //   path), so F's Gauss-Newton Hessian is 2 A and its gradient 2 g with A = J'J/n + lambda I,
 //   g = J'(q - r)/n + lambda (w - w_from), over the tuned weights only. A step solves
 //   (A + mu diag A) d = -g by Cholesky; it is kept if F falls (mu / 5), else mu * 5 and
-//   again. Stops after iters steps or when one gains less than tol * F. Needs lambda > 0
-//   (weights no position touches make J'J singular). check=1 prints g
+//   again. Stops after iters steps or when one gains less than tol * F. In the pinned
+//   gauge the solver drops one square per table (its anchor moves by minus the others'
+//   steps); Adam takes each step's mean off every pinned table. lambda=0 works (LM's
+//   damping keeps every step defined). check=1 prints g
 //   against Adam's gradient once (2 g = Adam's to rounding).
 // The weights are rounded, and the report gives train/valid/test loss of both sets by
 // the real basic_eval(). It is printed and written as '#' lines at the end of the new set.
 //
-// Standard errors (se=1), at the kept point, both methods: Cov(w) ~ sigma^2/n A^-1,
+// Standard errors (se=1), at the kept point, both methods: Cov(w) ~ sigma^2/n A^-1
+// (in the solver's coordinates, an anchor's variance from the rest of its table),
 // sigma^2 the mean squared residual on train. That treats the residuals as independent
 // with one variance (they are not: positions of one game share a result, and a result's
 // variance depends on q), so the SEs are a lower bound of the sampling noise. SE is the
-// plain sqrt(Cov_jj). SE* is gauge-free: a table or mobility entry against the mean of its
+// plain sqrt(Cov_jj). In the pinned gauge SE* = SE. With gauge=free, SE* is gauge-free: a table or mobility entry against the mean of its
 // table, a piece value plus the means of its square table and mobility table (a constant
 // moved between them leaves the eval alone, so only lambda holds their split, and the
 // plain SEs of those weights are mostly lambda's). lambda is a prior of sd
 // sqrt(sigma^2/(n lambda)) around `from` (6.8 cp on tune2 at 1e-9), so it caps every SE.
 // A weight is flagged "lambda" when its SE* shrinks by more than 1.5 with 10 lambda: the
-// prior gives it more than about 1/7 of its precision. "no-data": no position touches it. The king tables' constant
-// (one king a side) has no gauge-free form: only the entries against their mean mean
-// anything there. They are written as '# se' lines after the report. compare=<set>
-// counts the gauge-free differences between that set and the new one beyond 2 SE*.
+// prior gives it more than about 1/7 of its precision. "no-data": no position touches it.
+// If A is singular (lambda=0), the SEs take the smallest ridge (from 1e-15 * the largest
+// diagonal, x10) that lets Cholesky through; the report names the weakest direction
+// (inverse iteration) either way. They are written as '# se' lines after the report.
+// compare=<set> (rewritten into the gauge too) counts the differences between that set
+// and the new one beyond 2 SE*.
 // Memory: one n_tuned^2 double matrix per thread (~9 MB each) and three more.
 //
 // Memory: about 230 bytes per train or valid position (most of it the feature
@@ -110,6 +117,7 @@ struct Options
     bool se = true;                     // standard errors at the end
     bool check = false;                 // gn: its gradient against Adam's, once
     std::string compare;                // a set whose differences to the new one are judged by the SEs
+    bool pin = true;                    // gauge=pin: table means and mobility constants in the piece values
 };
 
 // ---- the parameters: every number of a weight set, flat, in weight_fields() order
@@ -148,6 +156,62 @@ static void build_params(const WEIGHTS& from)
     for(const int* p : {&W.piece_value[0], &W.piece_value[5], &W.piece_value_endgame[5], &W.ks_min_attackers, &W.ks_danger_div, &W.ks_storm_blocked_div, &W.ks_full_piece_material})
     param_tuned[flat(W, p)] = false;
 }
+
+// ---- the gauge (#104)
+
+// A constant added to every square of a piece's table, or to every entry of one of its
+// mobility tables, and taken off its value, leaves the eval alone (each piece stands on one
+// square and has one mobility count; both blend by the same phase). gauge=pin fixes those
+// directions: every table's mean over the squares the piece can stand on is 0 (pawns: ranks
+// 2-7), and every mobility table is 0 at a typical count, so the piece value is the whole
+// value of a piece with typical mobility on an average square. The king's constant cancels
+// (one king a side) and is dropped. The pawn's opening value stays the unit, held: it takes
+// its table's mean (w7: 140 -> 137) and is then fixed as before. The rewrite moves integers
+// between material_eval(), piecetable() and the mobility sum, which basic_eval() each divide
+// by PHASE_MAX and truncate apart, so the real eval moves by a few cp on some positions; the
+// model (no truncation) does not move at all.
+static const int MOB_PIN[6] = {-1, 5, 6, 7, 9, -1};     // pawn rook knight bishop queen king: the most frequent counts on tune2
+static const int MOB_SIZE[6] = {0, 15, 9, 14, 28, 0};
+
+static int* mobility_table(WEIGHTS& W, int piece, int ph)
+{
+    switch(piece)
+    {
+        case 1: return ph ? W.mobility_rook_endgame : W.mobility_rook_opening;
+        case 2: return ph ? W.mobility_knight_endgame : W.mobility_knight_opening;
+        case 3: return ph ? W.mobility_bishop_endgame : W.mobility_bishop_opening;
+        case 4: return ph ? W.mobility_queen_endgame : W.mobility_queen_opening;
+    }
+    return nullptr;
+}
+static bool on_table(int piece, int sq) { return piece!=0 || (sq>=8 && sq<56); }
+
+// W rewritten into the pinned gauge, the eval unchanged up to rounding the table means.
+static void regauge(WEIGHTS& W)
+{
+    for(int piece=0;piece<6;piece++)
+    for(int ph=0;ph<2;ph++)
+    {
+        int* tab = ph ? W.piece_table_value_endgame[piece] : W.piece_table_value_opening[piece];
+        int* value = ph ? W.piece_value_endgame : W.piece_value;
+        long sum = 0; int n = 0;
+        for(int sq=0;sq<64;sq++) if(on_table(piece, sq)) { sum += tab[sq]; n++; }
+        const int c = (int)std::lround((double)sum/n);
+        for(int sq=0;sq<64;sq++) if(on_table(piece, sq)) tab[sq] -= c;
+        if(piece<5) value[piece] += c;
+        if(int* mob = mobility_table(W, piece, ph))
+        {
+            const int m = mob[MOB_PIN[piece]];
+            for(int k=0;k<MOB_SIZE[piece];k++) mob[k] -= m;
+            value[piece] += m;
+        }
+    }
+}
+
+// make_features() compares basic_eval() with W_FROM against W_CHECK (the set as read)
+static const WEIGHTS* W_CHECK = nullptr;
+static int check_worst = 0;
+static size_t check_n = 0, check_differ = 0, check_sum = 0;
 
 // ---- one position as the model sees it
 
@@ -589,6 +653,48 @@ static std::vector<double> cholesky_inverse(const std::vector<double>& U, int m)
     return S;
 }
 
+// ---- the solver's coordinates: the tuned weights but one square per pinned table (its
+// anchor), which moves by minus the sum of the others' steps, so the mean stays put
+
+static int n_red = 0;
+static int red_t[MAX_PARAMS];           // reduced -> tuned
+static int red_of[MAX_PARAMS];          // tuned -> reduced, -1 for an anchor
+static int anchor_of[MAX_PARAMS];       // tuned -> its table's anchor (tuned), -1 if none
+static std::vector<std::vector<int>> pin_groups;   // tuned indices of each pinned table, anchor last
+
+// The normal equations (A upper, nt^2) in reduced coordinates: B'AB, B'g.
+static void reduce(const std::vector<double>& A, const std::vector<double>& g, int nt, std::vector<double>& Ar, std::vector<double>& gr)
+{
+    auto a = [&](int x, int y) { return x<=y ? A[(size_t)x*nt+y] : A[(size_t)y*nt+x]; };
+    Ar.assign((size_t)n_red*n_red, 0);
+    gr.assign(n_red, 0);
+    for(int i=0;i<n_red;i++)
+    {
+        const int ti = red_t[i], ai = anchor_of[ti];
+        gr[i] = g[ti] - (ai>=0 ? g[ai] : 0);
+        for(int k=i;k<n_red;k++)
+        {
+            const int tk = red_t[k], ak = anchor_of[tk];
+            double x = a(ti, tk);
+            if(ak>=0) x -= a(ti, ak);
+            if(ai>=0) x -= a(ai, tk);
+            if(ai>=0 && ak>=0) x += a(ai, ak);
+            Ar[(size_t)i*n_red+k] = x;
+        }
+    }
+}
+
+// A reduced step z as a step over the tuned weights.
+static void expand(const double* z, std::vector<double>& step, int nt)
+{
+    step.assign(nt, 0);
+    for(int i=0;i<n_red;i++)
+    {
+        step[red_t[i]] += z[i];
+        if(anchor_of[red_t[i]]>=0) step[anchor_of[red_t[i]]] -= z[i];
+    }
+}
+
 // ---- the data
 
 static bool read_split(const std::string& path, Split& s)
@@ -622,7 +728,8 @@ static void make_features(Split& s, int jobs, bool features)
 {
     const size_t n = s.count();
     std::vector<std::vector<std::unique_ptr<uint32_t[]>>> blocks(jobs);
-    std::vector<size_t> words_of(jobs, 0);
+    std::vector<size_t> words_of(jobs, 0), differ(jobs, 0), dsum(jobs, 0);
+    std::vector<int> worst(jobs, 0);
     std::vector<std::thread> pool;
     for(int t=0;t<jobs;t++)
     pool.emplace_back([&, t]
@@ -635,6 +742,13 @@ static void make_features(Split& s, int jobs, bool features)
             const std::string fen = s.fen(i);
             if(!uci_parse_fen(fen, b)) { std::fprintf(stderr, "bad FEN %s\n", fen.c_str()); std::exit(1); }
             s.base[i] = basic_eval(&b, W_FROM);
+            if(W_CHECK)
+            {
+                const int d = std::abs(basic_eval(&b, *W_CHECK) - s.base[i]);
+                worst[t] = std::max(worst[t], d);
+                differ[t] += d!=0;
+                dsum[t] += d;
+            }
             if(!features)
             continue;
             words.clear();
@@ -656,7 +770,11 @@ static void make_features(Split& s, int jobs, bool features)
     {
         for(auto& b : blocks[t]) s.blocks.push_back(std::move(b));
         s.n_words += words_of[t];
+        check_worst = std::max(check_worst, worst[t]);
+        check_differ += differ[t];
+        check_sum += dsum[t];
     }
+    if(W_CHECK) check_n += n;
 }
 
 // Mean loss of the real basic_eval() with W over the split in `path`.
@@ -735,10 +853,11 @@ int main(int argc, char** argv)
         else if(k=="se") opt.se = std::atoi(v.c_str())!=0;
         else if(k=="check") opt.check = std::atoi(v.c_str())!=0;
         else if(k=="compare") opt.compare = v;
+        else if(k=="gauge" && (v=="pin" || v=="free")) opt.pin = v=="pin";
         else { std::fprintf(stderr, "unknown option %s\n", k.c_str()); return 2; }
     }
     if(opt.method!="adam" && opt.method!="gn") { std::fprintf(stderr, "method is adam or gn\n"); return 2; }
-    if(opt.lambda<=0 && (opt.method=="gn" || opt.se)) { std::fprintf(stderr, "method=gn and se=1 need lambda > 0\n"); return 2; }
+    if(opt.lambda<0) { std::fprintf(stderr, "lambda >= 0\n"); return 2; }
 
     Zobrist zobrist_keys;
     initialize_rand();
@@ -754,7 +873,17 @@ int main(int argc, char** argv)
     W_FROM = WEIGHTS_OG;
     if(!load_weight_set(opt.from, W_FROM, from_info, error)) { std::fprintf(stderr, "%s\n", error.c_str()); return 1; }
     if(opt.out.empty()) opt.out = "weights/w" + std::to_string(W_FROM.version+1) + ".txt";
+    const WEIGHTS W_READ = W_FROM;
+    if(opt.pin)
+    {
+        regauge(W_FROM);
+        W_CHECK = &W_READ;
+    }
     build_params(W_FROM);
+    if(opt.pin)
+    for(int piece=1;piece<=4;piece++)
+    for(int ph=0;ph<2;ph++)
+    param_tuned[flat(W_FROM, mobility_table(W_FROM, piece, ph) + MOB_PIN[piece])] = false;
     build_groups();
     TO_BASE = flat(W_FROM, &W_FROM.piece_table_value_opening[0][0]);
     TE_BASE = flat(W_FROM, &W_FROM.piece_table_value_endgame[0][0]);
@@ -773,6 +902,17 @@ int main(int argc, char** argv)
 
     std::vector<double> th0(n_params);
     for(int j=0;j<n_params;j++) th0[j] = at(W_FROM, j);
+    char gauge_line[512] = "gauge free: the table means and mobility constants are held by lambda alone";
+    if(opt.pin)
+    {
+        std::string v = "";
+        for(int ph=0;ph<2;ph++)
+        for(int piece=0;piece<5;piece++)
+        v += " " + std::to_string((ph ? W_FROM.piece_value_endgame : W_FROM.piece_value)[piece]) + (piece==4 && !ph ? " /" : "");
+        std::snprintf(gauge_line, sizeof gauge_line, "gauge pinned, set %d rewritten: basic_eval() differs on %zu of %zu positions (mean |diff| %.3f cp, max %d); values P R N B Q%s",
+                      W_FROM.version, check_differ, check_n, check_n ? (double)check_sum/check_n : 0.0, check_worst, v.c_str());
+    }
+    std::printf("%s\n", gauge_line);
 
     // the model against the real eval, set `from`
     {
@@ -804,12 +944,59 @@ int main(int argc, char** argv)
     }
     std::printf("K = %.2f (train loss of set %d: %.6f)\n", K, W_FROM.version, base_loss(split[0], K));
 
+    // the weights no train position touches are held at `from`
+    std::vector<char> touched(n_params, 0);
+    std::vector<size_t> seen(n_params, 0);
+    for(const Pos& p : split[0].pos)
+    {
+        for(int k=0;k<p.n_tab;k++)
+        {
+            const int idx = (p.w[k>>1] >> (16*(k&1))) & 511;
+            touched[TO_BASE+idx] = touched[TE_BASE+idx] = 1;
+            seen[TO_BASE+idx]++;
+        }
+        const uint32_t* w = p.w + (p.n_tab+1)/2;
+        for(int k=0;k<p.n_lin+p.n_ks[0]+p.n_ks[1];k++) { touched[w[k] & PARAM_MASK] = 1; seen[w[k] & PARAM_MASK]++; }
+    }
+    int untouched = 0;
     for(int j=0;j<n_params;j++)
     {
-        tix[j] = param_tuned[j] ? n_tuned : -1;
-        if(param_tuned[j]) jof[n_tuned++] = j;
+        untouched += param_tuned[j] && !touched[j];
+        tix[j] = param_tuned[j] && touched[j] ? n_tuned : -1;
+        if(tix[j]>=0) jof[n_tuned++] = j;
     }
     const int nt = n_tuned;
+    {
+        std::string modes;
+        for(int piece=1;piece<=4;piece++)
+        {
+            const int j0 = flat(W_FROM, mobility_table(W_FROM, piece, 0));
+            int top = 0;
+            for(int k=1;k<MOB_SIZE[piece];k++) if(seen[j0+k]>seen[j0+top]) top = k;
+            modes += std::string(" ") + "RNBQ"[piece-1] + " " + std::to_string(top);
+        }
+        std::printf("tuned: %d weights, %d more no train position touches; the most frequent mobility counts:%s\n", nt, untouched, modes.c_str());
+    }
+    // the pinned tables, and the reduced coordinates
+    for(int t=0;t<nt;t++) anchor_of[t] = -1;
+    if(opt.pin)
+    for(int piece=0;piece<6;piece++)
+    for(int ph=0;ph<2;ph++)
+    {
+        std::vector<int> G;
+        for(int sq=0;sq<64;sq++)
+        if(on_table(piece, sq) && tix[(ph ? TE_BASE : TO_BASE) + 64*piece + sq]>=0) G.push_back(tix[(ph ? TE_BASE : TO_BASE) + 64*piece + sq]);
+        if(G.size()<2) continue;
+        for(size_t k=0;k+1<G.size();k++) anchor_of[G[k]] = G.back();
+        pin_groups.push_back(G);
+    }
+    for(int t=0;t<nt;t++) red_of[t] = -1;
+    for(int t=0;t<nt;t++)
+    {
+        bool anchor = false;
+        for(const auto& G : pin_groups) anchor |= G.back()==t;
+        if(!anchor) { red_of[t] = n_red; red_t[n_red++] = t; }
+    }
     auto regular = [&](const double* x) { double r = 0; for(int t=0;t<nt;t++) r += (x[jof[t]]-th0[jof[t]])*(x[jof[t]]-th0[jof[t]]); return opt.lambda*r; };
 
     std::vector<double> th = th0, best = th0;
@@ -818,21 +1005,29 @@ int main(int argc, char** argv)
     std::printf("epoch 0: train %.6f valid %.6f\n", model_loss(split[0], th.data(), K, opt.jobs, nullptr), best_valid);
     if(opt.method=="adam")
     {
-        // full-batch Adam
-        std::vector<double> grad(n_params), m(n_params, 0), v(n_params, 0);
+        // full-batch Adam; a pinned table's step loses its mean
+        std::vector<double> grad(n_params), m(n_params, 0), v(n_params, 0), prev;
         const double b1 = 0.9, b2 = 0.999;
         for(int ep=1; ep<=opt.epochs; ep++)
         {
             const double train = model_loss(split[0], th.data(), K, opt.jobs, grad.data());
             const double lr = opt.lr*(0.01 + 0.99*0.5*(1+std::cos(M_PI*(ep-1)/opt.epochs)));
+            prev = th;
             for(int j=0;j<n_params;j++)
             {
-                if(!param_tuned[j]) continue;
+                if(tix[j]<0) continue;
                 const double gj = grad[j] + 2*opt.lambda*(th[j]-th0[j]);
                 m[j] = b1*m[j] + (1-b1)*gj;
                 v[j] = b2*v[j] + (1-b2)*gj*gj;
                 const double mh = m[j]/(1-std::pow(b1, ep)), vh = v[j]/(1-std::pow(b2, ep));
                 if(vh>0) th[j] -= lr*mh/(std::sqrt(vh)+1e-12);
+            }
+            for(const auto& G : pin_groups)
+            {
+                double mean = 0;
+                for(int t : G) mean += th[jof[t]]-prev[jof[t]];
+                mean /= G.size();
+                for(int t : G) th[jof[t]] -= mean;
             }
             const double valid = model_loss(split[1], th.data(), K, opt.jobs, nullptr);
             if(valid<best_valid) { best_valid = valid; best = th; best_epoch = ep; }
@@ -848,13 +1043,14 @@ int main(int argc, char** argv)
     }
     else
     {
-        // Levenberg-Marquardt: (A + mu diag A) step = -g, kept if the objective falls
-        std::vector<double> A, g, U, step(nt), tn;
+        // Levenberg-Marquardt: (A + mu diag A) step = -g in reduced coordinates, kept if the objective falls
+        std::vector<double> A, g, Ar, gr, U, z(n_red), step, tn;
         double F = model_loss(split[0], th.data(), K, opt.jobs, nullptr) + regular(th.data());
         double mu = opt.mu;
         for(int it=1; it<=opt.iters; it++)
         {
             normal_eqs(split[0], th.data(), th0.data(), K, opt.lambda, opt.jobs, A, g);
+            reduce(A, g, nt, Ar, gr);
             if(opt.check && it==1)
             {
                 // Adam's gradient is twice g
@@ -876,11 +1072,12 @@ int main(int argc, char** argv)
             double Fn = F;
             for(int tries=0; tries<20 && !taken; tries++)
             {
-                U = A;
-                for(int t=0;t<nt;t++) U[(size_t)t*nt+t] *= 1+mu;
-                if(!cholesky(U, nt)) { mu *= 10; continue; }
-                for(int t=0;t<nt;t++) step[t] = -g[t];
-                cholesky_solve(U, nt, step.data());
+                U = Ar;
+                for(int i=0;i<n_red;i++) U[(size_t)i*n_red+i] *= 1+mu;
+                if(!cholesky(U, n_red)) { mu *= 10; continue; }
+                for(int i=0;i<n_red;i++) z[i] = -gr[i];
+                cholesky_solve(U, n_red, z.data());
+                expand(z.data(), step, nt);
                 tn = th;
                 for(int t=0;t<nt;t++) tn[jof[t]] += step[t];
                 Fn = model_loss(split[0], tn.data(), K, opt.jobs, nullptr) + regular(tn.data());
@@ -903,76 +1100,134 @@ int main(int argc, char** argv)
         }
     }
 
-    // standard errors at the kept point: sigma^2/n (J'J/n + lambda I)^-1, and again with
-    // 10 lambda, to tell what the data holds from what lambda holds
+    // standard errors at the kept point: sigma^2/n (J'J/n + lambda I)^-1 in reduced
+    // coordinates, and again with 10 lambda, to tell what the data holds from what lambda holds
     std::vector<double> se(nt, 0), se_c(nt, 0);
-    std::vector<int> se_flag(nt, 0);    // 1: no data, 2: held by lambda
+    std::vector<int> se_flag(nt, 0);    // 2: held by lambda
     std::vector<std::vector<std::pair<int,double>>> contrast(nt);
-    double sigma2 = 0;
-    bool ridged = false;
+    double sigma2 = 0, ridge = 0, weakest = 0, top_diag = 0;
+    std::string weakest_dir;
     if(opt.se)
     {
-        std::vector<double> A, g;
+        std::vector<double> A, g, Ar, gr;
         sigma2 = normal_eqs(split[0], best.data(), th0.data(), K, opt.lambda, opt.jobs, A, g);
         const double n = split[0].pos.size();
         std::vector<double> S[2];
-        for(int pass=0;pass<2;pass++)
+        for(int pass=0; pass<(opt.lambda>0 ? 2 : 1); pass++)
         {
-            std::vector<double> U = A;
-            for(int t=0;t<nt;t++) U[(size_t)t*nt+t] += pass*9*opt.lambda;
-            if(!cholesky(U, nt))
+            std::vector<double> Ap = A;
+            for(int t=0;t<nt;t++) Ap[(size_t)t*nt+t] += pass*9*opt.lambda;
+            reduce(Ap, g, nt, Ar, gr);
+            for(int i=0;i<n_red;i++) top_diag = std::max(top_diag, Ar[(size_t)i*n_red+i]);
+            std::vector<double> U = Ar;
+            double r = 0;
+            while(!cholesky(U, n_red))
             {
-                U = A;
-                double top = 0;
-                for(int t=0;t<nt;t++) top = std::max(top, A[(size_t)t*nt+t]);
-                for(int t=0;t<nt;t++) U[(size_t)t*nt+t] += pass*9*opt.lambda + 1e-12*top;
-                ridged = true;
-                if(!cholesky(U, nt)) { std::fprintf(stderr, "the normal equations are not positive definite\n"); return 1; }
+                r = r ? r*10 : 1e-15*top_diag;
+                if(r > 1e-3*top_diag) { std::fprintf(stderr, "the normal equations are not positive definite\n"); return 1; }
+                U = Ar;
+                for(int i=0;i<n_red;i++) U[(size_t)i*n_red+i] += r;
             }
-            S[pass] = cholesky_inverse(U, nt);
+            if(pass==0)
+            {
+                ridge = r;
+                // the weakest directions, by subspace inverse iteration (6 vectors)
+                const int nv = std::min(6, n_red);
+                std::vector<std::vector<double>> X(nv, std::vector<double>(n_red));
+                for(int v=0;v<nv;v++) for(int i=0;i<n_red;i++) X[v][i] = std::sin(1.0 + i*(v+1)*0.7);
+                auto orthonormalise = [&]
+                {
+                    for(int v=0;v<nv;v++)
+                    {
+                        for(int u=0;u<v;u++)
+                        {
+                            double d = 0;
+                            for(int i=0;i<n_red;i++) d += X[u][i]*X[v][i];
+                            for(int i=0;i<n_red;i++) X[v][i] -= d*X[u][i];
+                        }
+                        double norm = 0;
+                        for(double q : X[v]) norm += q*q;
+                        for(double& q : X[v]) q /= std::sqrt(norm);
+                    }
+                };
+                for(int k=0;k<60;k++)
+                {
+                    orthonormalise();
+                    for(int v=0;v<nv;v++) cholesky_solve(U, n_red, X[v].data());
+                }
+                orthonormalise();
+                for(int v=0;v<nv;v++)
+                {
+                    double q = 0;
+                    for(int i=0;i<n_red;i++)
+                    {
+                        double y = 0;
+                        for(int k=0;k<n_red;k++) y += (i<=k ? Ar[(size_t)i*n_red+k] : Ar[(size_t)k*n_red+i])*X[v][k];
+                        q += X[v][i]*y;
+                    }
+                    if(v==0) weakest = q;
+                    std::vector<double> st;
+                    expand(X[v].data(), st, nt);
+                    std::vector<std::pair<double,int>> big;
+                    for(int t=0;t<nt;t++) big.push_back({-std::fabs(st[t]), t});
+                    std::sort(big.begin(), big.end());
+                    char part[160];
+                    std::snprintf(part, sizeof part, "%s  %.2e:", v ? "\n" : "", q);
+                    weakest_dir += part;
+                    for(int k=0;k<8;k++)
+                    {
+                        std::snprintf(part, sizeof part, "%s %+.2f %s", k ? "," : "", st[big[k].second], param_name[jof[big[k].second]].c_str());
+                        weakest_dir += part;
+                    }
+                }
+            }
+            S[pass] = cholesky_inverse(U, n_red);
             for(double& x : S[pass]) x *= sigma2/n;
         }
-        // gauge-free contrasts: a table or mobility entry against its table's mean, a piece
-        // value plus the means of its tables (adding c to a table and -c to the value leaves
-        // the eval alone)
-        auto data = [&](int t) { return A[(size_t)t*nt+t] > opt.lambda*(1+1e-6); };
-        auto members = [&](int j0, int count) { std::vector<int> v; for(int k=0;k<count;k++) if(tix[j0+k]>=0 && data(tix[j0+k])) v.push_back(tix[j0+k]); return v; };
-        for(int t=0;t<nt;t++) contrast[t] = {{t, 1.0}};
-        auto against_mean = [&](const std::vector<int>& T)
+        // a tuned weight in reduced coordinates: an anchor is minus the rest of its table
+        auto to_red = [&](int t, double c, std::vector<std::pair<int,double>>& out)
         {
-            for(int t : T) for(int u : T) contrast[t].push_back({u, -1.0/T.size()});
+            if(red_of[t]>=0) { out.push_back({red_of[t], c}); return; }
+            for(const auto& G : pin_groups) if(G.back()==t) for(size_t k=0;k+1<G.size();k++) out.push_back({red_of[G[k]], -c});
         };
-        // piece order: pawn rook knight bishop queen king
-        const int* mob[5][2] = {{nullptr, nullptr}, {W_FROM.mobility_rook_opening, W_FROM.mobility_rook_endgame},
-                                {W_FROM.mobility_knight_opening, W_FROM.mobility_knight_endgame},
-                                {W_FROM.mobility_bishop_opening, W_FROM.mobility_bishop_endgame}, {W_FROM.mobility_queen_opening, W_FROM.mobility_queen_endgame}};
-        const int mob_n[5] = {0, 15, 9, 14, 28};
-        for(int piece=0;piece<6;piece++)
-        for(int ph=0;ph<2;ph++)
+        for(int t=0;t<nt;t++) contrast[t] = {{t, 1.0}};
+        if(!opt.pin)
         {
-            const std::vector<int> T = members((ph ? TE_BASE : TO_BASE) + 64*piece, 64);
-            const std::vector<int> M = piece>=1 && piece<=4 ? members(flat(W_FROM, mob[piece][ph]), mob_n[piece]) : std::vector<int>();
-            const int v = tix[flat(W_FROM, ph ? &W_FROM.piece_value_endgame[piece] : &W_FROM.piece_value[piece])];
-            if(v>=0)
+            // gauge-free contrasts: a table or mobility entry against its table's mean, a piece
+            // value plus the means of its tables
+            auto members = [&](int j0, int count) { std::vector<int> v; for(int k=0;k<count;k++) if(tix[j0+k]>=0) v.push_back(tix[j0+k]); return v; };
+            auto against_mean = [&](const std::vector<int>& T)
             {
-                for(int u : T) contrast[v].push_back({u, 1.0/T.size()});
-                for(int u : M) contrast[v].push_back({u, 1.0/M.size()});
+                for(int t : T) for(int u : T) contrast[t].push_back({u, -1.0/T.size()});
+            };
+            for(int piece=0;piece<6;piece++)
+            for(int ph=0;ph<2;ph++)
+            {
+                const std::vector<int> T = members((ph ? TE_BASE : TO_BASE) + 64*piece, 64);
+                const std::vector<int> M = mobility_table(W_FROM, piece, ph) ? members(flat(W_FROM, mobility_table(W_FROM, piece, ph)), MOB_SIZE[piece]) : std::vector<int>();
+                const int v = tix[flat(W_FROM, ph ? &W_FROM.piece_value_endgame[piece] : &W_FROM.piece_value[piece])];
+                if(v>=0)
+                {
+                    for(int u : T) contrast[v].push_back({u, 1.0/T.size()});
+                    for(int u : M) contrast[v].push_back({u, 1.0/M.size()});
+                }
+                against_mean(T);
+                against_mean(M);
             }
-            against_mean(T);
-            against_mean(M);
         }
-        auto var = [&](const std::vector<double>& Sp, int t)
+        auto var = [&](const std::vector<double>& Sp, const std::vector<std::pair<int,double>>& c)
         {
+            std::vector<std::pair<int,double>> r;
+            for(auto [t, ct] : c) to_red(t, ct, r);
             double s = 0;
-            for(auto [a, ca] : contrast[t]) for(auto [b, cb] : contrast[t]) s += ca*cb*Sp[(size_t)a*nt+b];
+            for(auto [a, ca] : r) for(auto [b, cb] : r) s += ca*cb*Sp[(size_t)a*n_red+b];
             return s;
         };
         for(int t=0;t<nt;t++)
         {
-            se[t] = std::sqrt(S[0][(size_t)t*nt+t]);
-            se_c[t] = std::sqrt(var(S[0], t));
-            if(!data(t)) se_flag[t] = 1;
-            else if(se_c[t] > 1.5*std::sqrt(var(S[1], t))) se_flag[t] = 2;
+            se[t] = std::sqrt(var(S[0], {{t, 1.0}}));
+            se_c[t] = std::sqrt(var(S[0], contrast[t]));
+            if(opt.lambda>0 && se_c[t] > 1.5*std::sqrt(var(S[1], contrast[t]))) se_flag[t] = 2;
         }
         std::printf("standard errors (%.0f s)\n", secs());
     }
@@ -1000,6 +1255,8 @@ int main(int argc, char** argv)
     else
     say(report, "K %.2f (fitted on set %d), lambda %g, gn (Levenberg-Marquardt), %d steps, best step %d (valid, model %.6f), %.0f s",
         K, W_FROM.version, opt.lambda, steps, best_epoch, best_valid, secs());
+    say(report, "%s", gauge_line);
+    say(report, "tuned: %d weights; %d no train position touches, held", nt, untouched);
     say(report, "loss (sigma(basic_eval/K) - result)^2, real eval:");
     say(report, "  set   train      valid      test");
     for(int k=0;k<2;k++)
@@ -1023,14 +1280,22 @@ int main(int argc, char** argv)
         Weight_Set_Info cmp_info;
         const bool cmp = !opt.compare.empty();
         if(cmp && !load_weight_set(opt.compare, W_CMP, cmp_info, error)) { std::fprintf(stderr, "%s\n", error.c_str()); return 1; }
+        if(cmp && opt.pin) regauge(W_CMP);
         auto value = [&](WEIGHTS& W, int t) { double x = 0; for(auto [u, c] : contrast[t]) x += c*at(W, jof[u]); return x; };
         auto group = [&](int j) { return param_name[j].substr(0, param_name[j].find('[')); };
-        say(report, "standard errors (* = gauge-free: a table or mobility entry against its table's mean,");
-        say(report, "a piece value plus those means), sigma^2 %.6f%s:", sigma2, ridged ? ", ridge 1e-12 * max diag added" : "");
+        if(opt.pin)
+        say(report, "standard errors (the gauge is pinned: SE* = SE), sigma^2 %.6f", sigma2);
+        else
+        say(report, "standard errors (* = gauge-free: a table or mobility entry against its table's mean, a piece value plus those means), sigma^2 %.6f", sigma2);
+        char ridge_text[32];
+        std::snprintf(ridge_text, sizeof ridge_text, "%.0e", top_diag ? ridge/top_diag : 0.0);
+        say(report, "weakest directions (Rayleigh quotients of 6 by subspace iteration; the first %.3g), largest diagonal %.3g, lambda %g%s:", weakest, top_diag, opt.lambda,
+            ridge ? (", singular: SEs with a ridge of " + std::string(ridge_text) + " * largest diagonal").c_str() : "");
+        report += weakest_dir + "\n";
         say(report, "  %-34s %5s %8s %8s %6s%s", "group", "n", "median", "median*", "lambda", cmp ? "  >2 SE* vs compare" : "");
         std::vector<std::string> order;
         for(int t=0;t<nt;t++) if(std::find(order.begin(), order.end(), group(jof[t]))==order.end()) order.push_back(group(jof[t]));
-        int total = 0, beyond2 = 0, beyond3 = 0, held = 0, nodata = 0;
+        int total = 0, beyond2 = 0, beyond3 = 0, held = 0;
         for(const std::string& gname : order)
         {
             std::vector<double> a, b;
@@ -1038,7 +1303,6 @@ int main(int argc, char** argv)
             for(int t=0;t<nt;t++)
             {
                 if(group(jof[t])!=gname) continue;
-                if(se_flag[t]==1) { nodata++; continue; }
                 a.push_back(se[t]); b.push_back(se_c[t]);
                 n_lambda += se_flag[t]==2;
                 const double z = std::fabs(value(W_NEW, t)-value(W_CMP, t))/se_c[t];
@@ -1051,14 +1315,20 @@ int main(int argc, char** argv)
             say(report, "  %-34s %5zu %8.2f %8.2f %6d%s", gname.c_str(), a.size(), a[a.size()/2], b[b.size()/2], n_lambda,
                 cmp ? ("  " + std::to_string(n_beyond)).c_str() : "");
         }
-        say(report, "lambda: SE* shrinks by more than 1.5 with 10 lambda (%d weights); %d weights have no data", held, nodata);
+        say(report, "lambda: SE* shrinks by more than 1.5 with 10 lambda (%d weights); %d weights have no data", held, untouched);
         if(cmp)
         say(report, "set %d vs set %d: %d of %d gauge-free differences exceed 2 SE*, %d exceed 3", W_CMP.version, W_NEW.version, beyond2, total, beyond3);
         se_lines = "\n# standard errors: weight, value, SE, SE* (see the report), flag\n";
         for(int t=0;t<nt;t++)
         {
             std::snprintf(line, sizeof line, "# se %-34s %6d %8.2f %8.2f%s\n", param_name[jof[t]].c_str(), at(W_NEW, jof[t]), se[t], se_c[t],
-                          se_flag[t]==1 ? " no-data" : se_flag[t]==2 ? " lambda" : "");
+                          se_flag[t]==2 ? " lambda" : "");
+            se_lines += line;
+        }
+        for(int j=0;j<n_params;j++)
+        if(param_tuned[j] && tix[j]<0)
+        {
+            std::snprintf(line, sizeof line, "# se %-34s %6d        -        - no-data\n", param_name[j].c_str(), at(W_NEW, j));
             se_lines += line;
         }
     }
