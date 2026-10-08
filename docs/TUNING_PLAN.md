@@ -33,7 +33,10 @@ fit from its own result is not "more of the same fit": lambda (a 6.8 cp prior ar
 on tune2) moves with the start, so each restart lowers the loss again, about half as much
 (w6 → w7). Whether to let the weights go further is lambda's question, and the SEs say
 which weights it is holding (most table squares, the opening/endgame split of material):
-`docs/measurements/tune_gn_2026-10-08.md`.
+`docs/measurements/tune_gn_2026-10-08.md`. Since df05613 the fit pins the gauge (square-table
+means and mobility constants are 0, so a piece value is the piece's whole value) and accepts
+lambda=0. Three directions are still held by lambda alone: rank-7 pawns against
+`passed_pawn_value[6]`, the knight's mobility slope, and the shelter constant against material.
 
 ## Game source: CCRL 40/15
 
