@@ -5,7 +5,7 @@
 //                [jobs=6] [lambda=1e-9] [k=0] [tag=ccrl4040-3000-balanced]
 //                [method=gn] [iters=20] [mu=1e-3] [tol=1e-7] [check=0]   (Levenberg-Marquardt)
 //                [method=adam] [epochs=1500] [lr=2]                      (Adam)
-//                [gauge=pin] [se=1] [compare=<set>]
+//                [gauge=pin|pin104|free] [se=1] [compare=<set>]
 //
 // Reads #86's train/valid/test.tsv (fen and result columns only) and minimises the
 // mean of (sigma(eval/K) - r)^2 over train, eval = basic_eval() (static, net off) in
@@ -36,6 +36,12 @@
 // (docs/measurements/tune_w2_2026-10-04.md). A fit from its own result is therefore a
 // new fit, not more of the old one: the pull moves to the new start, and the loss falls
 // again (w7 = w6 refitted twice, #97). One run does reach its minimum (#104).
+//
+// gauge=pin also holds the three directions the means leave exact or near-exact (#106,
+// regauge_degenerate(), docs/measurements/tune_pin3_2026-10-08.md): the endgame passed bonus
+// on the 7th against the pawn table, the knight's defend count against its mobility and
+// tables, and the ks_shelter constant against material (exact but for promotions). With them
+// lambda=0 has finite SEs for every piece value; gauge=pin104 is the gauge without them.
 //
 // Two methods (#104), both keeping the step with the lowest valid loss of the model.
 // Both reach the same minimum; gn in a sixth of the time (docs/measurements/tune_gn_2026-10-08.md).
@@ -118,6 +124,7 @@ struct Options
     bool check = false;                 // gn: its gradient against Adam's, once
     std::string compare;                // a set whose differences to the new one are judged by the SEs
     bool pin = true;                    // gauge=pin: table means and mobility constants in the piece values
+    bool pin3 = true;                   // gauge=pin (not pin104): and the three degenerate directions (#106)
 };
 
 // ---- the parameters: every number of a weight set, flat, in weight_fields() order
@@ -186,9 +193,52 @@ static int* mobility_table(WEIGHTS& W, int piece, int ph)
 }
 static bool on_table(int piece, int sq) { return piece!=0 || (sq>=8 && sq<56); }
 
+// #106: the three directions the data cannot fix even with the means pinned. Each is rewritten
+// out of one weight, which is then held (param_tuned false, set in main()):
+//  - activity_knight_defend D = 0. A knight's mobility count is m = (squares it attacks) -
+//    (own pieces it defends) and the attacked squares depend only on the square, so D per
+//    defended piece = D*A(sq) on the knight tables - D*m on both mobility tables (the blend
+//    weights sum to PHASE_MAX, so no truncation moves apart).
+//  - passed_pawn_value[6] (endgame) = 0. Every pawn on the 7th is passed, so the bonus is a
+//    constant on that rank of the pawn endgame table (same phase blend). The opening bonus
+//    has the same identity, but the held opening pawn value (the unit) already breaks it
+//    (SE 9.9 cp at lambda 0 with only the #104 pins): pinning it too would cost a real dof.
+//  - ks_shelter[2] (a king behind its home pawn) ~ 0. The shelter penalty is scaled by the
+//    enemy's phase material M = N+B+2R+4Q (capped at ks_full_piece_material = 12, the whole
+//    army: only promotions pass it), each of 3 files carrying one entry, so a constant d on
+//    the entries is 3d*M/12 = d*M/4 per king: d/4 on a knight and a bishop, d/2 on a rook, d
+//    on a queen, in both phases. d is ks_shelter[2] rounded to a multiple of 4, so those are
+//    integers. Exact but for that cap and the penalty's truncation.
+// The rewrite is applied before the means, so both constraints hold after it.
+static bool PIN_DEGENERATE = true;
+static const int GAUGE_KS_SHELTER = 2;
+
+static void regauge_degenerate(WEIGHTS& W)
+{
+    const int D = W.activity_knight_defend;
+    for(int ph=0;ph<2;ph++)
+    {
+        int* tab = ph ? W.piece_table_value_endgame[2] : W.piece_table_value_opening[2];
+        for(int sq=0;sq<64;sq++) tab[sq] += D*__builtin_popcountll(Kn_template[sq]);
+        int* mob = mobility_table(W, 2, ph);
+        for(int k=0;k<MOB_SIZE[2];k++) mob[k] -= D*k;
+    }
+    for(int sq=48;sq<56;sq++) W.piece_table_value_endgame[0][sq] += W.passed_pawn_value[6];
+    W.passed_pawn_value[6] = 0;
+    W.activity_knight_defend = 0;
+    const int d = 4*(int)std::lround(W.ks_shelter[GAUGE_KS_SHELTER]/4.0);
+    for(int k=0;k<8;k++) W.ks_shelter[k] -= d;
+    for(int ph=0;ph<2;ph++)
+    {
+        int* value = ph ? W.piece_value_endgame : W.piece_value;
+        value[1] += d/2; value[2] += d/4; value[3] += d/4; value[4] += d;
+    }
+}
+
 // W rewritten into the pinned gauge, the eval unchanged up to rounding the table means.
 static void regauge(WEIGHTS& W)
 {
+    if(PIN_DEGENERATE) regauge_degenerate(W);
     for(int piece=0;piece<6;piece++)
     for(int ph=0;ph<2;ph++)
     {
@@ -211,7 +261,7 @@ static void regauge(WEIGHTS& W)
 // make_features() compares basic_eval() with W_FROM against W_CHECK (the set as read)
 static const WEIGHTS* W_CHECK = nullptr;
 static int check_worst = 0;
-static size_t check_n = 0, check_differ = 0, check_sum = 0;
+static size_t check_n = 0, check_differ = 0, check_sum = 0, check_big = 0;
 
 // ---- one position as the model sees it
 
@@ -728,7 +778,7 @@ static void make_features(Split& s, int jobs, bool features)
 {
     const size_t n = s.count();
     std::vector<std::vector<std::unique_ptr<uint32_t[]>>> blocks(jobs);
-    std::vector<size_t> words_of(jobs, 0), differ(jobs, 0), dsum(jobs, 0);
+    std::vector<size_t> words_of(jobs, 0), differ(jobs, 0), dsum(jobs, 0), big(jobs, 0);
     std::vector<int> worst(jobs, 0);
     std::vector<std::thread> pool;
     for(int t=0;t<jobs;t++)
@@ -747,6 +797,7 @@ static void make_features(Split& s, int jobs, bool features)
                 const int d = std::abs(basic_eval(&b, *W_CHECK) - s.base[i]);
                 worst[t] = std::max(worst[t], d);
                 differ[t] += d!=0;
+                big[t] += d>4;
                 dsum[t] += d;
             }
             if(!features)
@@ -772,6 +823,7 @@ static void make_features(Split& s, int jobs, bool features)
         s.n_words += words_of[t];
         check_worst = std::max(check_worst, worst[t]);
         check_differ += differ[t];
+        check_big += big[t];
         check_sum += dsum[t];
     }
     if(W_CHECK) check_n += n;
@@ -853,7 +905,7 @@ int main(int argc, char** argv)
         else if(k=="se") opt.se = std::atoi(v.c_str())!=0;
         else if(k=="check") opt.check = std::atoi(v.c_str())!=0;
         else if(k=="compare") opt.compare = v;
-        else if(k=="gauge" && (v=="pin" || v=="free")) opt.pin = v=="pin";
+        else if(k=="gauge" && (v=="pin" || v=="pin104" || v=="free")) { opt.pin = v!="free"; opt.pin3 = v=="pin"; }
         else { std::fprintf(stderr, "unknown option %s\n", k.c_str()); return 2; }
     }
     if(opt.method!="adam" && opt.method!="gn") { std::fprintf(stderr, "method is adam or gn\n"); return 2; }
@@ -874,6 +926,7 @@ int main(int argc, char** argv)
     if(!load_weight_set(opt.from, W_FROM, from_info, error)) { std::fprintf(stderr, "%s\n", error.c_str()); return 1; }
     if(opt.out.empty()) opt.out = "weights/w" + std::to_string(W_FROM.version+1) + ".txt";
     const WEIGHTS W_READ = W_FROM;
+    PIN_DEGENERATE = opt.pin3;
     if(opt.pin)
     {
         regauge(W_FROM);
@@ -884,6 +937,9 @@ int main(int argc, char** argv)
     for(int piece=1;piece<=4;piece++)
     for(int ph=0;ph<2;ph++)
     param_tuned[flat(W_FROM, mobility_table(W_FROM, piece, ph) + MOB_PIN[piece])] = false;
+    if(opt.pin3)
+    for(const int* p : {&W_FROM.activity_knight_defend, &W_FROM.passed_pawn_value[6], &W_FROM.ks_shelter[GAUGE_KS_SHELTER]})
+    param_tuned[flat(W_FROM, p)] = false;
     build_groups();
     TO_BASE = flat(W_FROM, &W_FROM.piece_table_value_opening[0][0]);
     TE_BASE = flat(W_FROM, &W_FROM.piece_table_value_endgame[0][0]);
@@ -909,8 +965,8 @@ int main(int argc, char** argv)
         for(int ph=0;ph<2;ph++)
         for(int piece=0;piece<5;piece++)
         v += " " + std::to_string((ph ? W_FROM.piece_value_endgame : W_FROM.piece_value)[piece]) + (piece==4 && !ph ? " /" : "");
-        std::snprintf(gauge_line, sizeof gauge_line, "gauge pinned, set %d rewritten: basic_eval() differs on %zu of %zu positions (mean |diff| %.3f cp, max %d); values P R N B Q%s",
-                      W_FROM.version, check_differ, check_n, check_n ? (double)check_sum/check_n : 0.0, check_worst, v.c_str());
+        std::snprintf(gauge_line, sizeof gauge_line, "gauge pinned, set %d rewritten: basic_eval() differs on %zu of %zu positions (mean |diff| %.3f cp, max %d, %zu beyond 4); values P R N B Q%s",
+                      W_FROM.version, check_differ, check_n, check_n ? (double)check_sum/check_n : 0.0, check_worst, check_big, v.c_str());
     }
     std::printf("%s\n", gauge_line);
 
