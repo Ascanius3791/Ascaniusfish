@@ -118,7 +118,8 @@ static int ks_attack_penalty(const BB* const original, const KS_Maps& m, int d, 
 }
 
 // Shelter penalty for side `d`'s king, scaled by the enemy's pieces in game_phase() units
-// (knight and bishop 1, rook 2, queen 4), full at W.ks_full_piece_material.
+// (knight and bishop 1, rook 2, queen 4), full at W.ks_full_piece_material, and more after
+// a promotion: no cap, so a constant on ks_shelter is exactly one on the material (#107).
 static int ks_shelter_penalty(const BB* const original, int d, int ksq, const WEIGHTS& W)
 {
     const uint64_t* B = original->Board;
@@ -156,8 +157,6 @@ static int ks_shelter_penalty(const BB* const original, int d, int ksq, const WE
 
     int material = count(B[2 + enemy_off]) + count(B[3 + enemy_off])
                  + 2 * count(B[1 + enemy_off]) + 4 * count(B[4 + enemy_off]);
-    if(material > W.ks_full_piece_material)
-    material = W.ks_full_piece_material;
     return penalty * material / W.ks_full_piece_material;
 }
 
