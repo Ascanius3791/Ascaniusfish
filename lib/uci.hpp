@@ -86,9 +86,39 @@ struct UCI_Table : lookup_table
             return;
         }
         entry.pv_line.depth = std::max(entry.pv_line.depth, s->pv_line.depth);
+        if(tt_mark(s->pv_line)>0 && !tt_improves_marked(entry.pv_line, s->pv_line))
+        return;   // a marked entry holds as short a mate already (#100)
         entry.search_id = current_search_id;
         set_tt_mark(entry.pv_line, tt_mark(s->pv_line));
         *s = TT_slot(entry);
+    }
+
+    // An analysis at a marked position (#100): its own exact entry would cut
+    // every iteration up to its stored depth, and a better informed result,
+    // which a later save takes at any depth, would never show. set_aside()
+    // keeps the mark and the move and makes the rest a vacuous bound for the
+    // search (a proof stays, there is nothing to find over it); put_back()
+    // restores the held result unless the search improved on it
+    // (tt_improves_marked()). False, and nothing held, for any other root.
+    bool set_aside(uint64_t zobrist_hash, TT_Result& held)
+    {
+        TT_slot* s = find_slot(zobrist_hash);
+        if(!s || tt_mark(s->pv_line)<=0 || tt_proven(s->pv_line))
+        return false;
+        held = s->pv_line;
+        s->pv_line.depth = 0;
+        s->pv_line.bound_type = -1;
+        s->pv_line.eval = INT_MIN;
+        return true;
+    }
+    void put_back(uint64_t zobrist_hash, const TT_Result& held)
+    {
+        TT_slot* s = find_slot(zobrist_hash);   // a marked entry is never evicted
+        if(!s || tt_improves_marked(s->pv_line, held))
+        return;
+        const int16_t mark = std::max(tt_mark(held), tt_mark(s->pv_line));
+        s->pv_line = held;
+        set_tt_mark(s->pv_line, mark);
     }
 
     // The correspondence mode (#101): the user's marks. A table that holds one
@@ -103,10 +133,12 @@ struct UCI_Table : lookup_table
     }
 
     // "Save to root": `entry` goes in with `mark`. Where the position has an
-    // entry already, the result insert() would keep stays (the deeper, a proof
-    // over a score) and the higher mark of the two is the entry's. False if the
-    // bucket is full of marked entries: a mark is never evicted, not even by a
-    // higher one.
+    // entry already, it takes the save if that improves on it as a search result
+    // would (tt_improves_marked(): a shorter mate, a proof, a deeper exact
+    // result) or has the higher mark and the entry holds no proof (#100); the
+    // higher mark of the two is the entry's either way. An unmarked entry counts
+    // as mark 0. False if the bucket is full of marked entries: a mark is never
+    // evicted, not even by a higher one.
     bool import_marked(TT_entry entry, int16_t mark)
     {
         if(mark>0)
@@ -125,9 +157,7 @@ struct UCI_Table : lookup_table
             return find_slot(entry.zobrist_hash)!=nullptr;
         }
         const TT_Result& held = s->pv_line;
-        const bool proof = tt_proven(entry.pv_line), held_proof = tt_proven(held);
-        const bool take = (proof && !held_proof) || (entry.pv_line.depth>held.depth && (proof || !held_proof))
-                       || (entry.pv_line.depth==held.depth && entry.pv_line.bound_type==0 && held.bound_type!=0);
+        const bool take = tt_improves_marked(entry.pv_line, held) || (mark>tt_mark(held) && !tt_proven(held));
         const int16_t keep = std::max(mark, tt_mark(held));
         if(take)
         {
@@ -157,10 +187,11 @@ struct UCI_Table : lookup_table
     }
 
     protected:
-    // With marks held: a mark first (the higher first), then a proof, then
-    // lookup_table's value (depth, less the age). Within a tier the deeper.
-    // An unmarked candidate never reaches the mark tier, so it never evicts a
-    // marked entry; import_marked() keeps a marked one from doing it.
+    // With marks held: a mark first (the higher first, within a mark the
+    // deeper), then lookup_table's value (depth, less the age), so unmarked
+    // entries are ranked as without marks (#100). An unmarked candidate never
+    // reaches the mark tier, so it never evicts a marked entry;
+    // import_marked() keeps a marked one from doing it.
     float value_for_victim_index(const TT_slot& slot) const override
     {
         if(!marks_held)
@@ -168,8 +199,6 @@ struct UCI_Table : lookup_table
         const TT_Result& r = slot.pv_line;
         if(tt_mark(r)>0)
         return 3e7f + 128.0f*tt_mark(r) + r.depth;
-        if(tt_proven(r))
-        return 1.2e7f + r.depth;
         return lookup_table::value_for_victim_index(slot);
     }
 

@@ -91,4 +91,27 @@ inline bool tt_proven(const TT_Result& r)
         || (r.bound_type==1 && r.eval<=INT_MIN+max_mating_seq);
 }
 
+// Whether `n`, a result for the position of a marked entry holding `o`,
+// improves on it (#100). The marked entry is what the user called important,
+// so only a better statement replaces it: a shorter mate (the same mate
+// exact over a claim of it), a proof over no proof, else a deeper exact
+// result, never one over a proof. A deeper bound is not one: its move only
+// failed high or low, and the exact result and the saved move would go.
+inline bool tt_improves_marked(const TT_Result& n, const TT_Result& o)
+{
+    const bool n_proof = tt_proven(n), o_proof = tt_proven(o);
+    if(n_proof && o_proof)
+    {
+        if((n.eval>0)!=(o.eval>0))
+        return false;
+        // plies to the mate; a table score is the edge of the band, the longest
+        const long long n_plies = n.eval>0 ? (long long)INT_MAX-n.eval : (long long)n.eval-INT_MIN;
+        const long long o_plies = o.eval>0 ? (long long)INT_MAX-o.eval : (long long)o.eval-INT_MIN;
+        return n_plies<o_plies || (n_plies==o_plies && n.bound_type==0 && o.bound_type!=0);
+    }
+    if(n_proof || o_proof)
+    return n_proof;
+    return n.bound_type==0 && n.depth>o.depth;
+}
+
 #endif // TT_RESULT_HPP

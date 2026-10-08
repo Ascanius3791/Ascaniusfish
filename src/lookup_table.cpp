@@ -113,6 +113,7 @@
                     {
                         is_already_in_table=1;
                         const int16_t mark=tt_mark(old_entry.pv_line);// the user's mark (#101) belongs to the position: a search result that replaces the entry keeps it
+                        const TT_slot held=old_entry;// a marked entry takes only an improvement (tt_improves_marked(), #100)
                         if((new_entry.pv_line.depth>old_entry.pv_line.depth && (tt_proven(new_entry.pv_line) || !tt_proven(old_entry.pv_line))) || (tt_proven(new_entry.pv_line) && !tt_proven(old_entry.pv_line)))//a proof holds at every depth: it replaces an unproven entry however deep, and only a deeper proof replaces it
                         {
                             old_entry=new_entry;
@@ -122,6 +123,7 @@
                         {
                             old_entry=new_entry;
                         }
+                        if(mark>0) old_entry = tt_improves_marked(new_entry.pv_line, held.pv_line) ? TT_slot(new_entry) : held;
                         set_tt_mark(old_entry.pv_line, std::max(mark, tt_mark(old_entry.pv_line)));
                         old_entry.search_id=current_search_id;// still needed by this search: don't let it age
                         break;

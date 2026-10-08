@@ -387,7 +387,8 @@ void UCI_Engine::handle_ttmark(const std::vector<std::string>& tokens)
     const bool stored = table->import_marked(entry, (int16_t)mark);
     const TT_slot* slot = table->find_slot(pos.zobrist_hash);
     send("info string ttmark " + std::string(stored ? "stored" : "not stored, its bucket holds only marked entries")
-         + (slot ? ", mark " + std::to_string(tt_mark(slot->pv_line)) + " depth " + std::to_string(slot->pv_line.depth) : std::string()));
+         + (slot ? ", mark " + std::to_string(tt_mark(slot->pv_line)) + " depth " + std::to_string(slot->pv_line.depth)
+                   + " bound " + std::to_string(slot->pv_line.bound_type) + " eval " + std::to_string(slot->pv_line.eval) : std::string()));
 }
 
 // "ttdemote" (#101, "Return to root"): every unmarked entry becomes a vacuous
@@ -999,6 +1000,22 @@ void UCI_Engine::search(UCI_Limits limits, long long start_ns)
         else
         send("info string refresh " + std::to_string(demoted+refresh_routes()) + " entries demoted, "
              + std::to_string(routes.size()) + " routes");
+    }
+    // A marked root's own result is set aside for the search and put back
+    // unless the search improved on it (UCI_Table::set_aside(), #100).
+    struct Marked_Root
+    {
+        UCI_Table* table = nullptr;
+        uint64_t key = 0;
+        TT_Result held;
+        ~Marked_Root() { if(table) table->put_back(key, held); }
+    } marked_root;
+    if(table && analysis && table->set_aside(root.zobrist_hash, marked_root.held))
+    {
+        marked_root.table = table;
+        marked_root.key = root.zobrist_hash;
+        send("info string marked root: its mark " + std::to_string(tt_mark(marked_root.held)) + " depth "
+             + std::to_string(marked_root.held.depth) + " result set aside for this search");
     }
     auto result = all_moves(&root, wfh);
     int n = std::get<0>(result);

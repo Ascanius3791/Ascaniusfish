@@ -2,7 +2,10 @@
 // A user's mark (#101) is never lost (#100): on one bucket of UCI_Table,
 // marked entries stay through mate claims of other positions, a marked
 // candidate that finds no unmarked slot, and every result for the marked
-// position itself, which keeps the higher mark. Exit 1 on a failure.
+// position itself, which keeps the higher mark. A marked entry's result gives
+// way only to an improvement (a shorter mate, a proof, a deeper exact result,
+// or a save with a higher mark over no proof), also across an analysis that
+// sets it aside. Exit 1 on a failure.
 //
 //   g++ -O3 -mpopcnt -fwhole-program -Wall -Wno-unknown-pragmas -Wno-parentheses -Wno-unused-variable -DNDEBUG -o diagnostics/tt_mark_test diagnostics/tt_mark_test.cpp
 //   ./diagnostics/tt_mark_test
@@ -70,13 +73,45 @@ int main()
     const TT_slot* s = t->find_slot(key(2));
     check(s && s->pv_line.eval==mate && s->pv_line.depth==50 && tt_mark(s->pv_line)==3, "a mate claim over mark 3: the claim, mark 3");
     t->insert(entry(2, 60, 5, -1));
-    check(mark_of(*t, 2)==3, "a deeper bound after it: mark 3");
+    check(mark_of(*t, 2)==3 && t->find_slot(key(2))->pv_line.eval==mate, "a deeper bound after it: mark 3, the claim stays");
     t->import_marked(entry(2, 1, 0), 40);
     check(mark_of(*t, 2)==40 && t->find_slot(key(2))->pv_line.eval==mate, "mark 40 over it: mark 40, the claim stays");
     t->import_marked(entry(2, 99, 7), 2);
     check(mark_of(*t, 2)==40, "mark 2 over it: still mark 40");
     t->store_proven(key(2), entry(2, 1, INT_MAX-3).pv_line);
-    check(mark_of(*t, 2)==40, "a verified root mate over it: mark 40");
+    check(mark_of(*t, 2)==40 && t->find_slot(key(2))->pv_line.eval==INT_MAX-3, "a verified shorter mate over it: the mate, mark 40");
+    t->insert(entry(2, 90, INT_MAX-9, -1));
+    t->store_proven(key(2), entry(2, 1, INT_MAX-7).pv_line);
+    check(t->find_slot(key(2))->pv_line.eval==INT_MAX-3, "deeper but longer mates after it: the shorter stays");
+
+    // A marked entry without a proof (mark 5, depth 4, eval 40).
+    auto result = [&](int k) { const TT_slot* r = t->find_slot(key(k)); return r ? std::to_string(r->pv_line.depth) + "/" + std::to_string(r->pv_line.eval) + "/" + std::to_string(tt_mark(r->pv_line)) : std::string("none"); };
+    t->insert(entry(4, 30, 99, -1));
+    check(result(4)=="4/40/5", "a deeper bound over mark 5: no change");
+    t->insert(entry(4, 30, 77));
+    check(result(4)=="30/77/5", "a deeper exact result over mark 5: taken, mark 5");
+    t->import_marked(entry(4, 10, 55), 6);
+    check(result(4)=="10/55/6", "a shallower save with mark 6: taken");
+    t->import_marked(entry(4, 5, 66), 6);
+    check(result(4)=="10/55/6", "a still shallower save with mark 6: no change");
+    t->import_marked(entry(4, 12, 67), 6);
+    check(result(4)=="12/67/6", "a deeper save with mark 6: taken");
+    t->import_marked(entry(4, 99, 68), 5);
+    check(result(4)=="99/68/6", "a deeper save with mark 5: taken as a deeper exact result, mark 6");
+
+    // An analysis at the marked position: its result is set aside and comes
+    // back unless the search improved on it.
+    TT_Result held;
+    check(t->set_aside(key(4), held) && result(4)=="0/" + std::to_string(INT_MIN) + "/6", "set aside: a vacuous bound, mark 6");
+    t->insert(entry(4, 20, 70));
+    check(result(4)=="20/70/6", "the analysis stores its depth-20 result");
+    t->put_back(key(4), held);
+    check(result(4)=="99/68/6", "put back: the held depth-99 result returns");
+    t->set_aside(key(4), held);
+    t->insert(entry(4, 100, 71));
+    t->put_back(key(4), held);
+    check(result(4)=="100/71/6", "an analysis deeper than it: its result stays");
+    check(!t->set_aside(key(2), held), "a marked mate is not set aside");
 
     int marked = 0;
     t->demote_unmarked(marked);
