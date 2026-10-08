@@ -173,9 +173,20 @@ How `./gui/ascaniusfish_gui` (`make gui`, `gui/`) is built. Read before working 
   event sent to every stream on a change, #68).
 
 ## Requests and server state
+**A Cloudflare quick tunnel does not carry SSE** reliably: it holds the start of a stream back, the
+first ~256 KB in bursts seconds apart (a lone state can wait until the stream ends), so a remote
+player saw the engine's move only on a reload until enough traffic had passed; padding sent up
+front does not release it. A page on a `*.trycloudflare.com` host,
+or one whose stream sends nothing in its first 3 s (the server sends the state the moment a stream
+opens), long-polls instead: `GET /api/wait?id=&after=n&page=` is held in `Http_Server` until the
+session publishes a state past `n` (at once if it already has, after 20 s with the last one) and
+answered as `{"n":…, "state":…}`, an ordinary response the tunnel passes on at once. `page` is the
+page's own id, so it counts in `subscribers()` (its engines are not let go) and in `audience()`
+between one answer and its next wait (`POLLER_GRACE_MS`).
+
 **The server owns the position and the page owns nothing** — reloading the browser is just another
 `GET /api/state`. All chess logic stays in C++; the JS is presentation only. Routes:
-`GET /api/state`, `GET /api/events` (SSE),
+`GET /api/state`, `GET /api/events` (SSE), `GET /api/wait` (the same states as a long poll),
 `POST /api/{move,fen,reset,undo,resign,play,watch,mode,flip,analyse,line,settings,corr}`, all taking
 `id` (default `main`). Both Play and Watch play under a Clock or a fixed depth (#21), starting on a
 1+1 clock (a clock is seeded with base + increment, `Session::clock_start_ms()`, #58) (`Session::play_base_ms`/`watch_base_ms`), which is also what Custom opens with; a `kind` of
