@@ -2080,9 +2080,29 @@ function clearMessage() {
 
 // ------------------------------------------------------------------- live link
 
+// A trycloudflare.com quick tunnel holds the start of an event stream back
+// ("Quick Tunnels do not support Server-Sent Events"): the first ~256 KB come
+// in bursts seconds apart, so an engine's move waited for a reload until
+// enough traffic had passed. A page behind one long-polls
+// instead (waitForState()), and so does any other page whose stream holds
+// back the state the server sends the moment it opens: STREAM_GRACE_MS of
+// silence gives the stream up.
+const STREAM_GRACE_MS = 3000;
+
 function connect() {
+  if (location.hostname.endsWith('.trycloudflare.com')) {
+    waitForState();
+    return;
+  }
+  let heard = false;
   const events = new EventSource(`/api/events?id=${encodeURIComponent(sessionId)}`);
+  setTimeout(() => {
+    if (heard) return;
+    events.close();
+    waitForState();
+  }, STREAM_GRACE_MS);
   events.addEventListener('state', event => {
+    heard = true;
     setLink('live', 'live');
     apply(JSON.parse(event.data));
   });
@@ -2097,6 +2117,35 @@ function connect() {
     el('audience').hidden = true;   // a count from before the break may be stale
   });
   events.addEventListener('audience', event => showAudience(JSON.parse(event.data)));
+}
+
+// GET /api/wait is answered as soon as the session publishes a state past
+// `after` (at once, if one came while this page was between waits), or after
+// 20 s with the last one. Its `n` numbers the session's states. A server
+// restarted under the page numbers both `n` and `seq` from scratch, so after
+// a failed wait both start over, as on a reopened stream.
+const pageId = Math.random().toString(36).slice(2);
+
+async function waitForState() {
+  let after = 0;
+  let failed = false;
+  for (;;) {
+    try {
+      const res = await fetch(`/api/wait?id=${encodeURIComponent(sessionId)}&after=${after}&page=${pageId}`);
+      if (!res.ok) throw new Error(`wait failed (${res.status})`);
+      const { n, state: next } = await res.json();
+      if (failed) appliedSeq = -1;
+      failed = false;
+      after = n;
+      if (next) apply(next);
+      setLink('live', 'live');
+    } catch {
+      setLink('reconnecting…', 'down');
+      failed = true;
+      after = 0;
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+  }
 }
 
 // The pages open on this server, this one included, in every session (#68).

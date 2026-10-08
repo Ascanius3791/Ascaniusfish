@@ -11,6 +11,14 @@
 // touches a socket: it calls wake(), and the loop runs on_tick() to collect
 // whatever finished. All writing stays on the one thread.
 //
+// A Cloudflare quick tunnel holds the start of an event stream back (the
+// first ~256 KB, released in bursts seconds apart; a single state can wait
+// until the stream ends), so a page behind one long-polls instead: GET /api/wait is held here until the
+// next "state" published on its topic and answered as an ordinary response,
+// which the tunnel passes on at once. The page sends its own id with each
+// wait, so it still counts as watching (subscribers(), audience()) in the
+// moment between one answer and its next wait.
+//
 // listen_on() binds 127.0.0.1 by default; a caller passing another address
 // (gui_server.cpp's bind=) is exposing this on a LAN or behind a tunnel, and
 // the token check gui_server.cpp does before touching a session is what makes
@@ -21,6 +29,7 @@
 #include <algorithm>
 #include <arpa/inet.h>
 #include <cerrno>
+#include <chrono>
 #include <csignal>
 #include <cstdio>
 #include <cstring>
@@ -35,6 +44,8 @@
 #include <vector>
 
 constexpr size_t MAX_REQUEST_BYTES = 1 << 20;  // a FEN or a move; nothing here is big
+constexpr long long WAIT_MAX_MS = 20000;      // a long poll is answered by then anyway, well inside Cloudflare's 100 s
+constexpr long long POLLER_GRACE_MS = 3000;   // a long-polling page counts as there this long after its last wait
 
 struct Request
 {
@@ -83,7 +94,10 @@ struct Response
     std::string content_type = "application/json";
     std::string body;
     bool sse = false;      // keep the connection open as an event stream instead
-    std::string topic;     // which stream, when sse
+    bool wait = false;     // a long poll: held until `topic` publishes a state past `after`
+    std::string topic;     // which stream, when sse or wait
+    long long after = 0;   // the last publish number the waiting page has
+    std::string page;      // the waiting page's own id, so it stays counted between waits
     std::string set_cookie;  // Set-Cookie value, or "" for none (a plain response only)
 
     static Response json(const std::string& body, int status = 200)
@@ -114,6 +128,16 @@ struct Response
         Response r;
         r.sse = true;
         r.topic = topic;
+        return r;
+    }
+
+    static Response long_poll(const std::string& topic, long long after, const std::string& page)
+    {
+        Response r;
+        r.wait = true;
+        r.topic = topic;
+        r.after = after;
+        r.page = page;
         return r;
     }
 };
@@ -225,8 +249,18 @@ class Http_Server
     int port() const { return bound_port; }
 
     // Sends one event to every stream on `topic`.
+    // A "state" is also kept as the topic's latest and answers its long polls.
     void publish(const std::string& topic, const std::string& event, const std::string& data)
     {
+        if(event=="state")
+        {
+            Latest& l = latest[topic];
+            l.n++;
+            l.state = data;
+            for(Client& c : clients)
+            if(c.waiting && c.topic==topic)
+            answer_wait(c);
+        }
         std::string frame = "event: " + event + "\n";
         for(size_t i=0;i<data.size();)  // every line of the payload needs its own "data:"
         {
@@ -270,6 +304,11 @@ class Http_Server
             a.pages++;
             a.remote += c.remote;
         }
+        for(const auto& entry : pollers)
+        {
+            a.pages++;
+            a.remote += entry.second.remote;
+        }
         return a;
     }
 
@@ -282,6 +321,8 @@ class Http_Server
         int n = 0;
         for(const Client& c : clients)
         n += c.sse && c.topic==topic;
+        for(const auto& entry : pollers)
+        n += entry.second.topic==topic;
         return n;
     }
 
@@ -332,6 +373,7 @@ class Http_Server
                 clients[i].done = true;
             }
         }
+        expire_waits();
         if(on_tick)
         on_tick();
         flush_all();
@@ -347,11 +389,69 @@ class Http_Server
         std::string topic;
         bool loopback = true;         // the peer is 127.0.0.0/8
         bool remote = false;          // an SSE stream from elsewhere, see audience()
+        bool waiting = false;         // a held long poll, see publish()
+        long long waiting_since = 0;
+        std::string page;             // the long-polling page's id
         bool done = false;           // close once `out` is drained
         size_t content_length = 0;
         size_t header_end = 0;        // 0 until the blank line arrived
         std::map<std::string, std::string> headers;  // filled once header_end is set
     };
+
+    // The last "state" each topic published, and how many it has published:
+    // a wait that arrives already behind is answered at once.
+    struct Latest
+    {
+        long long n = 0;
+        std::string state;
+    };
+    std::map<std::string, Latest> latest;
+
+    // Long-polling pages by their id, while they are waiting or have been
+    // within POLLER_GRACE_MS.
+    struct Poller
+    {
+        std::string topic;
+        bool remote = false;
+        long long seen = 0;
+    };
+    std::map<std::string, Poller> pollers;
+
+    static long long clock_ms()
+    {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+    }
+
+    void answer_wait(Client& c)
+    {
+        const Latest& l = latest[c.topic];
+        respond(c, Response::json("{\"n\":" + std::to_string(l.n) + ",\"state\":"
+                                  + (l.state.empty() ? "null" : l.state) + "}"));
+        c.waiting = false;
+        c.done = true;  // Connection: close
+        if(!c.page.empty() && pollers.count(c.page))
+        pollers[c.page].seen = clock_ms();
+    }
+
+    // A wait held WAIT_MAX_MS is answered with what there is; a page that has
+    // not come back within POLLER_GRACE_MS is gone.
+    void expire_waits()
+    {
+        long long now = clock_ms();
+        for(Client& c : clients)
+        {
+            if(c.waiting && now-c.waiting_since>=WAIT_MAX_MS)
+            answer_wait(c);
+            if(c.waiting && !c.done && !c.page.empty() && pollers.count(c.page))
+            pollers[c.page].seen = now;
+        }
+        for(auto it=pollers.begin();it!=pollers.end();)
+        if(now-it->second.seen>=POLLER_GRACE_MS)
+        it = pollers.erase(it);
+        else
+        ++it;
+    }
 
     int listen_fd = -1;
     int bound_port = 0;
@@ -418,8 +518,8 @@ class Http_Server
 
     void try_handle(Client& c)
     {
-        if(c.sse)
-        return;  // an established stream sends nothing back
+        if(c.sse || c.waiting)
+        return;  // an established stream or a held wait sends nothing back
         if(!c.header_end)
         {
             size_t blank = c.in.find("\r\n\r\n");
@@ -501,6 +601,28 @@ class Http_Server
             flush(c);
             if(on_subscribe)
             on_subscribe(c.topic);   // may publish(), which queues onto this client
+            return;
+        }
+        if(res.wait)
+        {
+            c.topic = res.topic;
+            c.page = res.page;
+            if(!c.page.empty())
+            {
+                if(!pollers.count(c.page))
+                streams_opened++;
+                Poller& p = pollers[c.page];
+                p.topic = res.topic;
+                p.remote = !c.loopback || req.headers.count("cf-connecting-ip") || req.headers.count("x-forwarded-for");
+                p.seen = clock_ms();
+            }
+            if(latest[res.topic].n>res.after)
+            answer_wait(c);
+            else
+            {
+                c.waiting = true;
+                c.waiting_since = clock_ms();
+            }
             return;
         }
         respond(c, res);

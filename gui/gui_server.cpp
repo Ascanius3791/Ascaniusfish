@@ -884,6 +884,10 @@ static Response handle_get_authed(const Request& req)
     if(req.path=="/api/events")
     return Response::event_stream(sessions.get(req.param("id")).id);
 
+    // The event stream as a long poll, for a page behind a quick tunnel.
+    if(req.path=="/api/wait")
+    return Response::long_poll(sessions.get(req.param("id")).id, atoll(req.param("after").c_str()), req.param("page"));
+
     // The game as a file, so a browser can save it. The page already has the
     // same text in its state; this is for the URL.
     if(req.path=="/api/pgn")
