@@ -3,8 +3,8 @@
 //
 //   ./tools/tune [data=data/tune] [from=weights/w1.txt] [out=weights/w<from+1>.txt]
 //                [jobs=6] [lambda=1e-9] [k=0] [tag=ccrl4040-3000-balanced]
-//                [method=adam] [epochs=1500] [lr=2]                      (Adam)
 //                [method=gn] [iters=20] [mu=1e-3] [tol=1e-7] [check=0]   (Levenberg-Marquardt)
+//                [method=adam] [epochs=1500] [lr=2]                      (Adam)
 //                [se=1] [compare=<set>]
 //
 // Reads #86's train/valid/test.tsv (fen and result columns only) and minimises the
@@ -31,16 +31,20 @@
 // such directions at the `from` set. It also holds back the rarely seen weights:
 // lambda=0 fits valid best, but rare table squares and ks_storm entries run out to
 // +-400 cp; 1e-9 keeps the tables within +-150 for most of the gain
-// (docs/measurements/tune_w2_2026-10-04.md).
+// (docs/measurements/tune_w2_2026-10-04.md). A fit from its own result is therefore a
+// new fit, not more of the old one: the pull moves to the new start, and the loss falls
+// again (w7 = w6 refitted twice, #97). One run does reach its minimum (#104).
 //
-// Two methods (#104), both keeping the step with the lowest valid loss of the model:
+// Two methods (#104), both keeping the step with the lowest valid loss of the model.
+// Both reach the same minimum; gn in a sixth of the time (docs/measurements/tune_gn_2026-10-08.md).
 // - adam: full-batch Adam, the learning rate falling from lr to lr/100 (cosine).
-// - gn: Levenberg-Marquardt on the same objective F = mean (q_i - r_i)^2 + lambda |w - w_from|^2,
+// - gn (default): Levenberg-Marquardt on the same objective F = mean (q_i - r_i)^2 + lambda |w - w_from|^2,
 //   q_i = sigma(e_i/K). Per position J_i = q_i (1 - q_i)/K de_i/dw (model_eval()'s gradient
 //   path), so F's Gauss-Newton Hessian is 2 A and its gradient 2 g with A = J'J/n + lambda I,
 //   g = J'(q - r)/n + lambda (w - w_from), over the tuned weights only. A step solves
 //   (A + mu diag A) d = -g by Cholesky; it is kept if F falls (mu / 5), else mu * 5 and
-//   again. Stops after iters steps or when one gains less than tol * F. check=1 prints g
+//   again. Stops after iters steps or when one gains less than tol * F. Needs lambda > 0
+//   (weights no position touches make J'J singular). check=1 prints g
 //   against Adam's gradient once (2 g = Adam's to rounding).
 // The weights are rounded, and the report gives train/valid/test loss of both sets by
 // the real basic_eval(). It is printed and written as '#' lines at the end of the new set.
@@ -99,7 +103,7 @@ struct Options
     double lr = 2;
     double lambda = 1e-9;
     double k = 0;                       // 0: fit it
-    std::string method = "adam";        // adam or gn (Levenberg-Marquardt)
+    std::string method = "gn";          // gn (Levenberg-Marquardt) or adam
     int iters = 20;                     // gn: at most this many steps
     double mu = 1e-3;                   // gn: initial damping
     double tol = 1e-7;                  // gn: stop when a step gains less than tol * loss
@@ -734,6 +738,7 @@ int main(int argc, char** argv)
         else { std::fprintf(stderr, "unknown option %s\n", k.c_str()); return 2; }
     }
     if(opt.method!="adam" && opt.method!="gn") { std::fprintf(stderr, "method is adam or gn\n"); return 2; }
+    if(opt.lambda<=0 && (opt.method=="gn" || opt.se)) { std::fprintf(stderr, "method=gn and se=1 need lambda > 0\n"); return 2; }
 
     Zobrist zobrist_keys;
     initialize_rand();
