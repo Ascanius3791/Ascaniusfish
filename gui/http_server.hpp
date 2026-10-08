@@ -335,6 +335,7 @@ class Http_Server
         if(on_tick)
         on_tick();
         flush_all();
+        reap();
     }
 
     private:
@@ -542,10 +543,17 @@ class Http_Server
         }
     }
 
+    // Only writes: publish() runs inside a request's handler, whose Client&
+    // a reap() would move out from under it.
     void flush_all()
     {
         for(Client& c : clients)
         flush(c);
+    }
+
+    // Closes and drops the finished clients; only at the end of poll_once().
+    void reap()
+    {
         for(size_t i=0;i<clients.size();)
         {
             if(clients[i].done && clients[i].out.empty())
