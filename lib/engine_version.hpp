@@ -14,7 +14,7 @@
 #ifndef ENGINE_VERSION_HPP
 #define ENGINE_VERSION_HPP
 
-constexpr int EVAL_VERSION = 11;
+constexpr int EVAL_VERSION = 12;
 
 // The commit the binary was built from, set by the Makefile ("-dirty" with
 // uncommitted changes); only a provenance note, never compared.
