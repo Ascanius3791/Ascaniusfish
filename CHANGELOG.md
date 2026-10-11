@@ -12,6 +12,8 @@ The first version for a server: the browser GUI with its engine in one Docker im
   connections, engines, boards and failed logins (#109).
 - Docker image, `compose.yaml` template, GitHub workflow building the image, version
   and commit in the page footer and at `/api/version` (#110).
+- Each visitor gets their own board by default (a random id, no more shared `main`),
+  with copy-link/new-board/delete-board controls and a 24h idle-board cleanup (#112).
 
 ### Server steps
 - The one-time setup in `docs/DEPLOY.md`: subdomain and certificate, data folder owned
