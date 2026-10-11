@@ -354,9 +354,13 @@ static void test_server()
     check(set_cookie.find("gui_login=")==0 && set_cookie.find("HttpOnly")!=std::string::npos
           && set_cookie.find("SameSite=Lax")!=std::string::npos && set_cookie.find("Max-Age=2592000")!=std::string::npos
           && set_cookie.find("Secure")!=std::string::npos, "the cookie: HttpOnly, SameSite=Lax, 30 days, Secure over https");
+    check(r.header("Strict-Transport-Security").find("max-age=")==0, "HSTS over https");
     std::string cookie = "Cookie: " + set_cookie.substr(0, set_cookie.find(';')) + "\r\n";
     r = request(port, "POST", "/login", "X-Real-IP: 198.51.100.3\r\n", login_body(PASSWORD));
     check(r.header("Set-Cookie").find("Secure")==std::string::npos, "no Secure over plain http");
+    check(r.header("X-Content-Type-Options")=="nosniff" && r.header("X-Frame-Options")=="DENY"
+          && r.header("Referrer-Policy")=="same-origin", "the browser protection headers (#111)");
+    check(r.header("Strict-Transport-Security").empty(), "no HSTS over plain http");
 
     r = request(port, "GET", "/api/state?id=main", cookie);
     check(r.status==200 && r.body.find("\"mode\"")!=std::string::npos, "the cookie opens the API");

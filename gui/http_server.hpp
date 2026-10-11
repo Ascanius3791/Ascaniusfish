@@ -60,6 +60,18 @@ constexpr long long KEEPALIVE_MS = 15000;        // well inside a proxy's usual 
 constexpr int HOUSEKEEPING_MS = 5000;            // the longest poll(), so the timers above run
 constexpr size_t DEFAULT_MAX_CONNECTIONS = 64;
 
+// On every response (#111): no guessing a type from the content, no other
+// site framing the page, no board link in the Referer sent to another site.
+// Not a whole Content-Security-Policy: these parts restrict nothing the page
+// does. Same-origin, not no-referrer, which would make a browser send
+// "Origin: null" on the login form, which gui_server.cpp refuses.
+constexpr const char* SECURITY_HEADERS =
+    "X-Content-Type-Options: nosniff\r\n"
+    "X-Frame-Options: DENY\r\n"
+    "Content-Security-Policy: frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'self'\r\n"
+    "Referrer-Policy: same-origin\r\n";
+constexpr long long HSTS_MAX_AGE_S = 365LL*24*3600;
+
 struct Request
 {
     std::string method;
@@ -120,6 +132,7 @@ struct Response
     std::string page;      // the waiting page's own id, so it stays counted between waits
     std::string set_cookie;  // Set-Cookie value, or "" for none (a plain response only)
     std::string location;    // Location, for a redirect (303)
+    bool hsts = false;       // the request came over https: tell the browser to stay there
 
     static Response json(const std::string& body, int status = 200)
     {
@@ -671,6 +684,7 @@ class Http_Server
                 "Cache-Control: no-store\r\n"
                 "Connection: keep-alive\r\n"
                 "X-Accel-Buffering: no\r\n"
+                + std::string(SECURITY_HEADERS) +
                 "\r\n"
                 "retry: 1000\n\n";
             queue(c, head);
@@ -717,7 +731,9 @@ class Http_Server
             "Content-Type: " + res.content_type + "\r\n"
             "Content-Length: " + std::to_string(res.body.size()) + "\r\n"
             "Cache-Control: no-store\r\n"
-            "Connection: close\r\n";
+            "Connection: close\r\n" + SECURITY_HEADERS;
+        if(res.hsts)
+        head += "Strict-Transport-Security: max-age=" + std::to_string(HSTS_MAX_AGE_S) + "\r\n";
         if(!res.set_cookie.empty())
         head += "Set-Cookie: " + res.set_cookie + "\r\n";
         if(!res.location.empty())

@@ -1828,6 +1828,21 @@ static void quit_engines()
 
 static void request_stop(int) { server.stopping = 1; }
 
+// Every request: the login routes first, then by method.
+static Response route(const Request& req)
+{
+    Response login_response;
+    if(login.on() && handle_login_routes(req, login_response))
+    return login_response;
+    if(req.method=="GET")
+    return handle_get(req);
+    if(req.method=="POST")
+    return handle_post(req);
+    if(req.method=="HEAD" || req.method=="OPTIONS")
+    return Response::text("");
+    return Response::text("method not allowed: " + req.method, 405);
+}
+
 int main(int argc, char** argv)
 {
     // Writing to a dead engine's pipe must be an error, not the end of the
@@ -1980,16 +1995,11 @@ int main(int argc, char** argv)
 
     server.handler = [](const Request& req) -> Response
     {
-        Response login_response;
-        if(login.on() && handle_login_routes(req, login_response))
-        return login_response;
-        if(req.method=="GET")
-        return handle_get(req);
-        if(req.method=="POST")
-        return handle_post(req);
-        if(req.method=="HEAD" || req.method=="OPTIONS")
-        return Response::text("");
-        return Response::text("method not allowed: " + req.method, 405);
+        Response res = route(req);
+        // HSTS only on what came over https: sent over plain http a browser
+        // ignores it anyway (#111).
+        res.hsts = trust_proxy && gui_access::client_of(req.peer, req.headers, true).https;
+        return res;
     };
     // A page that just connected has no position yet; send it one.
     server.on_subscribe = [](const std::string& topic) { broadcast(sessions.get(topic)); };
