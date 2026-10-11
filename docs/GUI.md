@@ -28,7 +28,15 @@ How `./gui/ascaniusfish_gui` (`make gui`, `gui/`) is built. Read before working 
   is the cursor's six moves (back/forward/start/end, and prev/next between siblings).
   `load_pgn()` reads a move by naming every legal move with the same `san()` the exporter uses
   and comparing, so import and export cannot drift apart; it handles nested variations, NAGs,
-  `{}`/`;` comments and a `FEN`/`SetUp` tag. An engine move's `Move_Note` is exported as the
+  `{}`/`;` comments and a `FEN`/`SetUp` tag. `uci_parse_fen()` (`src/uci.cpp`) refuses a `FEN`
+  tag no legal game could reach — more than one king a side, a pawn on rank 1/8, more than 16
+  pieces or 8 pawns a side, the side not to move in check, or more than 218 legal moves — so a
+  PGN cannot hand the tree a position that overruns the engine's own move buffers (#111). Variations
+  nesting past `MAX_VARIATION_DEPTH` (100) or a tree growing past `MAX_GAME_LENGTH` (2000 nodes,
+  main line and every variation together) are refused outright: both `write_moves()` (PGN export)
+  and `kill()` (deleting a line) recurse once per level/move and would otherwise overflow the
+  stack on a hostile file (#111; `diagnostics/gui_fuzz.cpp` has both as fuzz cases). An engine
+  move's `Move_Note` is exported as the
   comment `{+0.35/7 10.00s}`, the same shape `tools/gui_match.cpp` writes, so a downloaded game
   keeps what the searches found; the note also keeps that search's PV (`Move_Note::pv`, capped
   at `MOVE_NOTE_PV`, in UCI **from the position the move was played in**, so `pv[0]` is the move
@@ -297,7 +305,7 @@ token is off, and one shared password opens the GUI for everyone who knows it:
 | `GUI_MAX_CONNECTIONS` | 64 | open connections, streams included; one more gets 503 |
 | `GUI_MAX_ENGINES` | 2 | engine processes on the whole server; a board asking for one more shows "all N engines … are in use" |
 | `GUI_MAX_BOARDS` | 20 | boards (session ids); a new one past it gets 503 with a message |
-| `GUI_LOGIN_FAILS_PER_IP` | 10 | failed logins per address in 5 minutes, then 429 |
+| `GUI_LOGIN_FAILS_PER_IP` | 10 | failed logins per address in 5 minutes, then 429 — an IPv6 address counts against its /64 as a group, not on its own, since one connection can draw on billions of them (#111) |
 | `GUI_LOGIN_FAILS_TOTAL` | 100 | failed logins on the whole server in 5 minutes, then 429 for everyone not logged in |
 
 The limits also take options (`max_connections=`, `max_engines=`, `max_boards=`, `login_fails_per_ip=`,
