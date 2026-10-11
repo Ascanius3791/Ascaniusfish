@@ -30,8 +30,10 @@ bool uci_parse_fen(const std::string& fen, BB& out)
     if(f.size()<4 || f.size()>6)
     return false;
 
-    // Placement: 8 ranks of 8 squares, exactly one king per side.
+    // Placement: 8 ranks of 8 squares, exactly one king per side, no pawn on
+    // the back ranks, and piece counts no legal game could ever reach (#111).
     int ranks=1, squares=0, white_kings=0, black_kings=0;
+    int white_pieces=0, black_pieces=0, white_pawns=0, black_pawns=0;
     for(char c : f[0])
     {
         if(c=='/')
@@ -44,6 +46,11 @@ bool uci_parse_fen(const std::string& fen, BB& out)
         else if(std::string("PNBRQKpnbrqk").find(c)!=std::string::npos)
         {
             squares++;
+            if((c=='P' || c=='p') && (ranks==1 || ranks==8))
+            return false;
+            bool white = c<'a';
+            (white ? white_pieces : black_pieces)++;
+            if(c=='P' || c=='p') (white ? white_pawns : black_pawns)++;
             white_kings += c=='K';
             black_kings += c=='k';
         }
@@ -51,6 +58,8 @@ bool uci_parse_fen(const std::string& fen, BB& out)
         if(squares>8) return false;
     }
     if(ranks!=8 || squares!=8 || white_kings!=1 || black_kings!=1)
+    return false;
+    if(white_pieces>16 || black_pieces>16 || white_pawns>8 || black_pawns>8)
     return false;
 
     if(f[1]!="w" && f[1]!="b")
@@ -80,6 +89,13 @@ bool uci_parse_fen(const std::string& fen, BB& out)
     BB b;
     FEN_to_BB(f[0]+" "+f[1]+" "+castling+" "+ep+" "+halfmoves+" "+fullmoves, &b);
     castling_rights(&b);  // drop rights whose king/rook isn't on its home square
+    if(in_check(b.Board, !b.white_move))
+    return false;
+    // No reachable chess position has more than 218 legal moves; capping the
+    // buffer at 256 means this count can never overflow it either (#111).
+    BB children[256];
+    if(std::get<0>(all_moves(&b, children, 256)) > 218)
+    return false;
     b.number_of_repetitions = 0;
     b.zobrist_hash = Zobrist::compute_Zobrist_Hash(b);
     out = b;

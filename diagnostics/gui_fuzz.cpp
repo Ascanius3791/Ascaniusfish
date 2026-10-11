@@ -58,12 +58,14 @@ static long max_rss_mb()
 // ------------------------------------------------------------------ inputs
 
 // 258 legal moves with one king a side and nobody in check: everything the
-// GUI's FEN check asks. A hill climb over queen placements found it; the
-// GUI's and the engine's move buffers hold 256.
+// GUI's FEN check asked before #111's fix. A hill climb over queen placements
+// found it; the GUI's and the engine's move buffers hold 256. uci_parse_fen
+// now refuses it (more than 16 pieces a side).
 static const char* FEN_258 = "QQQQQQpk/Q4Qpp/Q5Q1/Q5Q1/Q6Q/Q6Q/Q6Q/QQQQQQQK w - - 0 1";
 
-// Black is in check with white to move: refused by /api/fen, but a PGN's
-// FEN tag goes through without that check.
+// Black is in check with white to move: refused by /api/fen before #111's
+// fix, but a PGN's FEN tag went through without that check. Both now go
+// through uci_parse_fen's own in_check() refusal.
 static const char* FEN_KING_EN_PRISE = "4k3/8/8/8/8/8/8/4R1K1 w - - 0 1";
 
 static std::string uci_of(const BB& before, const BB* child)
@@ -163,13 +165,13 @@ static std::vector<Case> cases()
             if(ok && s->game_tree().n_legal_moves()>MAX_LEGAL_MOVES)
             fail("a position with more legal moves than MAX_LEGAL_MOVES is accepted (the array was overrun)");
         }});
-    list.push_back({"fen258-stack", "the same position in a Move_Tree on the stack, where ASan sees the overrun",
+    list.push_back({"fen258-stack", "the same position straight into uci_parse_fen: must now be refused",
         [] {
             BB pos;
-            uci_parse_fen(FEN_258, pos);
-            Move_Tree t;
-            t.start(pos, 0, 1);
-            std::printf("  survived: %d moves (no sanitizer, or the overrun missed the redzone)\n", t.n_legal_moves());
+            bool ok = uci_parse_fen(FEN_258, pos);
+            std::printf("  uci_parse_fen: %s\n", ok ? "accepted" : "refused");
+            if(ok)
+            fail("uci_parse_fen accepts a 258-move position");
         }});
     list.push_back({"pgn-fen258", "a PGN whose FEN tag is the 258-move position",
         [] {

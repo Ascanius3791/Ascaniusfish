@@ -501,16 +501,6 @@ class Session
             error = "not a valid FEN";
             return false;
         }
-        if(__builtin_popcountll(pos.Board[5])!=1 || __builtin_popcountll(pos.Board[11])!=1)
-        {
-            error = "a position needs exactly one king per side";
-            return false;
-        }
-        if(in_check(pos.Board, !pos.white_move))
-        {
-            error = "the side not to move is in check";
-            return false;
-        }
         set_start(pos, halfmove_field(fen), fullmove_field(fen));
         return true;
     }
