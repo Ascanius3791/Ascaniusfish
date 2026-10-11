@@ -37,6 +37,7 @@
 #include <set>
 #include <sstream>
 #include <string>
+#include <vector>
 
 // Which of the GUI's modes a session is in. Analyse is free play plus a live
 // analysis, Play is a game against the engine, Watch is Ascaniusfish against
@@ -2627,6 +2628,20 @@ class Sessions
     // there are: the board cap (#109) is checked before a request makes one.
     bool has(const std::string& raw_id) const { return games.count(clean(raw_id))>0; }
     size_t size() const { return games.size(); }
+
+    // Every id currently held, for gui_server.cpp's 24 h idle sweep (#112).
+    std::vector<std::string> ids() const
+    {
+        std::vector<std::string> out;
+        for(const auto& entry : games)
+        out.push_back(entry.first);
+        return out;
+    }
+
+    // Removes a board outright: an explicit delete, or one nobody has kept
+    // open for 24 h (#112). The caller is responsible for its engines first —
+    // this only drops the game and its state.
+    void remove(const std::string& raw_id) { games.erase(clean(raw_id)); }
 
     private:
     std::map<std::string, Session> games;

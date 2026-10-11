@@ -25,6 +25,9 @@
 //   max_connections=64, max_engines=2, max_boards=20
 //                     the load limits (#109); also GUI_MAX_CONNECTIONS,
 //                     GUI_MAX_ENGINES, GUI_MAX_BOARDS, an option winning
+//   board_idle_ms=86400000  how long a board may sit with no page open before
+//                     it is removed (#112); shrunk by the diagnostic, not
+//                     meant to be changed otherwise
 //
 // A token, new every run and printed once below, gates every route including
 // static files and /api/events: without it (as a "token=" cookie, set once a
@@ -65,6 +68,7 @@
 #include <fstream>
 #include <memory>
 #include <random>
+#include <set>
 #include <sstream>
 #include <string>
 #include <ctime>
@@ -545,6 +549,84 @@ static void abort_search(Session& session)
     session.live_valid = false;
     session.watch_pause();
     session.clear_analysis();
+}
+
+// ------------------------------------------------------------- board deletion and expiry (#112)
+//
+// A board nobody has open is removed after 24 h, the same "watched or not"
+// signal release_idle_engines() reads (server.subscribers()), just on a
+// day's clock rather than a few seconds'. The explicit "Delete board" button
+// lands here too. Either way the board cannot be torn down on the spot if
+// its engine is mid-search: ~Engine_Link would block joining the worker (see
+// quit_engines()), so deletion only stops the search and asks for it; the
+// usual idle teardown (drop_unused_links(), driven by release_idle_engines())
+// lets the link go over the next tick or two, and finish_deleting_boards()
+// erases the board once nothing is left running in it.
+static long long board_idle_ms = 24LL*60*60*1000;   // board_idle_ms= overrides, for the diagnostic
+static std::map<std::string, long long> board_alone_since;
+static std::set<std::string> boards_to_delete;
+
+static bool engine_set_busy(const Engine_Set& set)
+{
+    if(set.active>=0)
+    return true;
+    for(const std::unique_ptr<Engine_Link>& link : set.links)
+    if(link && link->searching_now())
+    return true;
+    return false;
+}
+
+static void mark_board_for_deletion(const std::string& raw_id)
+{
+    if(!sessions.has(raw_id))
+    return;
+    Session& session = sessions.get(raw_id);
+    session.analysis_on = false;
+    session.watch_running = false;
+    session.watch_step = false;
+    abort_search(session);
+    boards_to_delete.insert(session.id);
+}
+
+// Erases every marked board whose engines (if it has any) have gone quiet.
+static void finish_deleting_boards()
+{
+    for(auto it = boards_to_delete.begin(); it!=boards_to_delete.end();)
+    {
+        auto eit = engines.find(*it);
+        if(eit!=engines.end() && engine_set_busy(*eit->second))
+        {
+            ++it;
+            continue;
+        }
+        if(eit!=engines.end())
+        engines.erase(eit);
+        board_alone_since.erase(*it);
+        sessions.remove(*it);
+        it = boards_to_delete.erase(it);
+    }
+}
+
+// Once a tick: any board nothing has watched for BOARD_IDLE_MS is marked for
+// deletion too.
+static void expire_idle_boards()
+{
+    long long now = now_ms();
+    for(const std::string& id : sessions.ids())
+    {
+        if(boards_to_delete.count(id))
+        continue;
+        if(server.subscribers(id)>0)
+        {
+            board_alone_since.erase(id);
+            continue;
+        }
+        auto it = board_alone_since.find(id);
+        if(it==board_alone_since.end())
+        board_alone_since[id] = now;
+        else if(now-it->second>=board_idle_ms)
+        mark_board_for_deletion(id);
+    }
 }
 
 // Plays the move a Play or Watch search ended in (or a PTT entry stood in for,
@@ -1107,6 +1189,21 @@ static Response handle_post_authed(const Request& req)
     std::map<std::string, std::string> body;
     if(!req.body.empty() && !json::parse_flat_object(req.body, body))
     return Response::json(json::error("request body is not a flat JSON object"), 400);
+
+    // Deleting a board (#112) is answered here, before the board cap below:
+    // it never makes a board (a nonexistent id is just a 404) and must never
+    // be refused by the cap that keeps new ones out. The board itself goes
+    // once its engines, if any, are quiet (finish_deleting_boards()), so the
+    // reply only confirms the request, not that the board is already gone.
+    if(req.path=="/api/board-delete")
+    {
+        auto delete_id = body.find("id");
+        std::string raw_id = delete_id!=body.end() ? delete_id->second : req.param("id");
+        if(!sessions.has(raw_id))
+        return Response::json(json::error("no such board"), 404);
+        mark_board_for_deletion(raw_id);
+        return Response::json("{}");
+    }
 
     Response refused;
     auto id = body.find("id");
@@ -1784,6 +1881,7 @@ int main(int argc, char** argv)
         else if(key=="gaviota") gaviota_option = value;
         else if(key=="ptt")     ptt_option = value=="none" ? "" : value;
         else if(key=="tunnel") tunnel_option = value;
+        else if(key=="board_idle_ms") board_idle_ms = std::atoll(value.c_str());   // #112, for the diagnostic
         else if(limits.count(key)) limits[key] = value;
         else
         {
@@ -1897,7 +1995,7 @@ int main(int argc, char** argv)
     server.on_subscribe = [](const std::string& topic) { broadcast(sessions.get(topic)); };
     // Where a finished search becomes a move on the board: on this thread, so
     // nothing the worker produced ever touches a socket itself.
-    server.on_tick = [] { collect_all(); publish_audience(); };
+    server.on_tick = [] { collect_all(); finish_deleting_boards(); expire_idle_boards(); publish_audience(); };
     // A running clock is checked for a flag fall often; an idle server sits
     // at the old fixed interval and costs nothing.
     server.poll_timeout = [] { return any_clock_ticking ? CLOCK_POLL_MS : IDLE_POLL_MS; };

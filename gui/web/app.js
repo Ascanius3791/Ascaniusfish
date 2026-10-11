@@ -17,22 +17,31 @@
 import { Chessground } from './vendor/chessground.min.js';
 import { playForTransition, initMuteToggle, initLowTimeToggle, playLowTime } from './sound.js';
 
-const sessionId = new URLSearchParams(location.search).get('id') || 'main';
 const el = id => document.getElementById(id);
 
-// The server already turned a valid "?token=" on this load into a cookie
-// (gui_server.cpp's check_auth); every request from here on rides that
-// cookie, so the token has no further reason to sit in the address bar where
-// a screenshot or a shared link would carry it along (#27).
-{
-    const params = new URLSearchParams(location.search);
-    if(params.has('token'))
-    {
-        params.delete('token');
-        const query = params.toString();
-        history.replaceState(null, '', location.pathname + (query ? `?${query}` : ''));
-    }
+// 32 lowercase hex characters, matching Sessions::clean()'s 32-character id
+// cap exactly (gui/session.hpp) so none of this entropy is thrown away.
+function randomBoardId() {
+    if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID().replace(/-/g, '');
+    const bytes = new Uint8Array(16);
+    if (typeof crypto !== 'undefined' && crypto.getRandomValues) crypto.getRandomValues(bytes);
+    else for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
+    return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
 }
+
+// Each visitor gets their own board by default (#112): without "?id=" the
+// page draws a random one rather than falling back to "main", so several
+// people opening this page do not land on the same game. It goes into the
+// address bar at once, so a reload keeps the same board and copying the link
+// shares exactly it. The server already turned a valid "?token=" on this
+// load into a cookie (gui_server.cpp's check_auth); it has no further reason
+// to sit in the address bar either, where a screenshot or the copied link
+// would carry it along (#27), so both are settled in the same pass.
+const params = new URLSearchParams(location.search);
+const sessionId = params.get('id') || randomBoardId();
+params.set('id', sessionId);
+params.delete('token');
+history.replaceState(null, '', `${location.pathname}?${params.toString()}`);
 
 let state = null;              // last state the server sent
 let pendingPromotion = null;   // {orig, dest, color, queued?} while the chooser is open
@@ -569,6 +578,29 @@ el('play-custom-form').addEventListener('submit', event => {
     blackBaseMs: Number(el('play-custom-black-base').value) * 1000,
     blackIncMs: Number(el('play-custom-black-inc').value) * 1000,
   });
+});
+
+// The board (#112): the link is exactly what is in the address bar, "New
+// board" starts another one without touching this one, and "Delete board"
+// is the only one of the three that is not easily undone.
+el('copy-link').addEventListener('click', () => {
+  navigator.clipboard?.writeText(`${location.origin}${location.pathname}?id=${sessionId}`);
+  showMessage('Link copied.');
+});
+
+el('new-board').addEventListener('click', () => {
+  location.href = `${location.pathname}?id=${randomBoardId()}`;
+});
+
+el('delete-board').addEventListener('click', async () => {
+  if (!confirm('Delete this board? The game is gone for anyone who has its link.')) return;
+  try {
+    await post('/api/board-delete', {});
+  } catch (err) {
+    showMessage(err.message);
+    return;
+  }
+  location.href = `${location.pathname}?id=${randomBoardId()}`;
 });
 
 el('fen-form').addEventListener('submit', event => {

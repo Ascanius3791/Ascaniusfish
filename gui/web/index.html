@@ -114,6 +114,16 @@
     localStorage) rather than ones the server holds.</p>
   </section>
   <section class="panel settings share-panel" id="share" hidden>
+    <h2>Board</h2>
+      <p class="note">Your own board, not anyone else's: copy its link to share
+      this exact game, or start a fresh one. The password still gates everyone
+      who opens either link.</p>
+      <div class="controls">
+        <button type="button" id="copy-link">Copy link</button>
+        <button type="button" id="new-board">New board</button>
+        <button type="button" id="delete-board">Delete board</button>
+      </div>
+
     <h2>Position</h2>
       <form id="fen-form" autocomplete="off">
         <input id="fen" type="text" spellcheck="false" aria-label="FEN">

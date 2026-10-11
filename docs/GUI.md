@@ -38,7 +38,9 @@ How `./gui/ascaniusfish_gui` (`make gui`, `gui/`) is built. Read before working 
   the exporter's wrapping put inside it would re-wrap the next export differently. `diagnostics/move_tree_pgn_test.cpp` covers all of
   it, including a Lichess-shaped study PGN.
 - `gui/session.hpp` — a `Session` is one game (a `Move_Tree`), a `Mode` and a board orientation;
-  `Sessions` maps ids to them, so two browser tabs can hold two independent games.
+  `Sessions` maps ids to them, so two browser tabs can hold two independent games — `get()` makes
+  one on first mention, `ids()` and `remove()` are what gui_server.cpp's board deletion and 24 h
+  idle sweep (#112) use to enumerate and erase them.
   **"The position" is the cursor, not the end of the game**: legal moves, FEN, the result, the
   repetition count and the moves handed to the engine all follow it, which is what makes the
   analysis search follow it too. `state_json()` is the one thing the page renders from: FEN,
@@ -194,8 +196,8 @@ between one answer and its next wait (`POLLER_GRACE_MS`).
 **The server owns the position and the page owns nothing** — reloading the browser is just another
 `GET /api/state`. All chess logic stays in C++; the JS is presentation only. Routes:
 `GET /api/state`, `GET /api/events` (SSE), `GET /api/wait` (the same states as a long poll),
-`POST /api/{move,fen,reset,undo,resign,play,watch,mode,flip,analyse,line,settings,corr}`, all taking
-`id` (default `main`). Both Play and Watch play under a Clock or a fixed depth (#21), starting on a
+`POST /api/{move,fen,reset,undo,resign,play,watch,mode,flip,analyse,line,settings,corr,board-delete}`,
+all taking `id` (default `main`). Both Play and Watch play under a Clock or a fixed depth (#21), starting on a
 1+1 clock (a clock is seeded with base + increment, `Session::clock_start_ms()`, #58) (`Session::play_base_ms`/`watch_base_ms`), which is also what Custom opens with; a `kind` of
 `depth` carries `value` (Watch: per side), and a `kind` of `clock` carries `baseMs`/`incMs` in
 ms — presets and Custom base+increment are entirely a page-side concept (`gui/web/app.js`'s
@@ -242,6 +244,29 @@ given (the correspondence root's line, #100), which is what clicking a move in t
 analysis line does — the page sends the moves it drew rather than an index, so a deeper iteration
 arriving between the draw and the click cannot play a different move. Anything that changes the
 position under a running search aborts it and drops its `bestmove` by token.
+
+## One board per visitor (#112)
+Without `?id=` the page draws a random one (`crypto.randomUUID()`, 32 hex characters so none of
+it is lost to `Sessions::clean()`'s cap; a `getRandomValues` fallback where `randomUUID` is
+missing) and writes it into the address bar at once, rather than falling back to `main` — so
+several people opening the page do not land on the same game. The share panel's **Board** section
+has three buttons: **Copy link** (the address bar's own URL, so it shares exactly this board),
+**New board** (a fresh random id, a plain navigation, nothing the server is asked about) and
+**Delete board** (`POST /api/board-delete`, after a confirm — the only one of the three not
+easily undone).
+
+A board is cheap but not free (a `Move_Tree`, the analysis store, PTT entries by position), so one
+nobody has open for 24 h is removed on its own, the same "is anyone watching" signal
+`release_idle_engines()` reads (`server.subscribers(id)`), just on a day's clock rather than a few
+seconds' (`board_idle_ms=`, default 86400000, overridden short by
+`diagnostics/board_lifecycle_test.cpp`). Neither path can tear a board down on the spot if its
+engine is mid-search — joining a searching `Engine_Link` would block the server, the same reason
+`quit_engines()` doesn't do it either — so both only stop the search and mark the board;
+`finish_deleting_boards()` erases it, engines included, once nothing is left running in it, which
+`collect_all()`'s usual teardown (`drop_unused_links()`) reaches within a tick or two. The board
+cap (#109, `GUI_MAX_BOARDS`) applies the same way to a fresh id either button makes, with the same
+503 and message. `diagnostics/board_lifecycle_test.cpp` covers creating, deleting (idle and
+mid-search) and the 24 h sweep (unwatched vs. watched by a stream).
 
 ## Moving around the tree
 Moving around the tree: `POST /api/nav` (`where` = back/forward/start/end/prev/next, what the
