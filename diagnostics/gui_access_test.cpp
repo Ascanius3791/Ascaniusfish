@@ -175,6 +175,18 @@ static void test_client()
     check(safe_next("/?id=abc")=="/?id=abc", "safe_next keeps a board link");
     check(safe_next("//evil.example")=="/" && safe_next("/\\evil.example")=="/" && safe_next("https://x")=="/"
           && safe_next("/a\r\nSet-Cookie: x")=="/" && safe_next("/login")=="/", "safe_next refuses other sites and header breaks");
+    auto foreign = [](const char* origin, const char* host) {
+        std::map<std::string, std::string> h;
+        if(origin) h["origin"] = origin;
+        if(host) h["host"] = host;
+        return foreign_origin(h);
+    };
+    check(!foreign(nullptr, "chess.example.org") && !foreign("https://chess.example.org", "chess.example.org")
+          && !foreign("http://localhost:8173", "localhost:8173") && !foreign("https://Chess.Example.org:8443", "chess.example.org")
+          && !foreign("http://[::1]:8173", "[::1]:8173"), "a POST from the server's own page passes (#111)");
+    check(foreign("https://evil.example.org", "chess.example.org") && foreign("null", "chess.example.org")
+          && foreign("https://chess.example.org.evil.com", "chess.example.org") && foreign("https://chess.example.org", nullptr)
+          && foreign("https://", "chess.example.org"), "one from another host, null or no Host is refused");
 }
 
 // ------------------------------------------------------------------ part 2
@@ -361,6 +373,10 @@ static void test_server()
     check(r.header("X-Content-Type-Options")=="nosniff" && r.header("X-Frame-Options")=="DENY"
           && r.header("Referrer-Policy")=="same-origin", "the browser protection headers (#111)");
     check(r.header("Strict-Transport-Security").empty(), "no HSTS over plain http");
+    r = request(port, "POST", "/login", "X-Real-IP: 198.51.100.4\r\nOrigin: https://other.example\r\n", login_body(PASSWORD));
+    check(r.status==403 && r.header("Set-Cookie").empty(), "a login posted from another site's page is refused");
+    r = request(port, "POST", "/login", "X-Real-IP: 198.51.100.4\r\nOrigin: http://localhost\r\n", login_body(PASSWORD));
+    check(r.status==303, "one from this server's own page is not");
 
     r = request(port, "GET", "/api/state?id=main", cookie);
     check(r.status==200 && r.body.find("\"mode\"")!=std::string::npos, "the cookie opens the API");

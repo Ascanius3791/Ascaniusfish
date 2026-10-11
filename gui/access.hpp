@@ -18,6 +18,7 @@
 #define GUI_ACCESS_HPP
 #include "sha256.hpp"
 
+#include <algorithm>
 #include <arpa/inet.h>
 #include <cctype>
 #include <deque>
@@ -237,6 +238,35 @@ namespace gui_access
         auto proto = headers.find("x-forwarded-proto");
         c.https = proto!=headers.end() && trim(proto->second)=="https";
         return c;
+    }
+
+    // The host part of "host:port" or "[v6]:port", lowercased.
+    inline std::string host_only(std::string authority)
+    {
+        std::transform(authority.begin(), authority.end(), authority.begin(), ::tolower);
+        if(!authority.empty() && authority[0]=='[')
+        return authority.substr(0, authority.find(']')+1);
+        return authority.substr(0, authority.find(':'));
+    }
+
+    // Whether a POST may be from another site's page (#111): its Origin names
+    // another host than the request's Host. A cookie is SameSite=Lax, but a
+    // sibling subdomain is the same site. Hosts only: behind nginx, Host is
+    // $host, which never has a port. No Origin (curl, a script) passes; a
+    // browser always sends one on a POST, and "null" (a sandboxed frame, a
+    // redirect from elsewhere) does not pass.
+    inline bool foreign_origin(const std::map<std::string, std::string>& headers)
+    {
+        auto origin = headers.find("origin");
+        if(origin==headers.end())
+        return false;
+        std::string o = trim(origin->second);
+        size_t scheme = o.find("://");
+        auto host = headers.find("host");
+        if(scheme==std::string::npos || host==headers.end())
+        return true;
+        std::string from = host_only(o.substr(scheme+3)), to = host_only(trim(host->second));
+        return from.empty() || from!=to;
     }
 
     // Where to go after logging in: a path on this server, or "/". Only the

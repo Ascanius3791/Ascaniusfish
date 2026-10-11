@@ -1831,6 +1831,8 @@ static void request_stop(int) { server.stopping = 1; }
 // Every request: the login routes first, then by method.
 static Response route(const Request& req)
 {
+    if(req.method=="POST" && gui_access::foreign_origin(req.headers))
+    return Response::text("refused: this request comes from another site's page", 403);
     Response login_response;
     if(login.on() && handle_login_routes(req, login_response))
     return login_response;
