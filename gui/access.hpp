@@ -10,9 +10,10 @@
 // logging out removes the cookie from that browser, and a copied cookie stays
 // good until it expires or the secret or password changes.
 //
-// Failed logins are counted per client address and over the whole server
-// within a sliding window; past either limit a login is refused before the
-// password is even looked at, so guessing cannot go on at full speed.
+// Failed logins are counted per client address (an IPv6 address by its /64,
+// #111) and over the whole server within a sliding window; past either limit
+// a login is refused before the password is even looked at, so guessing
+// cannot go on at full speed.
 #ifndef GUI_ACCESS_HPP
 #define GUI_ACCESS_HPP
 #include "sha256.hpp"
@@ -126,7 +127,7 @@ namespace gui_access
         {
             prune(now_ms);
             whole_server = false;
-            auto it = by_ip.find(ip);
+            auto it = by_ip.find(group_key(ip));
             if(it!=by_ip.end() && (int)it->second.size()>=per_ip)
             return it->second.front()+LOGIN_WINDOW_MS-now_ms;
             if((int)all.size()>=total)
@@ -139,18 +140,32 @@ namespace gui_access
 
         void failed(const std::string& ip, long long now_ms)
         {
-            by_ip[ip].push_back(now_ms);
+            by_ip[group_key(ip)].push_back(now_ms);
             all.push_back(now_ms);
         }
 
-        // Every remembered address had a failure inside the window, and the
-        // total limit refuses more than `total` of those, so the table never
-        // holds more than `total` addresses.
+        // Every remembered group (an address, or an IPv6 /64) had a failure
+        // inside the window, and the total limit refuses more than `total` of
+        // those, so the table never holds more than `total` groups.
         size_t addresses() const { return by_ip.size(); }
 
         private:
         std::map<std::string, std::deque<long long>> by_ip;
         std::deque<long long> all;
+
+        // One IPv6 home connection can draw on billions of addresses, enough
+        // to keep `total` used up by itself and lock out every other visitor
+        // without ever repeating an address (#111) — so every address in the
+        // same /64 (what a residential ISP routes to one connection) shares
+        // one bucket. An IPv4 or IPv4-mapped address is its own bucket, since
+        // nothing is handed out on that scale over IPv4.
+        static std::string group_key(const std::string& ip)
+        {
+            in6_addr a;
+            if(inet_pton(AF_INET6, ip.c_str(), &a)!=1 || IN6_IS_ADDR_V4MAPPED(&a))
+            return ip;
+            return std::string(reinterpret_cast<const char*>(&a), 8);
+        }
 
         void prune(long long now_ms)
         {

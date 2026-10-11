@@ -270,6 +270,31 @@ static std::vector<Case> cases()
             fail("the real cookie is refused");
             std::printf("  forged cookies refused, the real one accepted\n");
         }});
+    list.push_back({"login-limiter", "one IPv6 /64, a billion addresses: the group hits the per-IP limit, not just the total",
+        [] {
+            gui_access::Login_Limiter lim;
+            lim.per_ip = 10;
+            lim.total = 100;
+            long long now = 1700000000000;
+            bool whole_server = false;
+            // 10 different addresses in 2001:db8:abcd:1234::/64, one failure each.
+            for(int i=0;i<10;i++)
+            {
+                char ip[64];
+                std::snprintf(ip, sizeof ip, "2001:db8:abcd:1234::%x", i+1);
+                if(lim.wait_ms(ip, now, whole_server)!=0)
+                fail(std::string("address ")+ip+" refused before its own first try");
+                lim.failed(ip, now);
+            }
+            // An 11th, never seen before, in the same /64: refused as that group, not the total.
+            long long wait = lim.wait_ms("2001:db8:abcd:1234::beef", now, whole_server);
+            if(wait<=0 || whole_server)
+            fail("an 11th address in the same /64 is not refused as its group");
+            // A address one /64 over is untouched.
+            if(lim.wait_ms("2001:db8:abcd:1235::1", now, whole_server)!=0)
+            fail("a different /64 is refused by another group's failures");
+            std::printf("  a full /64 group is refused together, a neighboring /64 is unaffected\n");
+        }});
     return list;
 }
 
