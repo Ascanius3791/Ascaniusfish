@@ -28,6 +28,8 @@
 //   board_idle_ms=86400000  how long a board may sit with no page open before
 //                     it is removed (#112); shrunk by the diagnostic, not
 //                     meant to be changed otherwise
+//   empty_board_idle_ms=60000  the same for a board still at the start
+//                     position with no moves (#111), likewise
 //
 // A token, new every run and printed once below, gates every route including
 // static files and /api/events: without it (as a "token=" cookie, set once a
@@ -553,7 +555,8 @@ static void abort_search(Session& session)
 
 // ------------------------------------------------------------- board deletion and expiry (#112)
 //
-// A board nobody has open is removed after 24 h, the same "watched or not"
+// A board nobody has open is removed after 24 h (one still untouched after a
+// minute, #111), the same "watched or not"
 // signal release_idle_engines() reads (server.subscribers()), just on a
 // day's clock rather than a few seconds'. The explicit "Delete board" button
 // lands here too. Either way the board cannot be torn down on the spot if
@@ -563,6 +566,7 @@ static void abort_search(Session& session)
 // lets the link go over the next tick or two, and finish_deleting_boards()
 // erases the board once nothing is left running in it.
 static long long board_idle_ms = 24LL*60*60*1000;   // board_idle_ms= overrides, for the diagnostic
+static long long empty_board_idle_ms = 60*1000;     // Session::untouched() ones (#111), empty_board_idle_ms=
 static std::map<std::string, long long> board_alone_since;
 static std::set<std::string> boards_to_delete;
 
@@ -607,8 +611,8 @@ static void finish_deleting_boards()
     }
 }
 
-// Once a tick: any board nothing has watched for BOARD_IDLE_MS is marked for
-// deletion too.
+// Once a tick: any board nothing has watched for board_idle_ms, or for
+// empty_board_idle_ms while it is still untouched, is marked for deletion too.
 static void expire_idle_boards()
 {
     long long now = now_ms();
@@ -624,7 +628,7 @@ static void expire_idle_boards()
         auto it = board_alone_since.find(id);
         if(it==board_alone_since.end())
         board_alone_since[id] = now;
-        else if(now-it->second>=board_idle_ms)
+        else if(now-it->second>=(sessions.get(id).untouched() ? std::min(empty_board_idle_ms, board_idle_ms) : board_idle_ms))
         mark_board_for_deletion(id);
     }
 }
@@ -1899,6 +1903,7 @@ int main(int argc, char** argv)
         else if(key=="ptt")     ptt_option = value=="none" ? "" : value;
         else if(key=="tunnel") tunnel_option = value;
         else if(key=="board_idle_ms") board_idle_ms = std::atoll(value.c_str());   // #112, for the diagnostic
+        else if(key=="empty_board_idle_ms") empty_board_idle_ms = std::atoll(value.c_str());   // #111, likewise
         else if(limits.count(key)) limits[key] = value;
         else
         {

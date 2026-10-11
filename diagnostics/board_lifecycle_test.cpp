@@ -114,9 +114,9 @@ static const char* LOG = "/tmp/board_lifecycle_test.log";
 
 static pid_t server_pid = -1;
 
-// Starts the server with a small board cap and a shrunk idle-sweep window
-// (board_idle_ms=, #112), so the 24 h sweep can be watched in a diagnostic
-// rather than taken on faith. Returns its port, or 0.
+// Starts the server with a small board cap and shrunk idle-sweep windows
+// (board_idle_ms=, #112; empty_board_idle_ms=, #111), so the sweep can be
+// watched in a diagnostic rather than taken on faith. Returns its port, or 0.
 static int start_server()
 {
     unlink(LOG);
@@ -131,7 +131,7 @@ static int start_server()
         setenv("GUI_MAX_BOARDS", "3", 1);
         setenv("GUI_MAX_ENGINES", "1", 1);
         execl("./gui/ascaniusfish_gui", "ascaniusfish_gui", "port=8392", "ptt=none", "engine=./ascaniusfish_uci",
-              "board_idle_ms=1500", (char*)nullptr);
+              "board_idle_ms=1500", "empty_board_idle_ms=400", (char*)nullptr);
         _exit(127);
     }
     for(int i=0;i<200;i++)
@@ -272,6 +272,21 @@ int main()
     // this point is exactly the kind of timing this step removes, so y1 and
     // z1 below always get the full cap of room to themselves.
     request(port, "POST", "/api/board-delete", cookie, "{\"id\":\"main\"}");
+
+    // An untouched board goes after empty_board_idle_ms=400 (#111), one with a
+    // move only after board_idle_ms=1500. w1, v1 and u1 fill the cap; w2 fits
+    // once w1 is swept, while v1 still has its move.
+    request(port, "GET", "/api/state?id=w1", cookie);
+    request(port, "POST", "/api/move", cookie, "{\"id\":\"v1\",\"uci\":\"e2e4\"}");
+    request(port, "POST", "/api/move", cookie, "{\"id\":\"u1\",\"uci\":\"e2e4\"}");
+    check(request(port, "GET", "/api/state?id=w2", cookie).status==503, "w1, v1 and u1 fill the cap");
+    bool emptied = poll_until(port, cookie, [&] {
+        return request(port, "GET", "/api/state?id=w2", cookie).status==200;
+    }, 1200);
+    check(emptied, "the untouched board w1 is swept within 1.2 s, making room");
+    check(has_moves(request(port, "GET", "/api/state?id=v1", cookie)), "v1, with a move, is not swept yet");
+    for(const char* id : {"w2", "v1", "u1"})
+    request(port, "POST", "/api/board-delete", cookie, std::string("{\"id\":\"") + id + "\"}");
     check(request(port, "POST", "/api/move", cookie, "{\"id\":\"y1\",\"uci\":\"e2e4\"}").status==200, "y1 made and played into");
     check(request(port, "POST", "/api/move", cookie, "{\"id\":\"z1\",\"uci\":\"e2e4\"}").status==200, "z1 made and played into");
     int watch_fd = connect_to(port);

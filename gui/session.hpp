@@ -1466,6 +1466,15 @@ class Session
         return tree.outcome(reason);
     }
 
+    // Still the fresh board a link makes: the start position, no moves, and
+    // no Correspondence root search that might run on with no page open. One
+    // nobody watches goes after a minute, not a day (#111): its link just
+    // makes the same board again.
+    bool untouched() const
+    {
+        return tree.at_root() && tree.at_tip() && start_fen==UCI_STARTPOS && mode!=Mode::CORRESPONDENCE;
+    }
+
     std::string fen() const { return tree.fen(); }
     const Move_Tree& game_tree() const { return tree; }   // read-only, for diagnostics/gui_fuzz.cpp
 

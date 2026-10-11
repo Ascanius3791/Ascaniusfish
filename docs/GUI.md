@@ -267,14 +267,17 @@ A board is cheap but not free (a `Move_Tree`, the analysis store, PTT entries by
 nobody has open for 24 h is removed on its own, the same "is anyone watching" signal
 `release_idle_engines()` reads (`server.subscribers(id)`), just on a day's clock rather than a few
 seconds' (`board_idle_ms=`, default 86400000, overridden short by
-`diagnostics/board_lifecycle_test.cpp`). Neither path can tear a board down on the spot if its
+`diagnostics/board_lifecycle_test.cpp`). A board still `untouched()` (the start position, no
+moves, not Correspondence) goes after a minute instead (`empty_board_idle_ms=`, #111): every visit
+without a link makes one, and they would otherwise fill the cap for a day. Nothing is lost, its
+link just makes the same fresh board again. Neither path can tear a board down on the spot if its
 engine is mid-search — joining a searching `Engine_Link` would block the server, the same reason
 `quit_engines()` doesn't do it either — so both only stop the search and mark the board;
 `finish_deleting_boards()` erases it, engines included, once nothing is left running in it, which
 `collect_all()`'s usual teardown (`drop_unused_links()`) reaches within a tick or two. The board
 cap (#109, `GUI_MAX_BOARDS`) applies the same way to a fresh id either button makes, with the same
 503 and message. `diagnostics/board_lifecycle_test.cpp` covers creating, deleting (idle and
-mid-search) and the 24 h sweep (unwatched vs. watched by a stream).
+mid-search) and both sweeps (unwatched vs. watched by a stream, untouched vs. played in).
 
 ## Moving around the tree
 Moving around the tree: `POST /api/nav` (`where` = back/forward/start/end/prev/next, what the
