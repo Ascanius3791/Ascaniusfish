@@ -1472,6 +1472,7 @@ class Session
     }
 
     std::string fen() const { return tree.fen(); }
+    const Move_Tree& game_tree() const { return tree; }   // read-only, for diagnostics/gui_fuzz.cpp
 
     // What the engine is told to think about: the root and the moves down to
     // the cursor, so its search is always about the position on the board.

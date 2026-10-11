@@ -39,7 +39,7 @@ SYZYGY_RANDOM ?=
 TOOL_TARGETS := tools/perft tools/bench tools/speed_compare tools/match tools/make_openings tools/make_ccrl_openings tools/make_endgames tools/gui_match tools/tt_stats tools/syzygy_reference tools/tb_suite tools/tb_trade_suite tools/nne_data tools/tune_data tools/tune tools/wdl_fit tools/tempo_swing tools/gaviota_reference tools/mate_suite tools/ptt_seed tools/watch_tt tools/walkback
 PROFILE_CXXFLAGS ?= -O2 -mpopcnt -g -pg -Wall -Wno-unknown-pragmas -Wno-parentheses -Wno-unused-variable
 
-.PHONY: all run play asm tests debug profile-startpos perft bench speed-compare match gui-match gui tt-stats tempo-swing syzygy-test gaviota-test nne-test nne-retrain tb-suite tb-trade-suite mate-suite ptt-seed walkback clean rebuild
+.PHONY: all run play asm tests debug profile-startpos perft bench speed-compare match gui-match gui tt-stats tempo-swing syzygy-test gaviota-test nne-test nne-retrain tb-suite tb-trade-suite mate-suite ptt-seed walkback gui-fuzz clean rebuild
 
 all: $(TARGET) $(UCI_TARGET)
 
@@ -260,6 +260,23 @@ diagnostics/gaviota_test: diagnostics/gaviota_test.cpp $(HEADERS) $(SOURCES) $(G
 gaviota-test: diagnostics/gaviota_test
 	./diagnostics/gaviota_test $(GAVIOTA_PATH)
 
+# The GUI's parsers and HTTP loop under ASan/UBSan with hostile, random and
+# mutated input (#111). -O0, since an optimised sanitizer build of the whole
+# engine needs more memory than this machine has; the _timing build is the
+# same source at -O3 without sanitizers, for the times and sizes it prints.
+GUI_FUZZ_SECONDS ?= 60
+GUI_FUZZ_FLAGS := -O0 -g1 -fsanitize=address,undefined -fno-omit-frame-pointer -mpopcnt -Wno-unknown-pragmas -Wno-parentheses -Wno-unused-variable
+diagnostics/gui_fuzz: diagnostics/gui_fuzz.cpp $(GUI_HEADERS) tools/game_rules.hpp $(HEADERS) $(SOURCES)
+	$(CXX) $(GUI_FUZZ_FLAGS) -pthread -o $@ diagnostics/gui_fuzz.cpp
+
+diagnostics/gui_fuzz_timing: diagnostics/gui_fuzz.cpp $(GUI_HEADERS) tools/game_rules.hpp $(HEADERS) $(SOURCES)
+	$(CXX) $(CXXFLAGS) -pthread -o $@ diagnostics/gui_fuzz.cpp
+
+gui-fuzz: diagnostics/gui_fuzz
+	ASAN_OPTIONS=detect_leaks=0 ./diagnostics/gui_fuzz fuzz $(GUI_FUZZ_SECONDS)
+	ASAN_OPTIONS=detect_leaks=0 ./diagnostics/gui_fuzz http $(GUI_FUZZ_SECONDS)
+	ASAN_OPTIONS=detect_leaks=0 ./diagnostics/gui_fuzz cases
+
 tools/gaviota_reference: tools/gaviota_reference.cpp
 	$(CXX) -O2 -Wall -o $@ tools/gaviota_reference.cpp
 
@@ -331,4 +348,4 @@ rebuild: clean all
 
 clean:
 	rm -rf $(GTB_DIR)/obj $(GTB_LIB)
-	rm -f $(TARGET) $(UCI_TARGET) $(UCI_NARROW_TARGET) a.out ascaniusfish.s $(TEST_TARGETS) $(TOOL_TARGETS) diagnostics/syzygy_test diagnostics/gaviota_test diagnostics/nne_inference_test tools/nne_train $(GUI_TARGET) benchmarks/profile_startpos benchmarks/gmon.out benchmarks/profile_startpos.gprof
+	rm -f $(TARGET) $(UCI_TARGET) $(UCI_NARROW_TARGET) a.out ascaniusfish.s $(TEST_TARGETS) $(TOOL_TARGETS) diagnostics/syzygy_test diagnostics/gaviota_test diagnostics/nne_inference_test diagnostics/gui_fuzz diagnostics/gui_fuzz_timing tools/nne_train $(GUI_TARGET) benchmarks/profile_startpos benchmarks/gmon.out benchmarks/profile_startpos.gprof
