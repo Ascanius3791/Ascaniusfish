@@ -2345,3 +2345,11 @@ fetch('/api/server')
   .then(res => res.json())
   .then(info => { el('logout').hidden = !info.login; })
   .catch(() => {});
+
+// The release in the footer (#110): "v0.1.0 · 9171d2a", or "dev · …" from a local build.
+fetch('/api/version')
+  .then(res => res.json())
+  .then(info => {
+    el('version').textContent = `${info.version === 'dev' ? 'dev' : 'v' + info.version} · ${info.commit}`;
+  })
+  .catch(() => {});

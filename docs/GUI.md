@@ -280,7 +280,8 @@ The limits also take options (`max_connections=`, `max_engines=`, `max_boards=`,
 environment once read, so the engine processes never see them, and the startup output names neither.
 
 - Without the cookie, a page redirects to `/login?next=<the page>` and `/api/` answers 401 `not logged
-  in`, before any session or engine is touched; only `/login`, `/logout` and `/favicon.png` answer.
+  in`, before any session or engine is touched; only `/login`, `/logout`, `/favicon.png` and
+  `/api/version` answer.
   `gui/web/login.html` is the form, filled in by `login_page()`.
 - `POST /login` checks the limits first (so guessing past them gets 429 even with the right
   password), compares HMACs of the typed and the real password, and sets
@@ -290,6 +291,10 @@ environment once read, so the engine processes never see them, and the startup o
   browser; a copied cookie stays good until it expires.
 - The page asks `GET /api/server` (`{"login":true}`) whether to show **Log out**, and goes to the
   login when a request answers `not logged in`.
+- `GET /api/version` (#110) answers without a login or token, before the check:
+  `{"version","commit","engineVersion","engineCommit"}`, the server's `APP_VERSION`/`ENGINE_COMMIT`
+  and the engine's from its answer to `uci`. The footer shows `v<version> · <commit>` (`dev · …` from
+  a local build). A deployment is checked with it: `docs/DEPLOY.md`.
 - Engines: a board's engine stays while its page is open, so with the default 2 a third board
   asking for one is refused until another closes (its engine goes 5 s after its last page). A
   Watch tournament takes two at once. Before refusing, the engines a board's mode no longer

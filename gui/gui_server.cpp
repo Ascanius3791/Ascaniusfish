@@ -54,6 +54,7 @@
 #include "access.hpp"
 #include "http_server.hpp"
 #include "session.hpp"
+#include "../lib/engine_version.hpp"
 
 #include <cctype>
 #include <chrono>
@@ -1660,6 +1661,16 @@ static Response handle_post_authed(const Request& req)
 // very next asset load, in practice) carries it instead.
 static Response handle_get(const Request& req)
 {
+    // Which release is online (#110), the one route without a login: a curl
+    // on the server checks an update, and it tells no more than the public
+    // repository does. The engine's own pair shows a mismatched binary.
+    if(req.path=="/api/version")
+    {
+        json::Out o;
+        o.obj().key("version").str(APP_VERSION).key("commit").str(ENGINE_COMMIT)
+         .key("engineVersion").str(engine_build().version).key("engineCommit").str(engine_build().commit).end_obj();
+        return Response::json(o.s);
+    }
     Auth auth = check_auth(req);
     if(!auth.ok && login.on())
     {

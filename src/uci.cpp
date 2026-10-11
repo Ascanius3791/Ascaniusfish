@@ -1198,7 +1198,7 @@ int UCI_Engine::loop()
         {
             send("id name Ascaniusfish");
             send("id author Ascanius");
-            send("info string evalversion " + std::to_string(EVAL_VERSION) + " weights " + std::to_string(weights.version) + " commit " + ENGINE_COMMIT);
+            send("info string evalversion " + std::to_string(EVAL_VERSION) + " weights " + std::to_string(weights.version) + " commit " + ENGINE_COMMIT + " version " + APP_VERSION);
             send("option name SyzygyPath type string default <empty>");
             send("option name SyzygyProbeLimit type spin default 5 min 0 max 5");
             if(gaviota::compiled_in())

@@ -1,0 +1,24 @@
+# OWNERSHIP=Claude
+# The Docker build context (#110), as an allowlist: everything is left out
+# (data/ alone is 17 GB; .git, books/, *.exe and *.pgn with it) except what
+# `make ascaniusfish_uci gui/ascaniusfish_gui` reads and the runtime copies.
+*
+!Makefile
+!ascaniusfish.hpp
+!ascaniusfish_2.hpp
+!ascaniusfish_uci.cpp
+!lib/
+!src/
+!gui/
+!tools/
+!third_party/
+!weights/
+!nets/
+
+# Inside those: build output from a local make, never sent.
+gui/ascaniusfish_gui
+third_party/gaviota/obj/
+third_party/gaviota/libgtb.a
+**/*.exe
+**/*.pgn
+**/*.tsv

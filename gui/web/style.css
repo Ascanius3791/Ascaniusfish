@@ -192,6 +192,18 @@ main {
   padding: 20px;
 }
 
+/* The release this server runs (#110): one quiet line under everything,
+   taken from the height main gets, so the page still never scrolls. */
+footer.version {
+  flex: 0 0 auto;
+  padding: 0 20px 6px;
+  text-align: right;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+footer.version:empty { display: none; }
+
 .board-column {
   flex: 1 1 420px;
   max-width: 620px;

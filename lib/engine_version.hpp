@@ -22,4 +22,10 @@ constexpr int EVAL_VERSION = 13;
 #define ENGINE_COMMIT "unknown"
 #endif
 
+// The release the binary belongs to (#110): the Makefile's APP_VERSION, which
+// the Docker build sets from the tag; "dev" for an ordinary local build.
+#ifndef APP_VERSION
+#define APP_VERSION "dev"
+#endif
+
 #endif // ENGINE_VERSION_HPP

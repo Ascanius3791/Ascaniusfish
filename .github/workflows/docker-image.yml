@@ -1,0 +1,58 @@
+# OWNERSHIP=Claude
+# The GUI's Docker image (#110, docs/DEPLOY.md), built on a v* tag or by hand
+# and kept as a downloadable artifact for 14 days. It deploys nothing, pushes
+# to no registry and uses no secrets: the server side stays a manual step.
+name: Docker image
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version without the v, e.g. 0.1.0'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # The version from the tag (v0.1.0 -> 0.1.0) or the input; the commit
+      # from the checkout, since the build itself has no repository.
+      - name: Version and commit
+        id: v
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then v="$INPUT_VERSION"; else v="${REF_NAME#v}"; fi
+          case "$v" in
+            ''|*[!0-9A-Za-z.-]*) echo "::error::version must be letters, digits, dots and dashes, got '$v'"; exit 1;;
+          esac
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "commit=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
+          COMMIT: ${{ steps.v.outputs.commit }}
+        run: |
+          docker build --build-arg ENGINE_COMMIT="$COMMIT" --build-arg APP_VERSION="$VERSION" -t "ascaniusfish:$VERSION" .
+          docker save "ascaniusfish:$VERSION" -o "ascaniusfish-$VERSION.tar"
+          ls -l "ascaniusfish-$VERSION.tar"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ascaniusfish-${{ steps.v.outputs.version }}
+          path: ascaniusfish-${{ steps.v.outputs.version }}.tar
+          retention-days: 14
+          if-no-files-found: error

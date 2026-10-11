@@ -1,0 +1,50 @@
+# OWNERSHIP=Claude
+# Template for the Plesk Docker stack (#110, docs/DEPLOY.md). Every <...> is a
+# placeholder: fill them in on the server, in the stack, never in this file.
+#   <version>        the image tag, e.g. 0.1.0 (CHANGELOG.md)
+#   <hostport>       a free port on the host; nginx proxies <subdomain>.<hauptdomain> to it
+#   <datenordner>    absolute host path of the data folder, owned by uid 10001
+#   <passwort>       the shared login password
+#   <cookie-secret>  32+ random characters, e.g. from `openssl rand -hex 32`
+services:
+  ascaniusfish:
+    image: ascaniusfish:<version>
+    restart: unless-stopped
+    # Only nginx on the same host reaches it; TLS ends there.
+    ports:
+      - "127.0.0.1:<hostport>:8173"
+    # A real init as PID 1: it reaps engine processes and passes on SIGTERM.
+    init: true
+    cpus: 1
+    mem_limit: 1g
+    pids_limit: 256
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      # HOME: the kept searches (.ascaniusfish/ptt.txt) survive an update.
+      - <datenordner>:/data
+    environment:
+      # The one password every visitor logs in with. Without it the server
+      # falls back to a token printed in the log, not meant for the internet.
+      GUI_PASSWORD: "<passwort>"
+      # Signs the login cookie; required with GUI_PASSWORD. A new value logs
+      # everyone out.
+      GUI_COOKIE_SECRET: "<cookie-secret>"
+      # 1 = take the client's address and https from nginx's X-Real-IP,
+      # X-Forwarded-For and X-Forwarded-Proto. Only behind that proxy.
+      GUI_TRUST_PROXY: "1"
+      # Open connections at once (default 64).
+      GUI_MAX_CONNECTIONS: "64"
+      # Engine processes at once, each under 100 MB and one search (default 2).
+      GUI_MAX_ENGINES: "2"
+      # Boards (games) kept at once (default 20).
+      GUI_MAX_BOARDS: "20"
+      # Failed logins allowed per client address in 5 minutes (default 10).
+      GUI_LOGIN_FAILS_PER_IP: "10"
+      # Failed logins allowed from everyone together in 5 minutes (default 100).
+      GUI_LOGIN_FAILS_TOTAL: "100"

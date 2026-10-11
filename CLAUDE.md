@@ -68,7 +68,7 @@ Profiling: `make profile-startpos` (builds `benchmarks/profile_startpos` with `-
 
 ## Architecture
 
-This section is the map. Subsystems with a lot of detail keep it in their own doc, read when working on them: `docs/GUI.md` (browser GUI), `docs/UCI.md` (UCI layer and its options), `docs/TABLEBASES.md` (Syzygy, Gaviota), `docs/MATE_SEARCH.md` (mate verifier); also `docs/BENCHMARKS.md`, `docs/NNE_DESIGN.md`, `docs/WORKFLOW.md`. When a change alters what one of them describes, update that doc, not this file; add here only what every session needs.
+This section is the map. Subsystems with a lot of detail keep it in their own doc, read when working on them: `docs/GUI.md` (browser GUI), `docs/UCI.md` (UCI layer and its options), `docs/TABLEBASES.md` (Syzygy, Gaviota), `docs/MATE_SEARCH.md` (mate verifier), `docs/DEPLOY.md` (the GUI's Docker image on a server, `CHANGELOG.md`); also `docs/BENCHMARKS.md`, `docs/NNE_DESIGN.md`, `docs/WORKFLOW.md`. When a change alters what one of them describes, update that doc, not this file; add here only what every session needs.
 
 ### Header/source split and include order matters
 Everything funnels through two giant umbrella headers that must be included in this order (see `ascaniusfish.cpp`):

@@ -65,9 +65,12 @@ GTB_OBJECTS := $(patsubst $(GTB_DIR)/%.c,$(GTB_DIR)/obj/%.o,$(GTB_SOURCES))
 GTB_CFLAGS := -O2 -DNDEBUG -DZ_PREFIX -w $(addprefix -I$(GTB_DIR)/,sysport compression compression/liblzf compression/zlib compression/lzma compression/huffman)
 GTB_LIB := $(GTB_DIR)/libgtb.a
 WITH_GTB := -DWITH_GAVIOTA $(GTB_LIB)
-# The commit the UCI engines report as provenance (#79, lib/engine_version.hpp).
+# The commit the UCI engines report as provenance (#79, lib/engine_version.hpp),
+# and the release (#110). The Docker build has no git and passes both on the
+# command line: make ENGINE_COMMIT=<hash> APP_VERSION=<version>.
 ENGINE_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null)$(shell git diff --quiet HEAD 2>/dev/null || echo -dirty)
-WITH_COMMIT := -DENGINE_COMMIT='"$(ENGINE_COMMIT)"'
+APP_VERSION ?= dev
+WITH_COMMIT := -DENGINE_COMMIT='"$(ENGINE_COMMIT)"' -DAPP_VERSION='"$(APP_VERSION)"'
 
 $(GTB_DIR)/obj/%.o: $(GTB_DIR)/%.c
 	@mkdir -p $(@D)
@@ -239,7 +242,7 @@ walkback: $(UCI_TARGET) tools/walkback
 	./tools/walkback $(WALKBACK_ARGS)
 
 $(GUI_TARGET): gui/gui_server.cpp $(GUI_HEADERS) tools/game_rules.hpp tools/uci_engine.hpp $(HEADERS) $(SOURCES) $(GTB_LIB)
-	$(CXX) $(CXXFLAGS) -pthread -o $@ gui/gui_server.cpp $(WITH_GTB)
+	$(CXX) $(CXXFLAGS) -pthread -o $@ gui/gui_server.cpp $(WITH_COMMIT) $(WITH_GTB)
 
 # Syzygy prober (lib/syzygy.hpp) vs the recorded Lichess reference, plus a
 # consistency check over SYZYGY_RANDOM (300) random positions per table

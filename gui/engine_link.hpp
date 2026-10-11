@@ -391,6 +391,7 @@ struct Engine_Build
     int eval_version = 0;     // 0 = it did not say
     int weights = 1;          // its weight set's version (#85); one that does not say has set 1
     std::string commit;
+    std::string version;      // its APP_VERSION (#110); "" from an engine that does not say
     std::string net_hash;     // "" = no net loaded
 
     void probe(const std::string& path)
@@ -405,12 +406,13 @@ struct Engine_Build
             std::istringstream in(text);
             std::string word;
             in >> word;
-            if(word=="evalversion")// "evalversion N weights W commit C"
+            if(word=="evalversion")// "evalversion N weights W commit C version V"
             {
                 in >> eval_version;
                 while(in >> word)
                 if(word=="weights") in >> weights;
                 else if(word=="commit") in >> commit;
+                else if(word=="version") in >> version;
             }
             const size_t hash = text.rfind(", hash ");
             if(text.compare(0, 7, "nne on,")==0 && hash!=std::string::npos)
