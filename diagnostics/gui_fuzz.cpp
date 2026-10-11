@@ -612,8 +612,9 @@ static int run_http(double budget_s)
         alive(p.name);
     }
 
-    // A header that never ends, 1 MB of it a few bytes per packet: the loop
-    // looks for the blank line from the start on every read.
+    // A header that never ends, 1 MB of it a few bytes per packet. The loop
+    // searched it from the start on every read (~95% CPU) until #111 made it
+    // search only the new bytes.
     {
         int fd = connect_to(port);
         int one = 1;

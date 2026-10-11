@@ -426,6 +426,7 @@ class Http_Server
         long long last_progress = 0;  // last time `out` shrank or was empty, for WRITE_TIMEOUT_MS
         size_t content_length = 0;
         size_t header_end = 0;        // 0 until the blank line arrived
+        size_t scanned = 0;           // bytes of `in` already searched for it
         std::map<std::string, std::string> headers;  // filled once header_end is set
     };
 
@@ -598,15 +599,16 @@ class Http_Server
         return;  // an established stream or a held wait sends nothing back
         if(!c.header_end)
         {
-            size_t blank = c.in.find("\r\n\r\n");
-            size_t skip = 4;
-            if(blank==std::string::npos)
-            {
-                blank = c.in.find("\n\n");
-                skip = 2;
-            }
+            // Only the new bytes, plus 3 for a blank line split across two
+            // reads: a header dribbled in 200 bytes at a time would otherwise
+            // be searched whole again after every read (#111).
+            size_t from = c.scanned>3 ? c.scanned-3 : 0;
+            c.scanned = c.in.size();
+            size_t crlf = c.in.find("\r\n\r\n", from), lf = c.in.find("\n\n", from);
+            size_t blank = std::min(crlf, lf);
             if(blank==std::string::npos)
             return;
+            size_t skip = blank==crlf ? 4 : 2;
             c.header_end = blank+skip;
             c.content_length = 0;
             std::string head = c.in.substr(0, blank);
@@ -656,6 +658,7 @@ class Http_Server
         req.peer = c.peer;
         c.in.erase(0, c.header_end+c.content_length);
         c.header_end = 0;
+        c.scanned = 0;
         c.content_length = 0;
         c.headers.clear();
 
