@@ -1196,6 +1196,11 @@ class Session
             error = "that line's start is no longer in the tree";
             return false;
         }
+        if(tree.size()+(int)line.size()>MAX_GAME_LENGTH)
+        {
+            error = "that line would make the game longer than " + std::to_string(MAX_GAME_LENGTH) + " moves";
+            return false;
+        }
         Game walk;
         walk.start(tree.node(from).pos, tree.node(from).halfmove_clock, tree.fullmove_of(from));
         for(const std::string& move : line)

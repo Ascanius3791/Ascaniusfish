@@ -33,6 +33,18 @@
 // the search than about the move, and every node of a game carries one.
 constexpr int MOVE_NOTE_PV = 24;
 
+// How deep PGN variations may nest. Writing a game back out as PGN recurses
+// once per level (write_moves()), and so does deleting a line (kill()); tens
+// of thousands of levels overflow the stack (#111). No human-written PGN
+// nests anywhere near this deep.
+constexpr int MAX_VARIATION_DEPTH = 100;
+
+// How many nodes (main line plus every variation) a tree may hold. A
+// 262 000-move game loads slowly, sends a tens-of-megabytes state message on
+// every update and overflows the stack in kill() when it is ever deleted
+// (#111). No real game or study comes close to this many moves.
+constexpr int MAX_GAME_LENGTH = 2000;
+
 // The engine's answer to one move, kept beside it in the tree. #16 fills it in
 // from an analysis search; a PGN comment lands in `comment`.
 struct Move_Note
@@ -602,6 +614,11 @@ class Move_Tree
                     error = "a PGN variation starts before any move";
                     return false;
                 }
+                if((int)stack.size()>=MAX_VARIATION_DEPTH)
+                {
+                    error = "a PGN variation nests more than " + std::to_string(MAX_VARIATION_DEPTH) + " deep";
+                    return false;
+                }
                 stack.push_back(cursor);
                 cursor = nodes[cursor].parent;
                 refresh();
@@ -652,6 +669,11 @@ class Move_Tree
                 if(at>=token.size())
                 continue;
                 token = token.substr(at);
+            }
+            if((int)nodes.size()>=MAX_GAME_LENGTH)
+            {
+                error = "the game is longer than " + std::to_string(MAX_GAME_LENGTH) + " moves";
+                return false;
             }
             if(!play_san(token, error))
             return false;
