@@ -14,6 +14,9 @@ How `./gui/ascaniusfish_gui` (`make gui`, `gui/`) is built. Read before working 
   Also the load limits a public server needs (#109): `max_connections`, the request and write
   timeouts, and a keep-alive comment on every stream silent for 15 s, by the clock rather than on a
   quiet `poll()` (a busy board keeps the loop awake, and the idle boards' streams still need it).
+  A header's end is searched for in the new bytes only, so one dribbled in slowly costs no CPU
+  (#111). Every response carries `SECURITY_HEADERS` (nosniff, no framing, `Referrer-Policy:
+  same-origin`) and HSTS when the proxy says https; not a whole CSP, only parts the page never trips.
 - `gui/access.hpp`, `gui/sha256.hpp` — the password login (#109): the signed cookie, the
   failed-login limits, the client address behind a proxy; SHA-256/HMAC written here, no library.
   `diagnostics/gui_access_test.cpp` checks them against the standard vectors and drives the real
@@ -325,6 +328,9 @@ environment once read, so the engine processes never see them, and the startup o
   https. The key comes from the secret and the password, so a restart keeps every login and a new
   password or secret ends them all. Only failed tries count. `POST /logout` clears the cookie in that
   browser; a copied cookie stays good until it expires.
+- Any POST whose `Origin` names another host than its `Host` is refused with 403, `null` included
+  (`foreign_origin()`, #111): SameSite=Lax keeps other sites out, not a sibling subdomain. Hosts
+  only, since nginx's `$host` has no port; a POST without `Origin` (curl) passes.
 - The page asks `GET /api/server` (`{"login":true}`) whether to show **Log out**, and goes to the
   login when a request answers `not logged in`.
 - `GET /api/version` (#110) answers without a login or token, before the check:
