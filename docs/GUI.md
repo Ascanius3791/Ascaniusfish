@@ -310,7 +310,7 @@ token is off, and one shared password opens the GUI for everyone who knows it:
 | `GUI_TRUST_PROXY` | off | `1`: take the client's address from `X-Real-IP` (else the last `X-Forwarded-For` entry) and https from `X-Forwarded-Proto`, but only when the connection comes from a private address (the proxy, Docker's bridge) |
 | `GUI_MAX_CONNECTIONS` | 64 | open connections, streams included; one more gets 503 |
 | `GUI_MAX_ENGINES` | 2 | engine processes on the whole server; a board asking for one more shows "all N engines … are in use" |
-| `GUI_MAX_BOARDS` | 20 | boards (session ids); a new one past it gets 503 with a message |
+| `GUI_MAX_BOARDS` | 100 | boards (session ids); a new one past it gets 503 with a message |
 | `GUI_LOGIN_FAILS_PER_IP` | 10 | failed logins per address in 5 minutes, then 429 — an IPv6 address counts against its /64 as a group, not on its own, since one connection can draw on billions of them (#111) |
 | `GUI_LOGIN_FAILS_TOTAL` | 100 | failed logins on the whole server in 5 minutes, then 429 for everyone not logged in |
 

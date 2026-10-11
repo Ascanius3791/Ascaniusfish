@@ -42,8 +42,8 @@ services:
       GUI_MAX_CONNECTIONS: "64"
       # Engine processes at once, each under 100 MB and one search (default 2).
       GUI_MAX_ENGINES: "2"
-      # Boards (games) kept at once (default 20).
-      GUI_MAX_BOARDS: "20"
+      # Boards (games) kept at once (default 100).
+      GUI_MAX_BOARDS: "100"
       # Failed logins allowed per client address in 5 minutes (default 10).
       GUI_LOGIN_FAILS_PER_IP: "10"
       # Failed logins allowed from everyone together in 5 minutes (default 100).

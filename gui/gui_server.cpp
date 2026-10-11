@@ -22,7 +22,7 @@
 //                     ~/.ascaniusfish/ptt.txt, shared by every worktree), none = off
 //   tunnel=cloudflared  also launch `cloudflared tunnel --url` at this port and
 //                     print the combined shareable link once it comes up
-//   max_connections=64, max_engines=2, max_boards=20
+//   max_connections=64, max_engines=2, max_boards=100
 //                     the load limits (#109); also GUI_MAX_CONNECTIONS,
 //                     GUI_MAX_ENGINES, GUI_MAX_BOARDS, an option winning
 //   board_idle_ms=86400000  how long a board may sit with no page open before
@@ -259,7 +259,7 @@ static bool handle_login_routes(const Request& req, Response& res)
 // Engine processes and boards, on top of the connection cap in http_server.hpp.
 // Each refusal is a message the page shows, never a crash.
 static int max_engines = 2;
-static size_t max_boards = 20;
+static size_t max_boards = 100;
 
 // A request for a board that does not exist yet, with max_boards there
 // already, is refused before anything makes it.
@@ -1873,7 +1873,7 @@ int main(int argc, char** argv)
     // The limits: the environment first (a container sets them there), an
     // option on top.
     std::map<std::string, std::string> limits = {
-        {"max_connections", std::to_string(DEFAULT_MAX_CONNECTIONS)}, {"max_engines", "2"}, {"max_boards", "20"},
+        {"max_connections", std::to_string(DEFAULT_MAX_CONNECTIONS)}, {"max_engines", "2"}, {"max_boards", "100"},
         {"login_fails_per_ip", std::to_string(gui_access::DEFAULT_FAILS_PER_IP)},
         {"login_fails_total", std::to_string(gui_access::DEFAULT_FAILS_TOTAL)}};
     for(auto& limit : limits)
