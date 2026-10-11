@@ -42,6 +42,10 @@
   </button>
   <button id="settings-toggle" class="gear" title="Settings" aria-label="Settings"
           aria-expanded="false" aria-controls="settings">&#x2699;</button>
+  <!-- Shown only with a password login (#109): ends it in this browser. -->
+  <form id="logout" method="post" action="/logout" hidden>
+    <button class="gear" title="Log out">Log out</button>
+  </form>
 
   <!-- The home for settings that belong to the page rather than to a mode. The
        server holds them (they are in every state it sends), so a reload and a

@@ -145,6 +145,10 @@ nav button.active {
 
 .gear.active { border-color: var(--accent); color: var(--accent); }
 
+#logout { margin: 0; display: flex; }
+#logout[hidden] { display: none; }
+#logout .gear { font-size: 12px; }
+
 .settings {
   position: absolute;
   z-index: 20;

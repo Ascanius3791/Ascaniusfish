@@ -21,9 +21,16 @@
 //
 // listen_on() binds 127.0.0.1 by default; a caller passing another address
 // (gui_server.cpp's bind=) is exposing this on a LAN or behind a tunnel, and
-// the token check gui_server.cpp does before touching a session is what makes
-// that safe — this header itself knows nothing about auth, only that a
-// Response may carry a Set-Cookie.
+// the token or password check gui_server.cpp does before touching a session is
+// what makes that safe — this header itself knows nothing about auth, only that
+// a Response may carry a Set-Cookie and a Location.
+//
+// On the internet (#109) the loop also has to survive its visitors: at most
+// max_connections at once (one more is told 503 and closed), a request must
+// arrive whole within REQUEST_TIMEOUT_MS, and a client that stops reading what
+// it is sent is dropped after WRITE_TIMEOUT_MS or once MAX_PENDING_OUT piles
+// up. An event stream is sent a comment after KEEPALIVE_MS of silence, so a
+// proxy in front does not time it out while the page sits on a quiet board.
 #ifndef GUI_HTTP_SERVER_HPP
 #define GUI_HTTP_SERVER_HPP
 #include <algorithm>
@@ -46,6 +53,12 @@
 constexpr size_t MAX_REQUEST_BYTES = 1 << 20;  // a FEN or a move; nothing here is big
 constexpr long long WAIT_MAX_MS = 20000;      // a long poll is answered by then anyway, well inside Cloudflare's 100 s
 constexpr long long POLLER_GRACE_MS = 3000;   // a long-polling page counts as there this long after its last wait
+constexpr long long REQUEST_TIMEOUT_MS = 10000;  // from connect to the last byte of the request
+constexpr long long WRITE_TIMEOUT_MS = 30000;    // pending output that the client does not take
+constexpr size_t MAX_PENDING_OUT = 8 << 20;      // unsent bytes a slow stream may pile up
+constexpr long long KEEPALIVE_MS = 15000;        // well inside a proxy's usual 60 s read timeout
+constexpr int HOUSEKEEPING_MS = 5000;            // the longest poll(), so the timers above run
+constexpr size_t DEFAULT_MAX_CONNECTIONS = 64;
 
 struct Request
 {
@@ -54,16 +67,23 @@ struct Request
     std::string query;  // raw, after '?'
     std::string body;
     std::map<std::string, std::string> headers;  // lowercased name -> value, e.g. "cookie"
+    std::string peer;   // the connecting address (with a proxy in front, the proxy)
 
     // Value of a query parameter, or "" if it isn't there.
     std::string param(const std::string& name) const
     {
-        for(size_t i=0;i<query.size();)
+        return field(query, name);
+    }
+
+    // The same out of any "a=1&b=2" text, e.g. a form's body.
+    static std::string field(const std::string& encoded, const std::string& name)
+    {
+        for(size_t i=0;i<encoded.size();)
         {
-            size_t end = std::min(query.find('&', i), query.size());
-            size_t eq = query.find('=', i);
-            if(eq<end && query.compare(i, eq-i, name)==0)
-            return decode(query.substr(eq+1, end-eq-1));
+            size_t end = std::min(encoded.find('&', i), encoded.size());
+            size_t eq = encoded.find('=', i);
+            if(eq<end && eq-i==name.size() && encoded.compare(i, eq-i, name)==0)
+            return decode(encoded.substr(eq+1, end-eq-1));
             i = end+1;
         }
         return "";
@@ -99,6 +119,7 @@ struct Response
     long long after = 0;   // the last publish number the waiting page has
     std::string page;      // the waiting page's own id, so it stays counted between waits
     std::string set_cookie;  // Set-Cookie value, or "" for none (a plain response only)
+    std::string location;    // Location, for a redirect (303)
 
     static Response json(const std::string& body, int status = 200)
     {
@@ -147,11 +168,16 @@ inline const char* status_text(int status)
     switch(status)
     {
         case 200: return "OK";
+        case 303: return "See Other";
         case 400: return "Bad Request";
+        case 401: return "Unauthorized";
         case 404: return "Not Found";
         case 405: return "Method Not Allowed";
+        case 408: return "Request Timeout";
         case 409: return "Conflict";
         case 413: return "Payload Too Large";
+        case 429: return "Too Many Requests";
+        case 503: return "Service Unavailable";
         default:  return "Internal Server Error";
     }
 }
@@ -188,6 +214,8 @@ class Http_Server
     // short one, or a flag falls only when something else happens to wake the
     // loop rather than within about as long as this returns.
     std::function<int()> poll_timeout;
+    // Connections open at once, event streams and held waits included.
+    size_t max_connections = DEFAULT_MAX_CONNECTIONS;
 
     Http_Server()
     {
@@ -333,12 +361,15 @@ class Http_Server
     void run()
     {
         while(!stopping)
-        poll_once(poll_timeout ? poll_timeout() : 30000);
+        poll_once(std::min(poll_timeout ? poll_timeout() : 30000, HOUSEKEEPING_MS));
     }
 
-    // One poll iteration: accepts, reads, answers, writes. Also sends an SSE
-    // comment to every stream on a quiet tick, which is how a page that went
-    // away (closed tab) gets noticed and dropped.
+    // One poll iteration: accepts, reads, answers, writes, and closes what
+    // timed out. A stream silent for KEEPALIVE_MS gets an SSE comment, which is
+    // also how a page that went away (closed tab) gets noticed and dropped.
+    // That is per stream and by the clock, not on a quiet tick: a busy board
+    // wakes the loop all the time, and the streams of the idle ones still
+    // need their comment.
     void poll_once(int timeout_ms)
     {
         std::vector<pollfd> fds;
@@ -348,15 +379,9 @@ class Http_Server
         fds.push_back({c.fd, (short)(POLLIN | (c.out.empty() ? 0 : POLLOUT)), 0});
 
         int ready = poll(fds.data(), fds.size(), timeout_ms);
-        if(ready==0)
-        {
-            for(Client& c : clients)
-            if(c.sse)
-            queue(c, ": keep-alive\n\n");
-        }
-        else if(ready<0)
+        if(ready<0)
         return;
-        else
+        if(ready>0)
         {
             if(fds[0].revents & POLLIN)
             accept_all();
@@ -376,6 +401,7 @@ class Http_Server
         expire_waits();
         if(on_tick)
         on_tick();
+        keep_alive_and_expire();
         flush_all();
         reap();
     }
@@ -393,6 +419,11 @@ class Http_Server
         long long waiting_since = 0;
         std::string page;             // the long-polling page's id
         bool done = false;           // close once `out` is drained
+        bool answered = false;        // respond() ran: nothing more is read or handled
+        std::string peer;             // dotted address
+        long long opened = 0;         // connect time, for REQUEST_TIMEOUT_MS
+        long long last_queued = 0;    // for KEEPALIVE_MS
+        long long last_progress = 0;  // last time `out` shrank or was empty, for WRITE_TIMEOUT_MS
         size_t content_length = 0;
         size_t header_end = 0;        // 0 until the blank line arrived
         std::map<std::string, std::string> headers;  // filled once header_end is set
@@ -479,16 +510,59 @@ class Http_Server
             int fd = accept4(listen_fd, (sockaddr*)&peer, &peer_len, SOCK_CLOEXEC | SOCK_NONBLOCK);
             if(fd<0)
             return;
+            if(clients.size()>=max_connections)
+            {
+                // Best effort, no waiting: the reply fits any socket buffer.
+                static const char busy[] =
+                    "HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/plain; charset=utf-8\r\n"
+                    "Content-Length: 45\r\nConnection: close\r\n\r\n"
+                    "too many open connections, try again shortly\n";
+                if(send(fd, busy, sizeof busy-1, MSG_NOSIGNAL)<0) {}
+                close(fd);
+                continue;
+            }
             Client c;
             c.fd = fd;
             c.loopback = peer.sin_family==AF_INET && (ntohl(peer.sin_addr.s_addr)>>24)==127;
+            char text[INET_ADDRSTRLEN] = "";
+            inet_ntop(AF_INET, &peer.sin_addr, text, sizeof text);
+            c.peer = text;
+            c.opened = c.last_queued = c.last_progress = clock_ms();
             clients.push_back(c);
         }
     }
 
     void queue(Client& c, const std::string& data)
     {
+        if(c.out.empty())
+        c.last_progress = clock_ms();   // the write timeout counts from here
         c.out += data;
+        c.last_queued = clock_ms();
+    }
+
+    // Keep-alives for silent streams, and the end of whatever stalled: a
+    // request still not whole after REQUEST_TIMEOUT_MS, or output the client
+    // stopped taking.
+    void keep_alive_and_expire()
+    {
+        long long now = clock_ms();
+        for(Client& c : clients)
+        {
+            if(c.done && c.out.empty())
+            continue;
+            if(c.sse && !c.done && now-c.last_queued>=KEEPALIVE_MS)
+            queue(c, ": keep-alive\n\n");
+            if(!c.sse && !c.waiting && !c.done && now-c.opened>=REQUEST_TIMEOUT_MS)
+            {
+                respond(c, Response::text("request took too long", 408));
+                c.done = true;
+            }
+            if(!c.out.empty() && (now-c.last_progress>=WRITE_TIMEOUT_MS || c.out.size()>MAX_PENDING_OUT))
+            {
+                c.out.clear();
+                c.done = true;
+            }
+        }
     }
 
     void on_readable(Client& c)
@@ -499,6 +573,8 @@ class Http_Server
             ssize_t n = read(c.fd, chunk, sizeof chunk);
             if(n>0)
             {
+                if(c.answered)
+                continue;            // one request per connection: the rest is dropped
                 c.in.append(chunk, n);
                 if(c.in.size()>MAX_REQUEST_BYTES)
                 {
@@ -518,7 +594,7 @@ class Http_Server
 
     void try_handle(Client& c)
     {
-        if(c.sse || c.waiting)
+        if(c.sse || c.waiting || c.answered)
         return;  // an established stream or a held wait sends nothing back
         if(!c.header_end)
         {
@@ -577,6 +653,7 @@ class Http_Server
         req.path = Request::decode(target);
         req.body = c.in.substr(c.header_end, c.content_length);
         req.headers = c.headers;
+        req.peer = c.peer;
         c.in.erase(0, c.header_end+c.content_length);
         c.header_end = 0;
         c.content_length = 0;
@@ -631,18 +708,18 @@ class Http_Server
 
     void respond(Client& c, const Response& res)
     {
-        std::string cookie_line = res.set_cookie.empty() ? "" : "Set-Cookie: " + res.set_cookie + "\r\n";
-        char head[512];
-        int n = snprintf(head, sizeof head,
-            "HTTP/1.1 %d %s\r\n"
-            "Content-Type: %s\r\n"
-            "Content-Length: %zu\r\n"
+        c.answered = true;
+        c.in.clear();
+        std::string head = "HTTP/1.1 " + std::to_string(res.status) + " " + status_text(res.status) + "\r\n"
+            "Content-Type: " + res.content_type + "\r\n"
+            "Content-Length: " + std::to_string(res.body.size()) + "\r\n"
             "Cache-Control: no-store\r\n"
-            "Connection: close\r\n"
-            "%s"
-            "\r\n",
-            res.status, status_text(res.status), res.content_type.c_str(), res.body.size(), cookie_line.c_str());
-        queue(c, std::string(head, n));
+            "Connection: close\r\n";
+        if(!res.set_cookie.empty())
+        head += "Set-Cookie: " + res.set_cookie + "\r\n";
+        if(!res.location.empty())
+        head += "Location: " + res.location + "\r\n";
+        queue(c, head + "\r\n");
         queue(c, res.body);
     }
 
@@ -655,6 +732,7 @@ class Http_Server
             if(n>0)
             {
                 c.out.erase(0, n);
+                c.last_progress = clock_ms();
                 continue;
             }
             if(n<0 && (errno==EAGAIN || errno==EWOULDBLOCK))

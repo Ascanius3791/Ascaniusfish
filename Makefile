@@ -227,7 +227,7 @@ tb-trade-suite: $(UCI_TARGET) tools/tb_trade_suite
 # Browser GUI server (issues #14-#17). Plain g++, no Node: gui/web/vendor holds
 # a prebuilt chessground bundle, and the HTTP/SSE server is gui/http_server.hpp.
 GUI_TARGET := gui/ascaniusfish_gui
-GUI_HEADERS := gui/http_server.hpp gui/session.hpp gui/move_tree.hpp gui/json.hpp gui/engine_link.hpp gui/analysis_store.hpp gui/tablebase_view.hpp gui/ptt.hpp
+GUI_HEADERS := gui/http_server.hpp gui/access.hpp gui/sha256.hpp gui/session.hpp gui/move_tree.hpp gui/json.hpp gui/engine_link.hpp gui/analysis_store.hpp gui/tablebase_view.hpp gui/ptt.hpp
 
 # Analyse along the 3.Bc2+ study (#100, docs/plans/tt_knowledge_reuse.md): when
 # each step shows its mate, walks off / on / fwd / mixed (~40 s per walk).

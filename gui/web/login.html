@@ -1,0 +1,43 @@
+<!-- OWNERSHIP=Claude -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="darkreader-lock">
+<title>Ascaniusfish: log in</title>
+<link rel="icon" type="image/png" href="/favicon.png">
+<!-- Served by gui_server.cpp's login_page() to anyone without the login
+     cookie (#109), so it loads nothing else from the server: the style is
+     here. {{message}} and {{next}} are filled in, escaped, by the server. -->
+<style>
+  :root { --bg: #1b1a17; --panel: #252420; --line: #3a3833; --text: #ece7dd;
+          --muted: #9b948a; --accent: #b58863; --accent-text: #1b1a17; --bad: #d98b6a; }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+         background: var(--bg); color: var(--text); font: 15px/1.4 system-ui, sans-serif; padding: 16px; }
+  form { width: 100%; max-width: 320px; background: var(--panel); border: 1px solid var(--line);
+         border-radius: 8px; padding: 24px; display: flex; flex-direction: column; gap: 12px; }
+  h1 { margin: 0 0 4px; font-size: 20px; }
+  label { color: var(--muted); font-size: 13px; }
+  input[type=password] { width: 100%; padding: 8px 10px; font: inherit; color: var(--text);
+         background: var(--bg); border: 1px solid var(--line); border-radius: 6px; }
+  input[type=password]:focus { outline: none; border-color: var(--accent); }
+  button { padding: 8px; font: inherit; font-weight: 600; color: var(--accent-text);
+           background: var(--accent); border: 0; border-radius: 6px; cursor: pointer; }
+  .message { margin: 0; color: var(--bad); min-height: 1.4em; }
+  .message:empty { display: none; }
+</style>
+</head>
+<body>
+<form method="post" action="/login">
+  <h1>Ascaniusfish</h1>
+  <p class="message" role="alert">{{message}}</p>
+  <label for="password">Password</label>
+  <input type="password" id="password" name="password" autocomplete="current-password" autofocus required>
+  <input type="hidden" name="next" value="{{next}}">
+  <button type="submit">Log in</button>
+</form>
+</body>
+</html>

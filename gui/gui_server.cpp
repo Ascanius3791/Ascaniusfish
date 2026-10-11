@@ -22,6 +22,9 @@
 //                     ~/.ascaniusfish/ptt.txt, shared by every worktree), none = off
 //   tunnel=cloudflared  also launch `cloudflared tunnel --url` at this port and
 //                     print the combined shareable link once it comes up
+//   max_connections=64, max_engines=2, max_boards=20
+//                     the load limits (#109); also GUI_MAX_CONNECTIONS,
+//                     GUI_MAX_ENGINES, GUI_MAX_BOARDS, an option winning
 //
 // A token, new every run and printed once below, gates every route including
 // static files and /api/events: without it (as a "token=" cookie, set once a
@@ -29,6 +32,13 @@
 // before a session or an engine is ever touched. That is what makes bind=
 // anything but 127.0.0.1 — a LAN, or a tunnel's public port — safe to use;
 // see docs/REMOTE_PLAY.md for sharing a game over one with no hosting cost.
+//
+// On the internet, behind a reverse proxy (#109), GUI_PASSWORD replaces the
+// token with one shared password: a login page, then a signed cookie good for
+// 30 days (gui/access.hpp). GUI_COOKIE_SECRET signs it and must be set with it;
+// GUI_TRUST_PROXY=1 takes the client's address and https from the proxy's
+// headers; GUI_LOGIN_FAILS_PER_IP (10) and GUI_LOGIN_FAILS_TOTAL (100) are the
+// failed logins allowed in 5 minutes. docs/GUI.md has the whole setup.
 //
 // Play, Analyse and Watch mode make this a UCI client of ./ascaniusfish_uci
 // (gui/engine_link.hpp): the search runs on a worker thread, so a request never
@@ -41,6 +51,7 @@
 // tab never leaves two searches running for nobody. Correspondence mode (#101)
 // runs one more, the root engine, on a position of the user's choosing beside
 // the Analyse engine.
+#include "access.hpp"
 #include "http_server.hpp"
 #include "session.hpp"
 
@@ -55,6 +66,7 @@
 #include <random>
 #include <sstream>
 #include <string>
+#include <ctime>
 #include <sys/wait.h>
 #include <thread>
 
@@ -115,39 +127,142 @@ static bool tokens_equal(const std::string& a, const std::string& b)
     return diff==0;
 }
 
-// The "token" pair out of a Cookie header's "name=value; name=value" list.
-static std::string cookie_token(const std::string& cookie_header)
-{
-    for(size_t i=0;i<cookie_header.size();)
-    {
-        while(i<cookie_header.size() && cookie_header[i]==' ')
-        i++;
-        size_t semi = cookie_header.find(';', i);
-        size_t end = semi==std::string::npos ? cookie_header.size() : semi;
-        size_t eq = cookie_header.find('=', i);
-        if(eq!=std::string::npos && eq<end && cookie_header.compare(i, eq-i, "token")==0)
-        return cookie_header.substr(eq+1, end-eq-1);
-        if(semi==std::string::npos)
-        break;
-        i = semi+1;
-    }
-    return "";
-}
-
 struct Auth
 {
     bool ok = false;
     bool set_cookie = false;  // authenticated via the query token: hand back a cookie
 };
 
-static Auth check_auth(const Request& req)
+// ---------------------------------------------------------------- password login (#109)
+//
+// With GUI_PASSWORD set the token above is off: the login cookie is the only
+// way in, "?token=" opens nothing, and no token is printed. /login and
+// /logout are the only routes reached without the cookie.
+static gui_access::Login login;
+static gui_access::Login_Limiter login_limiter;
+static bool trust_proxy = false;
+
+static bool logged_in(const Request& req)
 {
     auto cookie = req.headers.find("cookie");
-    if(cookie!=req.headers.end() && tokens_equal(cookie_token(cookie->second), gui_token))
+    return cookie!=req.headers.end()
+        && login.cookie_ok(gui_access::cookie_value(cookie->second, gui_access::COOKIE_NAME), time(nullptr));
+}
+
+static Auth check_auth(const Request& req)
+{
+    if(login.on())
+    return {logged_in(req), false};
+    auto cookie = req.headers.find("cookie");
+    if(cookie!=req.headers.end() && tokens_equal(gui_access::cookie_value(cookie->second, "token"), gui_token))
     return {true, false};
     if(tokens_equal(req.param("token"), gui_token))
     return {true, true};
     return {false, false};
+}
+
+// A fresh login cookie, or (clear) one that removes it. Secure when the
+// proxy says the browser came over https.
+static std::string login_cookie(const Request& req, bool clear)
+{
+    std::string c = std::string(gui_access::COOKIE_NAME) + "=" + (clear ? "" : login.make_cookie(time(nullptr)))
+                  + "; Path=/; Max-Age=" + (clear ? "0" : std::to_string(gui_access::COOKIE_SECONDS))
+                  + "; HttpOnly; SameSite=Lax";
+    if(gui_access::client_of(req.peer, req.headers, trust_proxy).https)
+    c += "; Secure";
+    return c;
+}
+
+static Response redirect(const std::string& to, const std::string& cookie = "")
+{
+    Response r = Response::text("", 303);
+    r.location = to;
+    r.set_cookie = cookie;
+    return r;
+}
+
+static bool read_web_file(const std::string& path, std::string& out);
+
+static void replace_all(std::string& s, const std::string& from, const std::string& to)
+{
+    for(size_t at = s.find(from); at!=std::string::npos; at = s.find(from, at+to.size()))
+    s.replace(at, from.size(), to);
+}
+
+// gui/web/login.html with its {{message}} and {{next}} filled in. Only the
+// server's own messages go into it, and `next` is escaped.
+static Response login_page(const std::string& message, const std::string& next, int status)
+{
+    std::string page;
+    if(!read_web_file("/login.html", page))
+    page = "<!doctype html><title>Log in</title><p>{{message}}<form method=\"post\" action=\"/login\">"
+           "<input type=\"hidden\" name=\"next\" value=\"{{next}}\"><input type=\"password\" name=\"password\" autofocus>"
+           "<button>Log in</button></form>";
+    replace_all(page, "{{message}}", gui_access::html_escape(message));
+    replace_all(page, "{{next}}", gui_access::html_escape(next));
+    Response r = Response::file(page, "text/html; charset=utf-8");
+    r.status = status;
+    return r;
+}
+
+static std::string minutes_text(long long ms)
+{
+    long long m = (ms+59999)/60000;
+    return m<=1 ? "a minute" : std::to_string(m) + " minutes";
+}
+
+// GET and POST /login, POST /logout. False for any other route.
+static bool handle_login_routes(const Request& req, Response& res)
+{
+    if(req.path=="/login" && req.method=="GET")
+    {
+        std::string next = gui_access::safe_next(req.param("next"));
+        res = logged_in(req) ? redirect(next) : login_page("", next, 200);
+        return true;
+    }
+    if(req.path=="/login" && req.method=="POST")
+    {
+        std::string next = gui_access::safe_next(Request::field(req.body, "next"));
+        std::string ip = gui_access::client_of(req.peer, req.headers, trust_proxy).ip;
+        long long now = now_ms();
+        bool whole_server = false;
+        long long wait = login_limiter.wait_ms(ip, now, whole_server);
+        if(wait>0)
+        res = login_page(std::string(whole_server ? "Too many failed logins on this server" : "Too many failed logins from your address")
+                         + ". Try again in " + minutes_text(wait) + ".", next, 429);
+        else if(!login.password_ok(Request::field(req.body, "password")))
+        {
+            login_limiter.failed(ip, now);
+            res = login_page("Wrong password.", next, 401);
+        }
+        else
+        res = redirect(next, login_cookie(req, false));
+        return true;
+    }
+    if(req.path=="/logout" && req.method=="POST")
+    {
+        res = redirect("/login", login_cookie(req, true));
+        return true;
+    }
+    return false;
+}
+
+// ---------------------------------------------------------------- load limits (#109)
+//
+// Engine processes and boards, on top of the connection cap in http_server.hpp.
+// Each refusal is a message the page shows, never a crash.
+static int max_engines = 2;
+static size_t max_boards = 20;
+
+// A request for a board that does not exist yet, with max_boards there
+// already, is refused before anything makes it.
+static bool board_refused(const std::string& raw_id, Response& res)
+{
+    if(sessions.has(raw_id) || sessions.size()<max_boards)
+    return false;
+    res = Response::json(json::error("this server already has its maximum of " + std::to_string(max_boards)
+                                     + " boards; open the link of an existing one"), 503);
+    return true;
 }
 
 static std::string auth_cookie()
@@ -365,6 +480,48 @@ static Engine_Link& link_of(Engine_Set& set, int slot)
     return *link;
 }
 
+// Lets go of the engines a board's mode no longer uses (all of them once
+// `gone`), unless one is still finishing a search.
+static bool slot_wanted(const Session& session, int slot);
+
+static void drop_unused_links(const Session& session, Engine_Set& set, bool gone)
+{
+    for(int slot=0;slot<N_SLOTS;slot++)
+    if(set.links[slot] && (gone || !slot_wanted(session, slot)) && !set.links[slot]->searching_now())
+    {
+        set.links[slot].reset();     // ~Engine_Link joins its idle worker and quits the process
+        set.slot_game[slot] = -1;    // a new process knows no game: it gets a "ucinewgame"
+    }
+}
+
+static int live_engines()
+{
+    int n = 0;
+    for(auto& entry : engines)
+    for(const std::unique_ptr<Engine_Link>& link : entry.second->links)
+    n += link!=nullptr;
+    return n;
+}
+
+// Whether `slot` of this set may search: it has its process already, or one
+// more fits under max_engines (#109). A full server first lets go of what
+// nobody uses any more — the engine of a mode just left, or of a board whose
+// pages are gone — which release_idle_engines() would do on the next tick.
+static bool engine_room(Engine_Set& set, int slot)
+{
+    if(set.links[slot] || live_engines()<max_engines)
+    return true;
+    for(auto& entry : engines)
+    drop_unused_links(sessions.get(entry.first), *entry.second, entry.second.get()!=&set && abandoned(*entry.second));
+    return live_engines()<max_engines;
+}
+
+static std::string engines_full()
+{
+    return "all " + std::to_string(max_engines) + " engines of this server are in use on other boards;"
+           " try again once one of them is closed";
+}
+
 // Pushes the current position to every page watching this session.
 static void broadcast(Session& session)
 {
@@ -444,6 +601,12 @@ static bool maybe_start_search(Session& session)
         play_engine_move(session, kind, stored.pv[0], stored);
         server.wake();
         return true;
+    }
+    if(!engine_room(set, slot))
+    {
+        session.engine_error = engines_full();   // a move, Start or the analysis switch asks again
+        session.watch_pause();
+        return true;                              // the callers broadcast: the page shows why
     }
     Search_Request request;
     request.start_fen = session.root_fen();
@@ -603,6 +766,12 @@ static bool maybe_start_root(Session& session)
     }
     if(!session.corr_restart && (session.corr_finished || !session.corr_error.empty()))
     return false;
+    if(!engine_room(set, SLOT_ROOT))
+    {
+        session.corr_error = engines_full();
+        session.corr_restart = false;
+        return true;
+    }
     Engine_Link& link = link_of(set, SLOT_ROOT);
     if(link.searching_now())
     return false;
@@ -704,12 +873,7 @@ static void release_idle_engines(const std::string& id, Session& session)
         abort_search(session);
         return;
     }
-    for(int slot=0;slot<N_SLOTS;slot++)
-    if(set.links[slot] && (gone || !slot_wanted(session, slot)) && !set.links[slot]->searching_now())
-    {
-        set.links[slot].reset();     // ~Engine_Link joins its idle worker and quits the process
-        set.slot_game[slot] = -1;    // a new process knows no game: it gets a "ucinewgame"
-    }
+    drop_unused_links(session, set, gone);
 }
 
 // Every session with something in flight, once per poll iteration. The ids are
@@ -902,6 +1066,19 @@ static Session& session_of(const Request& req, const std::map<std::string, std::
 
 static Response handle_get_authed(const Request& req)
 {
+    // What the page needs to know about the server itself: whether to offer
+    // a logout.
+    if(req.path=="/api/server")
+    {
+        json::Out o;
+        o.obj().key("login").boolean(login.on()).end_obj();
+        return Response::json(o.s);
+    }
+
+    Response refused;
+    if(req.path.compare(0, 5, "/api/")==0 && board_refused(req.param("id"), refused))
+    return refused;
+
     if(req.path=="/api/state")
     return Response::json(sessions.get(req.param("id")).state_json());
 
@@ -930,6 +1107,10 @@ static Response handle_post_authed(const Request& req)
     if(!req.body.empty() && !json::parse_flat_object(req.body, body))
     return Response::json(json::error("request body is not a flat JSON object"), 400);
 
+    Response refused;
+    auto id = body.find("id");
+    if(board_refused(id!=body.end() ? id->second : req.param("id"), refused))
+    return refused;
     Session& session = session_of(req, body);
     std::string error;
     bool ok = true;
@@ -1480,6 +1661,18 @@ static Response handle_post_authed(const Request& req)
 static Response handle_get(const Request& req)
 {
     Auth auth = check_auth(req);
+    if(!auth.ok && login.on())
+    {
+        // Not logged in: the API says so, the icon is free (a login page has
+        // one too), and a page goes to the login and comes back afterwards.
+        if(req.path.compare(0, 5, "/api/")==0)
+        return Response::json(json::error("not logged in"), 401);
+        std::string icon;
+        if(req.path=="/favicon.png" && read_web_file(req.path, icon))
+        return Response::file(icon, mime_type(req.path));
+        std::string next = gui_access::safe_next(req.path + (req.query.empty() ? "" : "?" + req.query));
+        return redirect(next=="/" ? "/login" : "/login?next=" + gui_access::url_encode(next));
+    }
     if(!auth.ok)
     return Response::text("unauthorized", 401);
     Response res = handle_get_authed(req);
@@ -1492,7 +1685,7 @@ static Response handle_post(const Request& req)
 {
     Auth auth = check_auth(req);
     if(!auth.ok)
-    return Response::json(json::error("unauthorized"), 401);
+    return Response::json(json::error(login.on() ? "not logged in" : "unauthorized"), 401);
     Response res = handle_post_authed(req);
     if(auth.set_cookie)
     res.set_cookie = auth_cookie();
@@ -1548,6 +1741,19 @@ int main(int argc, char** argv)
     std::string root_option, start_fen, engine_option, bind_option = "127.0.0.1", tunnel_option, syzygy_option, gaviota_option;
     const char* home = std::getenv("HOME");
     std::string ptt_option = home ? std::string(home) + "/.ascaniusfish/ptt.txt" : "";
+    // The limits: the environment first (a container sets them there), an
+    // option on top.
+    std::map<std::string, std::string> limits = {
+        {"max_connections", std::to_string(DEFAULT_MAX_CONNECTIONS)}, {"max_engines", "2"}, {"max_boards", "20"},
+        {"login_fails_per_ip", std::to_string(gui_access::DEFAULT_FAILS_PER_IP)},
+        {"login_fails_total", std::to_string(gui_access::DEFAULT_FAILS_TOTAL)}};
+    for(auto& limit : limits)
+    {
+        std::string var = "GUI_" + limit.first;
+        std::transform(var.begin(), var.end(), var.begin(), ::toupper);
+        if(const char* v = std::getenv(var.c_str()))
+        limit.second = v;
+    }
     for(int i=1;i<argc;i++)
     {
         std::string arg = argv[i];
@@ -1567,6 +1773,7 @@ int main(int argc, char** argv)
         else if(key=="gaviota") gaviota_option = value;
         else if(key=="ptt")     ptt_option = value=="none" ? "" : value;
         else if(key=="tunnel") tunnel_option = value;
+        else if(limits.count(key)) limits[key] = value;
         else
         {
             std::fprintf(stderr, "gui: unknown option \"%s\"\n", key.c_str());
@@ -1578,6 +1785,41 @@ int main(int argc, char** argv)
         std::fprintf(stderr, "gui: tunnel= only supports \"cloudflared\" (got \"%s\")\n", tunnel_option.c_str());
         return 2;
     }
+
+    for(auto& limit : limits)
+    {
+        char* end = nullptr;
+        long n = std::strtol(limit.second.c_str(), &end, 10);
+        if(limit.second.empty() || *end || n<1 || n>100000)
+        {
+            std::fprintf(stderr, "gui: %s must be a whole number from 1 (got \"%s\")\n", limit.first.c_str(), limit.second.c_str());
+            return 2;
+        }
+    }
+    server.max_connections = (size_t)std::atol(limits["max_connections"].c_str());
+    max_engines = std::atoi(limits["max_engines"].c_str());
+    max_boards = (size_t)std::atol(limits["max_boards"].c_str());
+    login_limiter.per_ip = std::atoi(limits["login_fails_per_ip"].c_str());
+    login_limiter.total = std::atoi(limits["login_fails_total"].c_str());
+
+    // The password and the secret leave the environment once read: the
+    // engine processes started later inherit it, and have no use for them.
+    const char* trust = std::getenv("GUI_TRUST_PROXY");
+    trust_proxy = trust && std::string(trust)=="1";
+    if(const char* password = std::getenv("GUI_PASSWORD"))
+    {
+        const char* secret = std::getenv("GUI_COOKIE_SECRET");
+        std::string error;
+        bool ok = login.setup(password, secret ? secret : "", error);
+        unsetenv("GUI_PASSWORD");
+        unsetenv("GUI_COOKIE_SECRET");
+        if(!ok)
+        {
+            std::fprintf(stderr, "gui: %s\n", error.c_str());
+            return 2;
+        }
+    }
+    unsetenv("GUI_COOKIE_SECRET");
 
     gui_token = generate_token();
 
@@ -1629,6 +1871,9 @@ int main(int argc, char** argv)
 
     server.handler = [](const Request& req) -> Response
     {
+        Response login_response;
+        if(login.on() && handle_login_routes(req, login_response))
+        return login_response;
         if(req.method=="GET")
         return handle_get(req);
         if(req.method=="POST")
@@ -1653,6 +1898,15 @@ int main(int argc, char** argv)
         return 2;
     }
 
+    std::printf("Limits: %zu connections, %d engines, %zu boards; %d failed logins per address, %d in all, per 5 min\n",
+                server.max_connections, max_engines, max_boards, login_limiter.per_ip, login_limiter.total);
+    // With a password: no token, and nothing about the password, since this
+    // output may well end up in a container's log.
+    if(login.on())
+    std::printf("Ascaniusfish GUI on port %d (serving %s, Ctrl-C to stop)\n"
+                "Password login on%s.\n",
+                server.port(), web_root.c_str(), trust_proxy ? ", client address and https from the proxy's headers" : "");
+    else
     std::printf(
         "Ascaniusfish GUI on http://localhost:%d  (serving %s, Ctrl-C to stop)\n"
         "Token for this run: %s\n"
@@ -1666,7 +1920,7 @@ int main(int argc, char** argv)
         std::string url = start_tunnel_and_wait(server.port(), 20000, error);
         if(!url.empty())
         {
-            std::string share_url = url + "/?token=" + gui_token;
+            std::string share_url = url + (login.on() ? "/" : "/?token=" + gui_token);
             std::printf("Shareable link: %s\n"
                         "(quick tunnels can take a while to actually route through Cloudflare —\n"
                         " checking now, will print a confirmation once it's actually live)\n",
@@ -1676,9 +1930,10 @@ int main(int argc, char** argv)
         else
         std::fprintf(stderr, "gui: tunnel: %s\n", error.c_str());
     }
-    else
+    else if(!login.on())
     std::printf("Append the same \"?token=...\" to a LAN IP or a tunnel's URL to share it\n"
                  "(see docs/REMOTE_PLAY.md, or pass tunnel=cloudflared to do it automatically).\n");
+    if(!login.on())
     std::printf("The page keeps the token in a cookie after the first open. A new run makes a new token.\n");
     std::fflush(stdout);
     server.run();

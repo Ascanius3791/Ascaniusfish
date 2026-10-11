@@ -2623,6 +2623,11 @@ class Sessions
         return it->second;
     }
 
+    // Whether get() would find this board rather than make it, and how many
+    // there are: the board cap (#109) is checked before a request makes one.
+    bool has(const std::string& raw_id) const { return games.count(clean(raw_id))>0; }
+    size_t size() const { return games.size(); }
+
     private:
     std::map<std::string, Session> games;
 

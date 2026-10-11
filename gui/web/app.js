@@ -301,6 +301,14 @@ el('board').addEventListener('pointerdown', event => {
 
 // ---------------------------------------------------------------- server calls
 
+// Password login (#109): a login that ran out (30 days) answers "not logged
+// in"; the page goes to the login, which brings it back here afterwards.
+function toLogin(res, data) {
+  if (res.status !== 401 || !data || data.error !== 'not logged in') return false;
+  location.href = `/login?next=${encodeURIComponent(location.pathname + location.search)}`;
+  return true;
+}
+
 async function post(path, body) {
   const res = await fetch(path, {
     method: 'POST',
@@ -308,6 +316,16 @@ async function post(path, body) {
     body: JSON.stringify({ id: sessionId, ...body }),
   });
   const data = await res.json();
+  toLogin(res, data);
+  if (!res.ok) throw new Error(data.error || `request failed (${res.status})`);
+  return data;
+}
+
+// The board's state, or the server's reason for refusing it (a full server).
+async function fetchState() {
+  const res = await fetch(`/api/state?id=${encodeURIComponent(sessionId)}`);
+  const data = await res.json();
+  if (toLogin(res, data)) return null;
   if (!res.ok) throw new Error(data.error || `request failed (${res.status})`);
   return data;
 }
@@ -2200,6 +2218,9 @@ function connect() {
   events.addEventListener('error', () => {
     setLink('reconnecting…', 'down');
     el('audience').hidden = true;   // a count from before the break may be stale
+    // A stream cannot say why it failed; the state request can (logged out,
+    // or a server with all its boards taken).
+    fetchState().catch(err => showMessage(err.message));
   });
   events.addEventListener('audience', event => showAudience(JSON.parse(event.data)));
 }
@@ -2217,6 +2238,7 @@ async function waitForState() {
   for (;;) {
     try {
       const res = await fetch(`/api/wait?id=${encodeURIComponent(sessionId)}&after=${after}&page=${pageId}`);
+      if (res.status === 401 && toLogin(res, await res.json())) return;
       if (!res.ok) throw new Error(`wait failed (${res.status})`);
       const { n, state: next } = await res.json();
       if (failed) appliedSeq = -1;
@@ -2312,8 +2334,14 @@ boardFit.observe(document.querySelector('.board-column'));   // the height the w
 stacked.addEventListener('change', fitBoard);
 
 setLink('connecting…', 'down');
-fetch(`/api/state?id=${encodeURIComponent(sessionId)}`)
-  .then(res => res.json())
-  .then(apply)
-  .catch(() => showMessage('The engine server is not answering. Is ascaniusfish_gui still running?'))
+fetchState()
+  .then(data => { if (data) apply(data); })
+  .catch(err => showMessage(err instanceof SyntaxError || err instanceof TypeError
+    ? 'The engine server is not answering. Is ascaniusfish_gui still running?' : err.message))
   .finally(connect);
+
+// The logout button, only where there is a login.
+fetch('/api/server')
+  .then(res => res.json())
+  .then(info => { el('logout').hidden = !info.login; })
+  .catch(() => {});

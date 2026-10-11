@@ -11,6 +11,13 @@ How `./gui/ascaniusfish_gui` (`make gui`, `gui/`) is built. Read before working 
 - `gui/http_server.hpp` — the slice of HTTP this needs on plain sockets (no third-party library):
   GET static files, POST JSON, and SSE streams held open across one `poll()` loop, so the server
   can push a new position to every page watching a session. Binds `127.0.0.1` only.
+  Also the load limits a public server needs (#109): `max_connections`, the request and write
+  timeouts, and a keep-alive comment on every stream silent for 15 s, by the clock rather than on a
+  quiet `poll()` (a busy board keeps the loop awake, and the idle boards' streams still need it).
+- `gui/access.hpp`, `gui/sha256.hpp` — the password login (#109): the signed cookie, the
+  failed-login limits, the client address behind a proxy; SHA-256/HMAC written here, no library.
+  `diagnostics/gui_access_test.cpp` checks them against the standard vectors and drives the real
+  server through login, cookie, limits and caps (~25 s).
 - `gui/move_tree.hpp` — the game as a tree with a cursor, and PGN both ways. The linear `Game`
   in `tools/game_rules.hpp` stays as it is (`tools/match.cpp` and `tools/gui_match.cpp` use it);
   this is the shape a game being *looked at* needs. A `Tree_Node` holds the move, its SAN, the
@@ -252,6 +259,44 @@ it does answer.
 Like every tool that touches movegen, `main()` must run `Zobrist`/`initialize_rand()`/`init_magics()`/
 `init_sliders_attacks()` first — without them sliding attacks are garbage and `in_check()` silently
 misses checks instead of crashing.
+
+## On the internet (#109)
+Without `GUI_PASSWORD` nothing changes: the per-run token gates the server (#27). With it the
+token is off, and one shared password opens the GUI for everyone who knows it:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `GUI_PASSWORD` | unset | turns the login on; `<passwort>` |
+| `GUI_COOKIE_SECRET` | required with a password | ≥16 characters (`openssl rand -hex 32`), `<cookie-secret>`; the server refuses to start without it |
+| `GUI_TRUST_PROXY` | off | `1`: take the client's address from `X-Real-IP` (else the last `X-Forwarded-For` entry) and https from `X-Forwarded-Proto`, but only when the connection comes from a private address (the proxy, Docker's bridge) |
+| `GUI_MAX_CONNECTIONS` | 64 | open connections, streams included; one more gets 503 |
+| `GUI_MAX_ENGINES` | 2 | engine processes on the whole server; a board asking for one more shows "all N engines … are in use" |
+| `GUI_MAX_BOARDS` | 20 | boards (session ids); a new one past it gets 503 with a message |
+| `GUI_LOGIN_FAILS_PER_IP` | 10 | failed logins per address in 5 minutes, then 429 |
+| `GUI_LOGIN_FAILS_TOTAL` | 100 | failed logins on the whole server in 5 minutes, then 429 for everyone not logged in |
+
+The limits also take options (`max_connections=`, `max_engines=`, `max_boards=`, `login_fails_per_ip=`,
+`login_fails_total=`), which win over the environment. The password and secret are removed from the
+environment once read, so the engine processes never see them, and the startup output names neither.
+
+- Without the cookie, a page redirects to `/login?next=<the page>` and `/api/` answers 401 `not logged
+  in`, before any session or engine is touched; only `/login`, `/logout` and `/favicon.png` answer.
+  `gui/web/login.html` is the form, filled in by `login_page()`.
+- `POST /login` checks the limits first (so guessing past them gets 429 even with the right
+  password), compares HMACs of the typed and the real password, and sets
+  `gui_login=<expiry>.<HMAC-SHA256>`: HttpOnly, SameSite=Lax, 30 days, Secure when the proxy says
+  https. The key comes from the secret and the password, so a restart keeps every login and a new
+  password or secret ends them all. Only failed tries count. `POST /logout` clears the cookie in that
+  browser; a copied cookie stays good until it expires.
+- The page asks `GET /api/server` (`{"login":true}`) whether to show **Log out**, and goes to the
+  login when a request answers `not logged in`.
+- Engines: a board's engine stays while its page is open, so with the default 2 a third board
+  asking for one is refused until another closes (its engine goes 5 s after its last page). A
+  Watch tournament takes two at once. Before refusing, the engines a board's mode no longer
+  uses are let go (`engine_room()`).
+- Behind nginx: the event stream already sends `X-Accel-Buffering: no`, and the keep-alive
+  every 15 s and the long poll's 20 s stay inside nginx's default 60 s `proxy_read_timeout`.
+  Bind the container's port to `127.0.0.1:<hostport>` only, with `bind=0.0.0.0` inside it.
 
 ## Modes
 The mode selector shows Analyse / Play / Watch / Correspondence. Analyse is free play, FEN setup and a live
