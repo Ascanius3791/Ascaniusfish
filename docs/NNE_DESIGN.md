@@ -35,6 +35,18 @@ to move are then one kind of data, and the side to move needs no input.
 | castling | 4 | own kingside, own queenside, opponent kingside, opponent queenside |
 | en-passant file | 8 | the file of the en-passant square, if any (flipping the ranks keeps it) |
 
+**Named inputs (#114).** A net may also read the eval's named features, 2292 more
+inputs (3072 in all, `tools/nne_data features=named`, `tools/nne_train
+inputs=named`): per side (own, opponent), one 64-square board for each of
+passed, free passed, isolated, doubled, backward, phalanx and protected pawns,
+blocked pawns, knight and bishop outposts, pawn-defended pieces, hanging pieces,
+pieces attacked by a lesser one, rooks on open and half-open files, attacked
+king-ring squares and all attacked squares; and one word of globals (bishop
+pair each, opposite bishops, no pieces each, an unstoppable passer each, the
+game phase in 8 one-hot buckets). The definitions are `basic_eval()`'s, checked
+by `make nne-named-test`. `tools/nne_data refeature <dir> out=<dir>
+features=named` rewrites an existing dataset's inputs and keeps its labels.
+
 The feature code exists **once**, in the engine (`lib/nne.hpp`). The data tool
 writes each position's active inputs into the dataset, so the trainer never
 computes features itself and cannot drift from the engine.
@@ -43,7 +55,10 @@ computes features itself and cannot drift from the engine.
 
 `780 → 128 → 16 → 1`, clipped ReLU after both hidden layers, output in
 centipawns (mover's view), about 100k parameters. A hidden size of 256 is the
-fallback if 128 underfits.
+fallback if 128 underfits. #114 adds two shapes: `3072 → 128 → 16 → 1` (the
+named inputs) and `780 → 128 → 128 → 16 → 1` (`tools/nne_train layers=4`, a
+middle layer with its own clipped ReLU). The engine takes the shape from the
+file.
 
 ## Loss
 
@@ -117,7 +132,9 @@ test is used only for the reported numbers.
   count 3, uint32 sizes `780 128 16 1`, then per layer float32 weights
   `[in][out]` (one contiguous row of 128 per active input in the first layer)
   and float32 bias `[out]`. The last layer is already scaled to centipawns, so
-  `c = b3 + clamp(b2 + clamp(b1 + Σ W1[active], 0, 1)·W2, 0, 1)·W3`.
+  `c = b3 + clamp(b2 + clamp(b1 + Σ W1[active], 0, 1)·W2, 0, 1)·W3`. Version 2
+  (#114) is the same layout for the other shapes: 780 or 3072 inputs, 3 or 4
+  layers; a 780 → 128 → 16 → 1 net is still written as version 1.
 - Training: AdamW with weight decay 1 (best on the validation set among
   0–3), batch 1024, learning rate 1e-3 halved after 3 epochs without a better
   validation loss, stopped after 8. Numbers:
@@ -146,6 +163,9 @@ test is used only for the reported numbers.
   Cost and exactness: `docs/measurements/nne_int_2026-10-01.md`. `make nne-test`
   checks the engine against the trainer's test-set predictions (≤ 1 cp), the
   updated layer against one from scratch and AVX2 against the generic code;
+  a named net has up to ~490 inputs on, so its first-layer sums are int32 and
+  each W1 is scaled by the unit's largest weight (int16 sums left it 2.6 cp off);
+  the middle layer is int16 × int16 like layer 2, its clipped ReLU in float;
   `NNE=nets/nne_d6.bin` on the bench target searches with the net on.
 - **Where**: the quiet leaf of `minimax_tactical` (`ascaniusfish_2.hpp`, the
   `eval(original, W, 0)` after the TT probe) returns `static + correction`. Stand
@@ -197,6 +217,21 @@ The loss (#54), against the log-loss net above, 5+0.05:
 
 The last is `nets/nne_d6.bin` since #54.
 
+Named inputs and a middle layer (#114), against `780 → 128 → 16 → 1`, all three
+trained on the same w10 labels (nne-relabel run 40213569586) with the same two
+steps; w10 on both sides, 5+0.05, cloud SPRT [0, 10], 5000 pairs each:
+
+| Variant | Test WDL loss | bench 7 nps | Elo B−A (95% CI) | SPRT |
+|---|---:|---:|---|---|
+| `780 → 128 → 16 → 1` (A) | 0.005077 | ~480k | | |
+| `780 → 128 → 128 → 16 → 1` | 0.005095 | ~315–360k | −52.9 ± 5.4 | H0, LLR −72.3 |
+| `3072 → 128 → 16 → 1`, named inputs | **0.004947** | ~320k | −30.9 ± 5.5 | H0, LLR −44.8 |
+
+The named net fits the labels 2.6% better, but a leaf with it costs about 1.1–1.8 µs
+against 0.2–0.6 µs, a third of the nodes per second, and the fit does not buy that
+back. The middle layer fits no better and is as slow. Both dropped; the code to
+read them (file version 2) stays.
+
 ## Issues
 
 - #50: 500k labelled quiet positions from Lichess games (data tool, labels, split).
@@ -206,3 +241,4 @@ The last is `nets/nne_d6.bin` since #54.
 - #53: the net gains Elo at 5+0.05 (the match, and what to try if it doesn't).
 - #54: the loss chosen by Elo (Stockfish's WDL curve fitted to our games,
   the last layer refitted under it).
+- #114: the eval's named features as inputs, and a middle layer (both dropped).
