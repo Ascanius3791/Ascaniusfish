@@ -1,0 +1,459 @@
+# OWNERSHIP=Claude
+# A weight set of Ascaniusfish's eval: every number basic_eval() uses (#85).
+# Format: lib/weight_set.hpp.
+version 10
+parent 8
+data ccrl-cegt-tcec-3000-balanced
+tuner 4698a74
+loss 0.113321
+
+# material_eval(): pawn rook knight bishop queen king, with all pieces on (game_phase() 24) and with none
+piece_value 130 427 371 409 1309 379
+piece_value_endgame 326 1639 1009 1070 2808 379
+
+# piecetable(): rank 8 first, files a..h, white's view; black reads it rank-flipped
+piece_table_value_opening pawn
+   70   70   70   70   70   70   70   70
+   96  120  143  141  140   97   82   34
+   19   45   50   52   87  107  101  -38
+  -23  -18  -12  -20   23   47  -19  -38
+  -39  -58  -44  -49   -1    1  -12  -28
+  -68  -98  -85  -65  -49   -9  -41  -41
+  -53  -90  -76 -118  -62  -22  -23  -81
+    0    0    0    0    0    0    0    0
+piece_table_value_opening rook
+   35   58   73   63   69   71  102  132
+   15    7   53   77   66   82   99  120
+  -34   -9   -8   16   87  104  130   75
+  -51  -17   -6   31   54   78  108   64
+ -100  -72  -58  -30   -4  -25   26  -28
+ -104  -90  -92  -54  -17  -30   11   -3
+ -112  -99  -84  -73  -52  -30    9  -39
+  -99  -86  -90  -74  -58  -65  -16  -72
+piece_table_value_opening knight
+ -274  -73  -40  -16    5  -23  -74 -175
+  -93  -39   21   72   98   91   25  -11
+  -42  -39   99   84  165  165   94   -8
+  -25    1   79   86   78  126   95   57
+  -63   31   53   60   83   78   93    2
+  -67  -26   -4   58   78   42   44   11
+ -138  -77  -24   -7  -11   22  -20  -27
+ -181  -87 -108  -69  -38  -29  -66 -139
+piece_table_value_opening bishop
+  -20  -40   -2  -12  -10  -29   -5  -49
+  -67  -18  -20   12   -3    4  -35  -10
+   -8  -26  -24   -5   65  115   94   32
+  -20    7  -17   30    6   82   24   29
+  -14  -14   11   -2   13  -11   58   24
+  -21    1  -14   -7  -25    5   -2   42
+   17  -19   17  -33   -6  -33   13  -22
+   20   48  -16  -27  -23    1    5  -38
+piece_table_value_opening queen
+  -15   42   49   58   81   78   92   99
+  -68  -82  -30   19   38   41   26   99
+  -45  -48  -33  -13   46   99   95   64
+  -40  -44  -37  -12   17   33   78   36
+  -37  -63  -36  -25   -8    2   48   37
+  -58  -44  -37  -41  -34    0    9   41
+  -41  -28  -33  -25  -21  -10   -4   -9
+  -22  -28  -28  -18   -4  -62  -98  -39
+piece_table_value_opening king
+   43   30   18  -11  -11   13   34   37
+   39   40   25   -1   -3   21   42   45
+   32   29   21   -4   -2   32   29   45
+   20   21   -1  -18  -14   14   -2   12
+   14   18    3  -34  -43  -24  -13  -87
+   47   32   -8  -46  -48  -59  -43  -52
+  127   21    6  -51  -44  -74    6   -3
+    5   -6   -5 -101  -11 -105  -22   -2
+piece_table_value_endgame pawn
+  122  122  122  122  122  122  122  122
+  209  229  228  212  234  240  270  228
+   11    7  -24  -36  -31   17   35   42
+  -16  -35  -68  -96  -96  -87  -36  -38
+  -37  -36  -73  -91  -85  -72  -57  -81
+  -55  -48  -63  -51  -55  -67  -69  -90
+  -51  -33  -54  -23  -25  -33  -42  -88
+    0    0    0    0    0    0    0    0
+piece_table_value_endgame rook
+   57   57   49   36   39   53   64   37
+   35   45   22   18   24   23   34   12
+   82   71   67   49   36   41   40   41
+   62   61   44   28   24   25   32   23
+   32   27   19   -5   -8   11    2  -18
+  -26  -24  -30  -50  -73  -67  -71  -73
+  -36  -39  -51  -65  -82 -108 -123 -101
+  -40  -36  -29  -51  -62  -62  -68  -46
+piece_table_value_endgame knight
+ -171  -28   -4    1   28    3  -47 -156
+  -34    6   41   62   59   24   11  -18
+   -7   60   55   92   68   84   28    9
+    5   20   78  111  101   95   60   14
+  -18   23   78   72   85   78   37  -16
+  -69   -5   34   52   44    9   -1  -35
+  -68  -40  -35  -10  -18  -26  -42  -81
+ -132  -99  -54  -52  -68  -84 -100 -112
+piece_table_value_endgame bishop
+   40   34   45   41   30   19   21    9
+   14   33   25   28   22   39   36   16
+   24   32   22    2   12   11   33   38
+   10    6   -1   21   16    6   19   10
+   10   -5    3    7   14   -2  -19  -39
+    7   -5   -9  -10   -8  -23  -39  -22
+   -7  -35  -44  -30  -40  -28  -48  -78
+  -14  -46  -36  -28  -27  -28  -27  -46
+piece_table_value_endgame queen
+   31   54   56   54   63   73   75   68
+   67   95   99   82   71   67   78   90
+   44   85   76   90   96   77   74   78
+   60   60   71   49   83   74   89  109
+   -9   25   -6    4  -18    9    3   50
+  -28  -63  -43  -68  -47  -77  -76  -63
+  -71  -90 -118 -100 -110 -200 -206  -79
+  -83 -127 -110 -111 -173 -194 -115  -41
+piece_table_value_endgame king
+  -45   13   37   44   31   31   11  -51
+    1   73  100   93   88  114   92   11
+   16   88  119  102  106  113   93   23
+   18   48   74   76   65   64   42    7
+  -12   11   38   37   33   19    0  -31
+  -72  -35   -3   -1   -8  -20  -51  -79
+ -126  -69  -53  -36  -49  -50  -98 -116
+ -176  -97  -77  -65 -117  -85 -132 -201
+
+# positional_eval()
+punishment_for_double_pawn 27
+punishment_for_trippled_pawn 72
+punishment_for_isolated_pawn 16
+
+# passed_pawn_eval(): by relative rank, with no pieces on and with all of them
+passed_pawn_value 0 126 100 109 127 124 0 0
+passed_pawn_value_opening 0 1 -22 -27 11 32 109 0
+
+# passed_pawn_eval()'s endgame modifiers (#90), by relative rank where 8 numbers, scaled to 0 with all pieces on:
+# nothing ahead; per square (max 5) of the enemy king's / our king's distance to the stop square;
+# an own pawn beside or protecting it; our rook behind it (+), theirs (-); unstoppable by the
+# rule of the square (not scaled, the side's best passer only)
+passed_free_path 0 22 3 12 29 78 181 0
+passed_king_enemy 0 -17 -9 17 47 79 83 0
+passed_king_own 0 20 21 34 48 55 64 0
+passed_supported 0 0 31 43 79 199 222 0
+passed_rook_behind 80
+passed_unstoppable 69
+
+# piece_activity_eval(): added for the owner per piece hit
+activity_pawn_attack 73
+activity_pawn_defend 2
+activity_pawn_blocked -24
+activity_pawn_push_attack 15
+activity_pawn_push_defend -20
+activity_bishop_defend 20
+activity_bishop_attack -9
+activity_rook_defend 21
+activity_rook_attack 25
+activity_queen_defend 11
+activity_queen_attack -6
+activity_knight_defend 0
+activity_knight_attack -3
+activity_king_defend 8
+activity_king_attack 41
+
+# piece_activity_eval()'s mobility: by the number of squares the piece attacks that no own piece
+# stands on (0, 1, ...), with all pieces on and with none
+mobility_knight_opening -30 -23 -5 4 6 0 0 -3 -2
+mobility_knight_endgame -72 -47 -11 -7 -5 7 0 1 -17
+mobility_bishop_opening -112 -88 -70 -61 -43 -24 -13 0 7 25 28 52 55 137
+mobility_bishop_endgame -232 -235 -178 -132 -79 -43 -18 0 15 25 31 32 47 14
+mobility_rook_opening -41 -28 -14 -6 -8 0 5 13 18 23 29 34 47 68 86
+mobility_rook_endgame -123 -62 -56 -44 -17 0 20 39 62 80 91 96 100 103 97
+mobility_queen_opening -121 -40 -34 -28 -26 -23 -17 -10 -7 0 5 2 3 9 6 9 6 17 21 39 39 79 110 153 188 208 239 259
+mobility_queen_endgame -167 -150 -145 -128 -125 -82 -59 -44 -10 0 38 68 92 110 139 159 180 191 199 203 214 182 186 164 164 175 207 232
+
+# pawn_shape_eval() (#90), added for the owner, with all pieces on and with none: a backward pawn
+# (own pawns on a neighbouring file, all ahead of it, its stop square attacked by an enemy pawn);
+# two own pawns side by side, by relative rank
+pawn_backward_opening -24
+pawn_backward_endgame -25
+pawn_phalanx_opening 0 -30 10 32 73 97 19 0
+pawn_phalanx_endgame 0 -21 -4 28 122 62 45 0
+
+# placement_eval() (#90), added for the owner, with all pieces on and with none: the bishop pair;
+# a rook on a file without pawns, without own pawns; a rook on the 7th with enemy pawns there or
+# the enemy king on the 8th; a knight or bishop on ranks 4-6, protected by a pawn, that no enemy
+# pawn can attack
+bishop_pair_opening 4
+bishop_pair_endgame 166
+rook_open_file_opening 60
+rook_open_file_endgame 23
+rook_semi_open_file_opening 31
+rook_semi_open_file_endgame 24
+rook_seventh_opening -63
+rook_seventh_endgame 70
+outpost_knight_opening 21
+outpost_knight_endgame 36
+outpost_bishop_opening 27
+outpost_bishop_endgame 9
+
+# threat_eval() (#90), added for the attacker: per enemy piece attacked by a pawn, a knight or
+# bishop, a rook, by its type (pawn rook knight bishop queen); per enemy piece but the king
+# attacked and not defended
+threat_by_pawn -25 17 7 -12 -18
+threat_by_minor -3 76 68 57 62
+threat_by_rook -27 -20 9 15 50
+threat_hanging 25
+
+# tempo_eval(): the side to move's, with all and with no pieces on
+tempo_opening 13
+tempo_endgame 16
+
+# king_safety_eval() (src/king_safety.cpp); by piece: pawn rook knight bishop queen king
+ks_attacker_weight 0 60 69 49 3 0
+ks_min_attackers 2
+ks_hit 51
+ks_weak_ring_square 78
+ks_safe_check 0 525 442 438 514 0
+ks_unsafe_check 133
+ks_no_queen 845
+ks_danger_div 5000
+ks_shelter 58 -68 -1 18 27 25 0 -34
+ks_open_file 46
+ks_storm 17 0 -134 29 55 17 -13 -4
+ks_storm_blocked_div 4
+ks_full_piece_material 12
+
+# fit report (loss = valid loss by the real eval)
+# tools/tune 4698a74: set 10 from set 8, /home/ascanius/Documents/Cpp/other_programms/Chess/data/tune2
+# positions: train 2455995, valid 304770, test 304116
+# K 293.32 (fitted on set 8), lambda 1e-09, gn (Levenberg-Marquardt), 2 steps, best step 2 (valid, model 0.081833), 998 s
+# targets: TD(0.97) lambda-returns of each game's positions (#115), 3 rounds, last move of the targets 0.000038
+# chain: /home/ascanius/Documents/Cpp/other_programms/Chess/data/tune_chain16/chain.tsv, 11803058 train / 1472691 valid bootstrap positions
+# gauge pinned, set 8 rewritten: basic_eval() differs on 1294446 of 3064881 positions (mean |diff| 0.478 cp, max 5, 3 beyond 4); values P R N B Q 130 483 415 455 1449 / 327 1605 989 1050 2719
+# tuned: 993 weights; 54 no train position touches, held
+# loss (sigma(basic_eval/K) - result)^2, real eval:
+#   set   train      valid      test
+#   8     0.113333   0.113429   0.113289
+#   10    0.113249   0.113321   0.113180
+# changed: 851 of 1065 weights; scalars:
+#   piece_value[4]                       1449 ->   1309
+#   piece_value_endgame[4]               2719 ->   2808
+#   piece_value[1]                        483 ->    427
+#   piece_value[3]                        455 ->    409
+#   ks_no_queen                           891 ->    845
+#   piece_value[2]                        415 ->    371
+#   piece_value_endgame[1]               1605 ->   1639
+#   ks_safe_check[2]                      463 ->    442
+#   piece_value_endgame[2]                989 ->   1009
+#   piece_value_endgame[3]               1050 ->   1070
+#   ks_safe_check[4]                      534 ->    514
+#   passed_supported[6]                   203 ->    222
+#   passed_pawn_value_opening[6]          127 ->    109
+#   ks_safe_check[3]                      456 ->    438
+#   mobility_queen_opening[20]             56 ->     39
+#   mobility_queen_opening[22]            126 ->    110
+#   ks_safe_check[1]                      541 ->    525
+#   mobility_queen_opening[21]             94 ->     79
+#   mobility_queen_opening[19]             53 ->     39
+#   mobility_queen_opening[18]             33 ->     21
+#   pawn_phalanx_opening[5]                85 ->     97
+#   ks_storm[4]                            67 ->     55
+#   mobility_bishop_opening[0]           -123 ->   -112
+#   passed_unstoppable                     59 ->     69
+#   mobility_queen_opening[17]             27 ->     17
+#   mobility_queen_opening[23]            163 ->    153
+#   ks_storm[2]                          -124 ->   -134
+#   ks_storm[3]                            39 ->     29
+#   mobility_rook_opening[13]              77 ->     68
+#   mobility_rook_opening[14]              95 ->     86
+#   mobility_queen_endgame[8]             -19 ->    -10
+#   mobility_queen_endgame[10]             29 ->     38
+#   pawn_phalanx_opening[4]                82 ->     73
+#   passed_pawn_value_opening[5]           40 ->     32
+#   mobility_bishop_opening[1]            -96 ->    -88
+#   mobility_bishop_endgame[2]           -186 ->   -178
+#   mobility_queen_endgame[7]             -52 ->    -44
+#   mobility_queen_endgame[20]            206 ->    214
+#   pawn_phalanx_endgame[6]                37 ->     45
+#   ks_unsafe_check                       141 ->    133
+#   ks_storm[5]                            25 ->     17
+#   mobility_bishop_opening[2]            -77 ->    -70
+#   mobility_bishop_opening[11]            59 ->     52
+#   mobility_bishop_opening[12]            62 ->     55
+#   mobility_bishop_endgame[1]           -242 ->   -235
+#   mobility_bishop_endgame[3]           -139 ->   -132
+#   mobility_queen_opening[16]             13 ->      6
+#   mobility_queen_endgame[6]             -66 ->    -59
+#   mobility_queen_endgame[11]             61 ->     68
+#   mobility_queen_endgame[12]             85 ->     92
+#   mobility_queen_endgame[13]            103 ->    110
+#   mobility_queen_endgame[25]            182 ->    175
+#   threat_by_minor[2]                     75 ->     68
+#   ks_shelter[7]                         -41 ->    -34
+#   mobility_bishop_opening[3]            -67 ->    -61
+#   mobility_rook_opening[12]              53 ->     47
+#   mobility_queen_opening[1]             -46 ->    -40
+#   mobility_queen_opening[13]             15 ->      9
+#   mobility_queen_opening[15]             15 ->      9
+#   mobility_queen_opening[24]            194 ->    188
+#   pawn_phalanx_endgame[5]                56 ->     62
+#   rook_seventh_opening                  -57 ->    -63
+#   ks_storm[7]                             2 ->     -4
+#   mobility_bishop_opening[10]            33 ->     28
+#   mobility_rook_opening[0]              -46 ->    -41
+#   mobility_rook_endgame[3]              -49 ->    -44
+#   mobility_queen_opening[0]            -126 ->   -121
+#   mobility_queen_opening[14]             11 ->      6
+#   mobility_queen_opening[25]            213 ->    208
+#   mobility_queen_endgame[14]            134 ->    139
+#   mobility_queen_endgame[18]            194 ->    199
+#   mobility_queen_endgame[19]            198 ->    203
+#   mobility_queen_endgame[24]            169 ->    164
+#   mobility_queen_endgame[26]            212 ->    207
+#   pawn_phalanx_opening[3]                37 ->     32
+#   threat_by_minor[3]                     62 ->     57
+#   ks_shelter[0]                          63 ->     58
+#   ks_shelter[4]                          32 ->     27
+#   ks_shelter[5]                          30 ->     25
+#   ks_storm[0]                            22 ->     17
+#   ks_storm[6]                            -8 ->    -13
+#   passed_pawn_value[1]                  122 ->    126
+#   passed_pawn_value_opening[4]           15 ->     11
+#   mobility_knight_endgame[1]            -51 ->    -47
+#   mobility_bishop_opening[4]            -47 ->    -43
+#   mobility_bishop_endgame[4]            -83 ->    -79
+#   mobility_bishop_endgame[12]            43 ->     47
+#   mobility_rook_opening[9]               27 ->     23
+#   mobility_rook_opening[10]              33 ->     29
+#   mobility_rook_opening[11]              38 ->     34
+#   mobility_rook_endgame[2]              -60 ->    -56
+#   mobility_rook_endgame[4]              -21 ->    -17
+#   mobility_queen_opening[12]              7 ->      3
+#   mobility_queen_endgame[5]             -86 ->    -82
+#   mobility_queen_endgame[15]            155 ->    159
+#   mobility_queen_endgame[16]            176 ->    180
+#   mobility_queen_endgame[17]            187 ->    191
+#   mobility_queen_endgame[21]            178 ->    182
+#   threat_by_minor[1]                     80 ->     76
+#   ks_weak_ring_square                    82 ->     78
+#   passed_pawn_value_opening[1]            4 ->      1
+#   passed_pawn_value_opening[2]          -19 ->    -22
+#   passed_pawn_value_opening[3]          -24 ->    -27
+#   passed_free_path[6]                   178 ->    181
+#   activity_pawn_attack                   76 ->     73
+#   mobility_knight_opening[0]            -27 ->    -30
+#   mobility_knight_opening[1]            -26 ->    -23
+#   mobility_knight_endgame[2]            -14 ->    -11
+#   mobility_bishop_opening[9]             28 ->     25
+#   mobility_bishop_endgame[5]            -46 ->    -43
+#   mobility_rook_opening[8]               21 ->     18
+#   mobility_rook_endgame[1]              -65 ->    -62
+#   mobility_queen_opening[10]              8 ->      5
+#   mobility_queen_opening[11]              5 ->      2
+#   mobility_queen_opening[26]            242 ->    239
+#   mobility_queen_endgame[23]            167 ->    164
+#   mobility_queen_endgame[27]            235 ->    232
+#   pawn_phalanx_opening[6]                16 ->     19
+#   bishop_pair_endgame                   169 ->    166
+#   outpost_knight_opening                 24 ->     21
+#   outpost_bishop_endgame                  6 ->      9
+#   threat_by_minor[4]                     65 ->     62
+#   threat_by_rook[0]                     -30 ->    -27
+#   threat_by_rook[1]                     -17 ->    -20
+#   ks_attacker_weight[2]                  72 ->     69
+#   ks_attacker_weight[3]                  52 ->     49
+#   ks_attacker_weight[4]                   0 ->      3
+#   ks_shelter[3]                          21 ->     18
+#   punishment_for_double_pawn             25 ->     27
+#   passed_free_path[3]                    10 ->     12
+#   passed_king_enemy[4]                   49 ->     47
+#   passed_supported[5]                   197 ->    199
+#   passed_rook_behind                     82 ->     80
+#   activity_pawn_blocked                 -26 ->    -24
+#   activity_bishop_defend                 22 ->     20
+#   activity_rook_defend                   23 ->     21
+#   activity_rook_attack                   27 ->     25
+#   activity_king_attack                   43 ->     41
+#   mobility_knight_endgame[0]            -70 ->    -72
+#   mobility_knight_endgame[3]             -9 ->     -7
+#   mobility_knight_endgame[4]             -7 ->     -5
+#   mobility_bishop_opening[13]           135 ->    137
+#   mobility_bishop_endgame[6]            -20 ->    -18
+#   mobility_bishop_endgame[13]            16 ->     14
+#   mobility_rook_opening[1]              -30 ->    -28
+#   mobility_rook_opening[6]                7 ->      5
+#   mobility_rook_opening[7]               15 ->     13
+#   mobility_rook_endgame[0]             -125 ->   -123
+#   mobility_rook_endgame[6]               18 ->     20
+#   mobility_rook_endgame[10]              93 ->     91
+#   mobility_rook_endgame[11]              98 ->     96
+#   mobility_queen_opening[2]             -36 ->    -34
+#   mobility_queen_opening[3]             -30 ->    -28
+#   mobility_queen_opening[27]            261 ->    259
+#   mobility_queen_endgame[2]            -143 ->   -145
+#   mobility_queen_endgame[22]            184 ->    186
+#   pawn_backward_opening                 -26 ->    -24
+#   pawn_backward_endgame                 -27 ->    -25
+#   bishop_pair_opening                     6 ->      4
+#   rook_open_file_endgame                 25 ->     23
+#   rook_semi_open_file_endgame            26 ->     24
+#   outpost_bishop_opening                 29 ->     27
+#   threat_by_pawn[1]                      19 ->     17
+#   ks_attacker_weight[1]                  62 ->     60
+#   ks_open_file                           48 ->     46
+#   piece_value_endgame[0]                327 ->    326
+#   punishment_for_trippled_pawn           71 ->     72
+#   punishment_for_isolated_pawn           17 ->     16
+#   passed_pawn_value[3]                  110 ->    109
+#   passed_pawn_value[5]                  123 ->    124
+#   passed_free_path[1]                    23 ->     22
+#   passed_free_path[2]                     2 ->      3
+#   passed_free_path[4]                    28 ->     29
+#   passed_free_path[5]                    77 ->     78
+#   passed_king_enemy[5]                   80 ->     79
+#   passed_king_own[3]                     35 ->     34
+#   passed_king_own[4]                     49 ->     48
+#   passed_king_own[6]                     63 ->     64
+#   passed_supported[1]                     1 ->      0
+#   activity_pawn_defend                    3 ->      2
+#   activity_pawn_push_attack              16 ->     15
+#   activity_pawn_push_defend             -21 ->    -20
+#   activity_bishop_attack                -10 ->     -9
+#   activity_queen_defend                  12 ->     11
+#   activity_queen_attack                  -7 ->     -6
+#   activity_king_defend                    9 ->      8
+#   mobility_knight_opening[2]             -6 ->     -5
+#   mobility_knight_opening[4]              7 ->      6
+#   mobility_knight_endgame[7]              2 ->      1
+#   mobility_knight_endgame[8]            -18 ->    -17
+#   mobility_bishop_opening[5]            -25 ->    -24
+#   mobility_bishop_opening[6]            -14 ->    -13
+#   mobility_bishop_opening[8]              8 ->      7
+#   mobility_bishop_endgame[0]           -231 ->   -232
+#   mobility_bishop_endgame[11]            31 ->     32
+#   mobility_rook_opening[2]              -15 ->    -14
+#   mobility_rook_opening[3]               -7 ->     -6
+#   mobility_rook_endgame[8]               63 ->     62
+#   mobility_rook_endgame[9]               81 ->     80
+#   mobility_rook_endgame[12]             101 ->    100
+#   mobility_rook_endgame[14]              98 ->     97
+#   mobility_queen_opening[4]             -27 ->    -26
+#   mobility_queen_opening[5]             -24 ->    -23
+#   mobility_queen_opening[6]             -18 ->    -17
+#   mobility_queen_opening[8]              -6 ->     -7
+#   mobility_queen_endgame[3]            -127 ->   -128
+#   mobility_queen_endgame[4]            -124 ->   -125
+#   pawn_phalanx_opening[2]                11 ->     10
+#   pawn_phalanx_endgame[2]                -5 ->     -4
+#   pawn_phalanx_endgame[4]               121 ->    122
+#   rook_open_file_opening                 61 ->     60
+#   rook_semi_open_file_opening            30 ->     31
+#   rook_seventh_endgame                   71 ->     70
+#   threat_by_pawn[0]                     -26 ->    -25
+#   threat_by_pawn[2]                       8 ->      7
+#   threat_by_pawn[4]                     -17 ->    -18
+#   threat_by_rook[2]                      10 ->      9
+#   threat_by_rook[3]                      16 ->     15
+#   threat_by_rook[4]                      51 ->     50
+#   threat_hanging                         26 ->     25
+#   tempo_endgame                          17 ->     16
+#   ks_hit                                 52 ->     51
+#   ks_shelter[6]                           1 ->      0
