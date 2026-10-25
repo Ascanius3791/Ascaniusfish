@@ -39,7 +39,7 @@ SYZYGY_RANDOM ?=
 TOOL_TARGETS := tools/perft tools/bench tools/speed_compare tools/match tools/make_openings tools/make_ccrl_openings tools/make_endgames tools/gui_match tools/tt_stats tools/syzygy_reference tools/tb_suite tools/tb_trade_suite tools/nne_data tools/tune_data tools/tune tools/wdl_fit tools/tempo_swing tools/gaviota_reference tools/mate_suite tools/ptt_seed tools/watch_tt tools/walkback
 PROFILE_CXXFLAGS ?= -O2 -mpopcnt -g -pg -Wall -Wno-unknown-pragmas -Wno-parentheses -Wno-unused-variable
 
-.PHONY: all run play asm tests debug profile-startpos perft bench speed-compare match gui-match gui tt-stats tempo-swing syzygy-test gaviota-test nne-test nne-retrain tb-suite tb-trade-suite mate-suite ptt-seed walkback gui-fuzz clean rebuild
+.PHONY: all run play asm tests debug profile-startpos perft bench speed-compare match gui-match gui tt-stats tempo-swing syzygy-test gaviota-test nne-test nne-named-test nne-retrain tb-suite tb-trade-suite mate-suite ptt-seed walkback gui-fuzz clean rebuild
 
 all: $(TARGET) $(UCI_TARGET)
 
@@ -288,6 +288,14 @@ diagnostics/nne_inference_test: diagnostics/nne_inference_test.cpp $(HEADERS) $(
 nne-test: diagnostics/nne_inference_test
 	./diagnostics/nne_inference_test
 
+# #114's net shapes: the named features against basic_eval()'s definitions,
+# and random nets of 3072 inputs / a middle layer against a float pass
+diagnostics/nne_named_test: diagnostics/nne_named_test.cpp $(HEADERS) $(SOURCES)
+	$(CXX) $(CXXFLAGS) -o $@ diagnostics/nne_named_test.cpp
+
+nne-named-test: diagnostics/nne_named_test
+	./diagnostics/nne_named_test
+
 # After a change to eval(): relabel the dataset's positions, retrain the net
 # and run nne-test's check on it (#56, docs/NNE_RELABEL.md). FROM=run:<id>
 # takes an nne-relabel workflow run's labels (#117), FROM=<branch> a cloud
@@ -349,4 +357,4 @@ rebuild: clean all
 
 clean:
 	rm -rf $(GTB_DIR)/obj $(GTB_LIB)
-	rm -f $(TARGET) $(UCI_TARGET) $(UCI_NARROW_TARGET) a.out ascaniusfish.s $(TEST_TARGETS) $(TOOL_TARGETS) diagnostics/syzygy_test diagnostics/gaviota_test diagnostics/nne_inference_test diagnostics/gui_fuzz diagnostics/gui_fuzz_timing tools/nne_train $(GUI_TARGET) benchmarks/profile_startpos benchmarks/gmon.out benchmarks/profile_startpos.gprof
+	rm -f $(TARGET) $(UCI_TARGET) $(UCI_NARROW_TARGET) a.out ascaniusfish.s $(TEST_TARGETS) $(TOOL_TARGETS) diagnostics/syzygy_test diagnostics/gaviota_test diagnostics/nne_inference_test diagnostics/nne_named_test diagnostics/gui_fuzz diagnostics/gui_fuzz_timing tools/nne_train $(GUI_TARGET) benchmarks/profile_startpos benchmarks/gmon.out benchmarks/profile_startpos.gprof

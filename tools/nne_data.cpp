@@ -8,6 +8,14 @@
 //   ./tools/nne_data count <dump.pgn.zst>...
 //   ./tools/nne_data relabel <data.tsv[.zst]>... [out=data/nne-relabel] [jobs=6]
 //                    [depth=6] [syzygy=~/syzygy-nr] [minutes=M] [slice=k/n]
+//   ./tools/nne_data refeature <dataset dir> out=<dir> [features=named]
+//
+// features=named (any command that writes features, #114): the inputs of a
+// net on named features, nne::active_features() with every word, instead of
+// the 780 piece inputs.
+//
+// refeature: the dataset's {train,valid,test}.tsv copied to out/ with only the
+// features column computed again from the FEN, so the labels stay as they are.
 //
 // run: `jobs` forked workers each read every dump and take every jobs-th game
 // (games are numbered from 0 across all dumps, in order). A game is kept when
@@ -284,11 +292,15 @@ bool quiet(BB& pos, Labeller& lab, int& stat, int& qs)
     return qs==stat;
 }
 
+// The input words feature_list() writes: the piece inputs, or with
+// features=named all of them (#114).
+int feature_words = nne::PIECE_WORDS;
+
 // nne::active_features() of a position, comma separated.
 std::string feature_list(const BB& pos)
 {
-    int feats[nne::MAX_ACTIVE];
-    int n = nne::active_features(pos, feats);
+    int feats[nne::N_INPUTS];
+    int n = nne::active_features(pos, feats, feature_words);
     std::string f;
     for(int i=0;i<n;i++)
     {
@@ -844,12 +856,47 @@ int run(const Options& opt)
     return merge(opt, positions);
 }
 
+// refeature: every line of in/{train,valid,test}.tsv with its features
+// column replaced by feature_list() of its FEN.
+int refeature(const Options& opt)
+{
+    if(!opt.out_given || opt.dumps.size()!=1 || opt.out==opt.dumps[0])
+    {
+        std::fprintf(stderr, "refeature needs one dataset directory and a different out=\n");
+        return 2;
+    }
+    mkdir(opt.out.c_str(), 0755);
+    for(const char* split : {"train", "valid", "test"})
+    {
+        const std::string from = opt.dumps[0] + "/" + split + ".tsv", to = opt.out + "/" + split + ".tsv";
+        std::ifstream in(from);
+        std::FILE* out = std::fopen(to.c_str(), "w");
+        if(!in || !out) { std::fprintf(stderr, "cannot read %s or write %s\n", from.c_str(), to.c_str()); return 1; }
+        std::string line;
+        long long n = 0;
+        while(std::getline(in, line))
+        {
+            if(!line.empty() && line[0]=='#') { std::fprintf(out, "%s\n", line.c_str()); continue; }
+            std::vector<std::string> f = split_tabs(line);
+            BB pos;
+            if(f.size()!=8 || !uci_parse_fen(f[3], pos)) { std::fprintf(stderr, "%s: bad line: %s\n", from.c_str(), line.c_str()); return 1; }
+            f[7] = feature_list(pos);
+            for(int i=0;i<8;i++) std::fprintf(out, i ? "\t%s" : "%s", f[i].c_str());
+            std::fputc('\n', out);
+            n++;
+        }
+        if(std::fclose(out)!=0) { std::fprintf(stderr, "cannot write %s\n", to.c_str()); return 1; }
+        std::fprintf(stderr, "%s: %lld positions\n", to.c_str(), n);
+    }
+    return 0;
+}
+
 int main(int argc, char** argv)
 {
     Options opt;
     if(argc<2)
     {
-        std::fprintf(stderr, "usage: %s run|merge|count|relabel <dump.pgn.zst or data.tsv>... [out=] [jobs=] [depth=] [seed=] [games=] [syzygy=] [minutes=] [slice=k/n]\n", argv[0]);
+        std::fprintf(stderr, "usage: %s run|merge|count|relabel|refeature <dump.pgn.zst, data.tsv or dataset dir>... [out=] [jobs=] [depth=] [seed=] [games=] [syzygy=] [minutes=] [slice=k/n] [features=named]\n", argv[0]);
         return 2;
     }
     opt.command = argv[1];
@@ -866,6 +913,11 @@ int main(int argc, char** argv)
         else if(k=="games") opt.games = std::atoll(v.c_str());
         else if(k=="syzygy") opt.syzygy = v;
         else if(k=="minutes") opt.minutes = std::atof(v.c_str());
+        else if(k=="features")
+        {
+            if(v!="named" && v!="pieces") { std::fprintf(stderr, "features must be named or pieces\n"); return 2; }
+            feature_words = v=="named" ? nne::FEATURE_WORDS : nne::PIECE_WORDS;
+        }
         else if(k=="slice")
         {
             if(std::sscanf(v.c_str(), "%d/%d", &opt.slice_k, &opt.slice_n)!=2 || opt.slice_n<1 || opt.slice_k<1 || opt.slice_k>opt.slice_n)
@@ -889,6 +941,7 @@ int main(int argc, char** argv)
     if(opt.command=="merge") return merge(opt);
     if(opt.dumps.empty()) { std::fprintf(stderr, "no dump given\n"); return 2; }
     if(opt.command=="relabel") return run(opt);
+    if(opt.command=="refeature") return refeature(opt);
     if(opt.command=="count") return count(opt);
     if(opt.command=="run") return run(opt);
     std::fprintf(stderr, "unknown command %s\n", opt.command.c_str());

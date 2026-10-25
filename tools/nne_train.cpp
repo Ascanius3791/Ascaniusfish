@@ -7,9 +7,12 @@
 //                     [preds=nets/nne_d6_test.tsv] [frac=1] [seed=51]
 //                     [batch=1024] [lr=0.001] [wd=1] [epochs=200] [cpu=0]
 //                     [loss=log] [sfac=1] [init=<net.bin>] [train=all]
+//                     [inputs=pieces|named] [layers=3|4]
 //
 // The net is 780 -> 128 -> 16 -> 1 with a clipped ReLU (clamp to [0, 1]) after
-// both hidden layers. Its output is the correction c in centipawns, in the
+// every hidden layer. #114's shapes: inputs=named reads 3072 inputs (the data
+// written by tools/nne_data features=named), layers=4 adds a middle 128 layer;
+// init= takes the shape from its file. Its output is the correction c in centipawns, in the
 // mover's view: the dataset's scores are white's view and are negated when the
 // FEN has black to move.
 //
@@ -40,8 +43,9 @@
 // given as "-".
 //
 // The weights file, all little-endian:
-//   char[4] "NNE1", uint32 version (1), uint32 layer count (3),
-//   uint32 sizes[4] (780 128 16 1),
+//   char[4] "NNE1", uint32 version, uint32 layer count L,
+//   uint32 sizes[L+1]: version 1 is 780 128 16 1, version 2 (#114) 780 or
+//   3072 inputs, then 128 [128] 16 1,
 //   then per layer: float32 weights[in][out] (each input's weights to every
 //   output, so a sparse first layer adds one contiguous row per active input),
 //   float32 bias[out].
@@ -67,7 +71,11 @@
 #include <type_traits>
 #include <vector>
 
-constexpr int N_INPUTS = 780;
+// The net's shape (#114): 780 piece inputs or 3072 with named features
+// (inputs=named), and the optional middle 128 layer (layers=4). init= takes
+// both from its file.
+int n_inputs = 780;
+bool middle = false;
 constexpr int HIDDEN_1 = 128;
 constexpr int HIDDEN_2 = 16;
 constexpr float EPS_CP = 50.0f;      // the log loss's epsilon
@@ -125,7 +133,7 @@ static bool load(const std::string& path, Data& d, bool keep_positions)
         for(const std::string& f : split(col[7], ','))
         {
             const int i = std::stoi(f);
-            if(i < 0 || i >= N_INPUTS) { std::fprintf(stderr, "%s: input %d out of range\n", path.c_str(), i); return false; }
+            if(i < 0 || i >= n_inputs) { std::fprintf(stderr, "%s: input %d out of range (inputs=%d)\n", path.c_str(), i, n_inputs); return false; }
             d.feat.push_back(uint16_t(i));
         }
         d.off.push_back(uint32_t(d.feat.size()));
@@ -142,16 +150,18 @@ static bool load(const std::string& path, Data& d, bool keep_positions)
 
 struct NetImpl : torch::nn::Module
 {
-    torch::nn::Linear l1{nullptr}, l2{nullptr}, l3{nullptr};
+    torch::nn::Linear l1{nullptr}, lm{nullptr}, l2{nullptr}, l3{nullptr};
     NetImpl()
     {
-        l1 = register_module("l1", torch::nn::Linear(N_INPUTS, HIDDEN_1));
+        l1 = register_module("l1", torch::nn::Linear(n_inputs, HIDDEN_1));
+        if(middle) lm = register_module("lm", torch::nn::Linear(HIDDEN_1, HIDDEN_1));
         l2 = register_module("l2", torch::nn::Linear(HIDDEN_1, HIDDEN_2));
         l3 = register_module("l3", torch::nn::Linear(HIDDEN_2, 1));
     }
     torch::Tensor forward(torch::Tensor x)
     {
         x = torch::clamp(l1(x), 0, 1);
+        if(middle) x = torch::clamp(lm(x), 0, 1);
         x = torch::clamp(l2(x), 0, 1);
         return l3(x).squeeze(1) * OUT_SCALE;
     }
@@ -170,12 +180,12 @@ static void make_batch(const Data& d, const uint32_t* rows, int n, torch::Device
     {
         const uint32_t r = rows[b];
         for(uint32_t k = d.off[r]; k < d.off[r+1]; k++)
-        idx.push_back(int64_t(b) * N_INPUTS + d.feat[k]);
+        idx.push_back(int64_t(b) * n_inputs + d.feat[k]);
         target[b] = d.corr[r];
         stat[b] = d.stat_m[r];
     }
     torch::Tensor ti = torch::from_blob(idx.data(), {int64_t(idx.size())}, torch::kInt64).to(dev);
-    x = torch::zeros({n, N_INPUTS}, torch::TensorOptions().device(dev));
+    x = torch::zeros({n, int64_t(n_inputs)}, torch::TensorOptions().device(dev));
     x.view({-1}).index_fill_(0, ti, 1.0);
     y = torch::from_blob(target.data(), {n}, torch::kFloat32).to(dev);
     st = torch::from_blob(stat.data(), {n}, torch::kFloat32).to(dev);
@@ -271,11 +281,15 @@ static void put_layer(std::FILE* f, const torch::nn::Linear& l, float scale)
 static bool export_weights(const Net& net, std::FILE* f)
 {
     std::fwrite("NNE1", 1, 4, f);
+    put_u32(f, n_inputs == 780 && !middle ? 1 : 2);
+    put_u32(f, middle ? 4 : 3);
+    put_u32(f, uint32_t(n_inputs));
+    put_u32(f, HIDDEN_1);
+    if(middle) put_u32(f, HIDDEN_1);
+    put_u32(f, HIDDEN_2);
     put_u32(f, 1);
-    put_u32(f, 3);
-    for(uint32_t s : {uint32_t(N_INPUTS), uint32_t(HIDDEN_1), uint32_t(HIDDEN_2), 1u})
-    put_u32(f, s);
     put_layer(f, net->l1, 1);
+    if(middle) put_layer(f, net->lm, 1);
     put_layer(f, net->l2, 1);
     put_layer(f, net->l3, OUT_SCALE);
     return std::fclose(f) == 0;
@@ -296,21 +310,39 @@ static bool get_layer(std::FILE* f, torch::nn::Linear& l, float scale)
     return true;
 }
 
-// A net written by export_weights, for init=.
-static bool import_weights(Net& net, const std::string& path)
+// The header of a net written by export_weights; sets n_inputs and middle
+// from it. Leaves `f` at the first layer.
+static bool read_shape(std::FILE* f)
+{
+    char magic[4];
+    uint32_t version, layers, sizes[5];
+    bool ok = std::fread(magic, 1, 4, f) == 4 && !std::memcmp(magic, "NNE1", 4)
+           && get_u32(f, version) && (version == 1 || version == 2)
+           && get_u32(f, layers) && (layers == 3 || layers == 4 && version == 2);
+    for(uint32_t i = 0; ok && i <= layers; i++) ok = get_u32(f, sizes[i]);
+    if(!ok) return false;
+    const bool m = layers == 4;
+    if(sizes[1] != HIDDEN_1 || (m && sizes[2] != HIDDEN_1) || sizes[m ? 3 : 2] != HIDDEN_2 || sizes[layers] != 1
+    || !(sizes[0] == 780 || (version == 2 && sizes[0] == 3072)))
+    return false;
+    n_inputs = int(sizes[0]);
+    middle = m;
+    return true;
+}
+
+// A net written by export_weights, for init=: its shape, before the Net is
+// made (read_shape), then its weights.
+static bool import_weights(Net* net, const std::string& path)
 {
     std::FILE* f = std::fopen(path.c_str(), "rb");
     if(!f) { std::fprintf(stderr, "cannot read %s\n", path.c_str()); return false; }
-    char magic[4];
-    uint32_t version, layers, sizes[4];
-    bool ok = std::fread(magic, 1, 4, f) == 4 && !std::memcmp(magic, "NNE1", 4)
-           && get_u32(f, version) && version == 1 && get_u32(f, layers) && layers == 3;
-    for(int i = 0; ok && i < 4; i++) ok = get_u32(f, sizes[i]);
-    ok = ok && sizes[0] == N_INPUTS && sizes[1] == HIDDEN_1 && sizes[2] == HIDDEN_2 && sizes[3] == 1
-       && get_layer(f, net->l1, 1) && get_layer(f, net->l2, 1) && get_layer(f, net->l3, OUT_SCALE)
-       && std::fgetc(f) == EOF;
+    bool ok = read_shape(f);
+    if(ok && net)
+    ok = get_layer(f, (*net)->l1, 1) && (!middle || get_layer(f, (*net)->lm, 1))
+      && get_layer(f, (*net)->l2, 1) && get_layer(f, (*net)->l3, OUT_SCALE)
+      && std::fgetc(f) == EOF;
     std::fclose(f);
-    if(!ok) std::fprintf(stderr, "%s is not a 780-128-16-1 NNE1 net\n", path.c_str());
+    if(!ok) std::fprintf(stderr, "%s is not an NNE1 net of 780 or 3072 inputs, 128 [128] 16 1\n", path.c_str());
     return ok;
 }
 
@@ -351,10 +383,13 @@ int main(int argc, char** argv)
         else if(k == "sfac") sfac = std::stod(v);
         else if(k == "init") init = v;
         else if(k == "train" && (v == "all" || v == "last")) last_only = v == "last";
+        else if(k == "inputs" && (v == "pieces" || v == "named")) n_inputs = v == "named" ? 3072 : 780;
+        else if(k == "layers" && (v == "3" || v == "4")) middle = v == "4";
         else { std::fprintf(stderr, "unknown argument %s\n", a.c_str()); return 1; }
     }
     lf.s = sfac * WDL_S;
     if(last_only && init.empty()) { std::fprintf(stderr, "train=last needs init=\n"); return 1; }
+    if(!init.empty() && !import_weights(nullptr, init)) return 1;  // the shape, before the data is checked against it
 
     torch::manual_seed(seed);
     torch::set_num_threads(2);
@@ -387,12 +422,12 @@ int main(int argc, char** argv)
 
     std::printf("nne_train: %zu of %zu training positions (frac %.2f), valid %zu, test %zu, on %s\n",
                 order.size(), train.size(), frac, valid.size(), test.size(), cuda ? "CUDA" : "CPU");
-    std::printf("  batch %d, lr %g, weight decay %g, seed %d, mean training correction %+.2f cp\n",
-                batch, lr, wd, seed, mean_corr);
+    std::printf("  net %d -> 128%s -> 16 -> 1, batch %d, lr %g, weight decay %g, seed %d, mean training correction %+.2f cp\n",
+                n_inputs, middle ? " -> 128" : "", batch, lr, wd, seed, mean_corr);
     std::fflush(stdout);
 
     Net net;
-    if(!init.empty() && !import_weights(net, init)) return 1;
+    if(!init.empty() && !import_weights(&net, init)) return 1;
     net->to(dev);
     std::vector<torch::Tensor> trained = net->parameters();
     if(last_only)
