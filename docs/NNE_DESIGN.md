@@ -230,7 +230,8 @@ steps; w10 on both sides, 5+0.05, cloud SPRT [0, 10], 5000 pairs each:
 The named net fits the labels 2.6% better, but a leaf with it costs about 1.1–1.8 µs
 against 0.2–0.6 µs, a third of the nodes per second, and the fit does not buy that
 back. The middle layer fits no better and is as slow. Both dropped; the code to
-read them (file version 2) stays.
+read them (file version 2) stays, and the two nets are in 78bd134
+(`nets/nne_deep.bin`, `nets/nne_named.bin`, removed after it).
 
 ## Issues
 
