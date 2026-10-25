@@ -7,6 +7,7 @@
 //   ./tools/tune_data select <ccrl.pgn> [out=data/tune] ...
 //   ./tools/tune_data merge [out=data/tune]
 //   ./tools/tune_data chain [out=data/tune] [jobs=6]
+//   ./tools/tune_data pack <ccrl.pgn> [out=data/tune] [jobs=6] [pack=<out>/games.pack]
 //
 // The archive is bare PGN, 7-Zip-compressed: unpack it first (docs/TUNING_PLAN.md).
 // The label of a position is only the result of its game, r in {1, 0.5, 0}, white's
@@ -38,6 +39,13 @@
 // repeats dropped, no split, no cut: `tools/tune td= chain=` takes a game's positions
 // as the bootstrap points between the positions it fits. jobs must be the run's.
 //
+// pack (#116): the data as one binary file (lib/game_pack.hpp) that tools/tune reads
+// with data=<file>: every selected game that loads, all its moves, and a mark for
+// every position of train/valid/test.tsv (with its line number) and of chain.tsv if
+// there is one. No PGN or FEN in it. Every game is read back through the pack's own
+// decoder and each mark's position checked against its FEN line (every field a FEN
+// sets) before it is kept.
+//
 // Output columns (tab separated, one header line starting with '#'):
 //   game  ply  fen  static  qsearch  result  band  white_elo  black_elo
 // game is the number of the game in the archive (from 0), ply the plies played
@@ -45,6 +53,7 @@
 // centipawns (white's view), band the lower edge of the mean-Elo band.
 #include "../lib/uci.hpp"
 #include "../gui/move_tree.hpp"
+#include "../lib/game_pack.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -60,6 +69,7 @@
 #include <sys/prctl.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <thread>
 #include <unistd.h>
 #include <unordered_set>
 #include <vector>
@@ -82,6 +92,7 @@ struct Options
     int gap = 0;                    // largest Elo gap (0: no limit)
     int per_game = 3;
     bool chain = false;             // run: write out/chain.tsv instead of merging
+    std::string pack;               // pack: the output file (default out/games.pack)
 };
 
 struct Selected
@@ -126,8 +137,9 @@ std::string tag(const std::string& game, const char* name)
     return end==std::string::npos ? "" : game.substr(at, end-at);
 }
 
-// SAN tokens in the movetext: no numbers, results, comments or NAGs.
-int count_plies(const std::string& game)
+// SAN tokens in the movetext: no numbers, results, comments or NAGs. With `sans`
+// also the tokens themselves ("1.e4" as "e4").
+int count_plies(const std::string& game, std::vector<std::string>* sans = nullptr)
 {
     size_t i = game.find("\n\n");
     if(i==std::string::npos)
@@ -145,12 +157,15 @@ int count_plies(const std::string& game)
         }
         if(token[0]=='$' || token=="*" || token=="1-0" || token=="0-1" || token=="1/2-1/2")
         continue;
+        size_t from = 0;
         if(isdigit((unsigned char)token[0]) && token.find('.')!=std::string::npos)
         {
             size_t at = token.find_last_of('.');
             if(at+1>=token.size())
             continue;
+            from = at+1;
         }
+        if(sans) sans->push_back(token.substr(from));
         plies++;
     }
     return plies;
@@ -719,6 +734,367 @@ int chain(const Options& opt)
     return 0;
 }
 
+// ---------------------------------------------------------------- packing
+
+struct Pack_Line
+{
+    long long game;
+    Pack_Mark mark;
+    Packed_Pos expect;      // the position its FEN line gives
+    int fen = -1;           // a chain line: its FEN in the block, parsed by the thread that packs the game
+};
+
+// FEN -> the Packed_Pos of uci_parse_fen()'s BB; false if the FEN is bad.
+bool expected_pos(const std::string& fen, Packed_Pos& out)
+{
+    BB b;
+    return uci_parse_fen(fen, b) && pack_position(b, out);
+}
+
+// The split files' lines as marks, sorted by game and ply.
+bool read_split_marks(const Options& opt, std::vector<Pack_Line>& lines, uint64_t counts[PACK_SETS])
+{
+    for(int set=PACK_TRAIN; set<=PACK_TEST; set++)
+    {
+        const std::string path = opt.out + "/" + PACK_SET_NAMES[set] + ".tsv";
+        std::ifstream in(path);
+        if(!in)
+        {
+            std::fprintf(stderr, "no %s: run merge first\n", path.c_str());
+            return false;
+        }
+        std::string line;
+        uint32_t index = 0;
+        while(std::getline(in, line))
+        {
+            if(line.empty() || line[0]=='#')
+            continue;
+            std::vector<std::string> f = split_tabs(line);
+            Pack_Line L{std::atoll(f[0].c_str()), {set, f.size()>2 ? std::atoi(f[1].c_str()) : -1, index++}, {}};
+            if(f.size()<3 || !expected_pos(f[2], L.expect))
+            {
+                std::fprintf(stderr, "%s: bad line %s\n", path.c_str(), line.c_str());
+                return false;
+            }
+            lines.push_back(L);
+        }
+        counts[set] = index;
+    }
+    std::sort(lines.begin(), lines.end(), [](const Pack_Line& a, const Pack_Line& b)
+    {
+        return a.game!=b.game ? a.game<b.game : a.mark.ply<b.mark.ply;
+    });
+    return true;
+}
+
+// The legal move `san` names in pos (list: its moves), or -1 if none or several do.
+// Check marks and annotations are ignored. Much cheaper than Move_Tree::load_pgn(),
+// which builds the SAN of every legal move; the pack checks the result against the
+// FEN lines anyway.
+int san_move(const BB& pos, const std::string& token, const Move_List& list, int n)
+{
+    std::string s = token;
+    while(!s.empty() && std::strchr("+#!?", s.back())) s.pop_back();
+    const int base = pos.white_move ? 0 : 56, own = pos.white_move ? 0 : 6;
+    uint64_t mine = 0;
+    for(int i=0;i<6;i++) mine |= pos.Board[i+own];
+    int found = -1;
+    auto take = [&](int i) { if(found>=0) return false; found = i; return true; };
+    if(s=="O-O" || s=="0-0" || s=="O-O-O" || s=="0-0-0")
+    {
+        const bool king_side = s.size()==3;
+        for(int i=0;i<n;i++)    // all_moves() castling: the king's first step's square to its last, nothing of ours on it
+        if(!(mine>>list[i].from & 1) && list[i].from==base+(king_side ? 5 : 3) && list[i].to==base+(king_side ? 6 : 2) && !take(i))
+        return -1;
+        return found;
+    }
+    const char* PIECES = "PRNBQK";      // the Board order, as piece_on() % 6
+    int piece = 0, promotion = -1;
+    size_t at = 0;
+    if(!s.empty() && std::strchr("RNBQK", s[0])) piece = std::strchr(PIECES, s[at++])-PIECES;
+    if(s.size()>=2 && std::strchr("RNBQ", s.back()))
+    {
+        promotion = std::strchr(PIECES, s.back())-PIECES;
+        s.pop_back();
+        if(s.back()=='=') s.pop_back();
+    }
+    if(s.size()<at+2) return -1;
+    const char f = s[s.size()-2], r = s[s.size()-1];
+    if(f<'a' || f>'h' || r<'1' || r>'8') return -1;
+    const int to = (f-'a') + 8*(r-'1');
+    int from_file = -1, from_rank = -1;
+    for(size_t k=at; k+2<s.size(); k++)
+    {
+        if(s[k]>='a' && s[k]<='h') from_file = s[k]-'a';
+        else if(s[k]>='1' && s[k]<='8') from_rank = s[k]-'1';
+        else if(s[k]!='x') return -1;
+    }
+    for(int i=0;i<n;i++)
+    {
+        const Move& m = list[i];
+        if(m.to!=to || !(pos.Board[piece+own]>>m.from & 1)) continue;
+        if((from_file>=0 && m.from%8!=from_file) || (from_rank>=0 && m.from/8!=from_rank)) continue;
+        const bool promotes = piece==0 && (to<8 || to>=56);
+        if(promotes ? m.promotion_piece_type!=promotion : promotion>=0) continue;
+        if(!take(i)) return -1;
+    }
+    return found;
+}
+
+// One game's record into `record` ("" if its PGN does not load), its marks [m0, m1)
+// by ply. False on a game the pack cannot hold or that does not decode to its lines.
+bool pack_game(const std::string& text, const Selected& sel, const Pack_Line* m0, const Pack_Line* m1,
+               std::string& record, std::string& error)
+{
+    record.clear();
+    const std::string name = "game " + std::to_string(sel.game);
+    std::vector<std::string> sans;
+    count_plies(text, &sans);
+    std::vector<uint8_t> ranks;
+    BB pos, next;
+    uci_parse_fen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", pos);
+    for(const std::string& san : sans)
+    {
+        Move_List list;
+        const int n = generate_legal_moves(&pos, list, GEN_ALL);
+        const int i = san_move(pos, san, list, n);
+        if(i<0)
+        return true;            // does not load
+        int rank = 0;
+        for(int k=0;k<n;k++) rank += move_key(list[k])<move_key(list[i]);
+        ranks.push_back((uint8_t)rank);
+        make_move(&pos, list[i], &next);
+        pos = next;
+    }
+    if(ranks.empty())
+    return true;
+    if(ranks.size()>65535)
+    {
+        error = name + " is too long";
+        return false;
+    }
+    if(ranks.size()>65535)
+    {
+        error = name + " is too long";
+        return false;
+    }
+    std::vector<Pack_Mark> marks;
+    for(const Pack_Line* m=m0; m<m1; m++)
+    {
+        if(m->mark.ply<0 || m->mark.ply>(int)ranks.size())
+        {
+            error = name + ": a mark at ply " + std::to_string(m->mark.ply) + " of " + std::to_string(ranks.size());
+            return false;
+        }
+        marks.push_back(m->mark);
+    }
+    append_game(record, (uint32_t)sel.game, sel.white, sel.black, sel.result, ranks, marks);
+
+    // read it back as tools/tune will: the marks come in the order of [m0, m1)
+    size_t k = 0;
+    bool same = true;
+    if(!replay(read_game((const uint8_t*)record.data()), (1u<<PACK_SETS)-1, [&](const Pack_Mark&, const BB& pos)
+    {
+        Packed_Pos got;
+        same = same && k<marks.size() && pack_position(pos, got) && got==m0[k].expect;
+        k++;
+    }, error))
+    return false;
+    if(!same || k!=marks.size())
+    {
+        error = name + ": its positions do not decode to their FEN lines";
+        return false;
+    }
+    return true;
+}
+
+int pack(const Options& opt)
+{
+    std::vector<Selected> chosen;
+    if(!read_selected(opt, chosen) || chosen.empty())
+    {
+        std::fprintf(stderr, "no %s: run select first\n", selected_path(opt).c_str());
+        return 1;
+    }
+    auto t0 = std::chrono::steady_clock::now();
+    auto secs = [&] { return std::chrono::duration<double>(std::chrono::steady_clock::now()-t0).count(); };
+    std::vector<Pack_Line> splits;
+    uint64_t want[PACK_SETS] = {0, 0, 0, 0};
+    if(!read_split_marks(opt, splits, want))
+    return 1;
+    std::fprintf(stderr, "split lines: train %llu, valid %llu, test %llu (%.0f s)\n",
+                 (unsigned long long)want[0], (unsigned long long)want[1], (unsigned long long)want[2], secs());
+    const std::string chain_path = opt.out + "/chain.tsv";
+    std::ifstream chain_in(chain_path);
+    std::fprintf(stderr, chain_in ? "chain: %s\n" : "no %s: the pack gets no chain marks\n", chain_path.c_str());
+    const int fd = open(opt.pgn.c_str(), O_RDONLY);
+    if(fd<0)
+    {
+        std::perror(opt.pgn.c_str());
+        return 1;
+    }
+    const std::string path = opt.pack.empty() ? opt.out + "/games.pack" : opt.pack;
+    std::string dir = opt.out;
+    while(dir.size()>1 && dir.back()=='/') dir.pop_back();
+    const std::string tag = "tools/tune_data pack of " + dir.substr(dir.rfind('/')+1) + ": the selected games of "
+                          + opt.pgn.substr(opt.pgn.rfind('/')+1) + ", marks from train/valid/test.tsv"
+                          + (chain_in ? " and chain.tsv" : "");
+    Pack_Writer writer;
+    std::string error;
+    if(!writer.open(path, tag, error))
+    {
+        std::fprintf(stderr, "%s\n", error.c_str());
+        return 1;
+    }
+
+    // blocks of games in archive order: the block's chain lines, then its games in jobs threads
+    const size_t BLOCK = 16384;
+    size_t next_split = 0, unloaded = 0, packed = 0;
+    std::string line;
+    bool pending = false;       // `line` is a chain line of a later block
+    long long last_chain_game = -1;
+    for(size_t k0=0; k0<chosen.size(); k0+=BLOCK)
+    {
+        const size_t k1 = std::min(chosen.size(), k0+BLOCK);
+        std::vector<long long> chain_game;
+        std::vector<std::string> chain_rest;   // "ply\tfen"
+        while(pending || (chain_in && std::getline(chain_in, line)))
+        {
+            pending = false;
+            if(line.empty() || line[0]=='#')
+            continue;
+            const long long g = std::atoll(line.c_str());
+            if(g<last_chain_game)
+            {
+                std::fprintf(stderr, "%s is not in game order at %s\n", chain_path.c_str(), line.c_str());
+                return 1;
+            }
+            if(g>chosen[k1-1].game)
+            {
+                pending = true;
+                break;
+            }
+            last_chain_game = g;
+            chain_game.push_back(g);
+            chain_rest.push_back(line.substr(line.find('\t')+1));
+        }
+        // every game's marks: its split lines, then its chain lines (sorted by ply in the thread)
+        std::vector<std::vector<Pack_Line>> marks(k1-k0);
+        size_t c = 0;
+        for(size_t k=k0; k<k1; k++)
+        {
+            const long long g = chosen[k].game;
+            for(; next_split<splits.size() && splits[next_split].game<=g; next_split++)
+            {
+                if(splits[next_split].game<g)
+                {
+                    std::fprintf(stderr, "game %lld of the split files is not a selected game\n", splits[next_split].game);
+                    return 1;
+                }
+                marks[k-k0].push_back(splits[next_split]);
+            }
+            for(; c<chain_game.size() && chain_game[c]<=g; c++)
+            {
+                if(chain_game[c]<g)
+                {
+                    std::fprintf(stderr, "game %lld of %s is not a selected game\n", chain_game[c], chain_path.c_str());
+                    return 1;
+                }
+                Pack_Line L{g, {PACK_CHAIN, std::atoi(chain_rest[c].c_str()), 0}, {}};
+                L.fen = (int)c;
+                marks[k-k0].push_back(L);
+            }
+        }
+        std::vector<std::string> records(k1-k0), errors(opt.jobs);
+        std::vector<size_t> bad(opt.jobs, 0);
+        std::vector<std::thread> pool;
+        for(int t=0;t<opt.jobs;t++)
+        pool.emplace_back([&, t]
+        {
+            std::string text, err;
+            for(size_t k=k0+t; k<k1; k+=opt.jobs)
+            {
+                std::vector<Pack_Line>& m = marks[k-k0];
+                for(Pack_Line& L : m)
+                if(L.fen>=0)
+                {
+                    const std::string& r = chain_rest[L.fen];
+                    if(!expected_pos(r.substr(r.find('\t')+1), L.expect)) { errors[t] = "bad line in " + chain_path + ": " + r; return; }
+                }
+                std::stable_sort(m.begin(), m.end(), [](const Pack_Line& a, const Pack_Line& b) { return a.mark.ply<b.mark.ply; });
+                const Selected& sel = chosen[k];
+                text.resize(sel.length);
+                if(pread(fd, &text[0], sel.length, sel.offset)!=(ssize_t)sel.length) { errors[t] = "game " + std::to_string(sel.game) + ": short read"; return; }
+                strip_cr(text);
+                if(!pack_game(text, sel, m.data(), m.data()+m.size(), records[k-k0], err)) { errors[t] = err; return; }
+                if(records[k-k0].empty())
+                {
+                    if(!m.empty()) { errors[t] = "game " + std::to_string(sel.game) + " has marks but its PGN does not load"; return; }
+                    bad[t]++;
+                }
+            }
+        });
+        for(auto& th : pool) th.join();
+        for(int t=0;t<opt.jobs;t++)
+        if(!errors[t].empty())
+        {
+            std::fprintf(stderr, "%s\n", errors[t].c_str());
+            return 1;
+        }
+        std::string block;
+        uint64_t counts[PACK_SETS] = {0, 0, 0, 0};
+        size_t games = 0;
+        for(size_t k=k0; k<k1; k++)
+        {
+            if(records[k-k0].empty()) continue;
+            block += records[k-k0];
+            games++;
+            for(const Pack_Line& L : marks[k-k0]) counts[L.mark.set]++;
+        }
+        for(int t=0;t<opt.jobs;t++) unloaded += bad[t];
+        packed += games;
+        want[PACK_CHAIN] += chain_game.size();
+        if(!writer.add(block, games, counts))
+        break;
+        if(k0/BLOCK%8==7) std::fprintf(stderr, "%zu of %zu games, %.0f s\n", k1, chosen.size(), secs());
+    }
+    close(fd);
+    if(pending)
+    {
+        std::fprintf(stderr, "%s has games after the last selected one\n", chain_path.c_str());
+        return 1;
+    }
+    if(next_split!=splits.size())
+    {
+        std::fprintf(stderr, "game %lld of the split files is not a selected game\n", splits[next_split].game);
+        return 1;
+    }
+    if(!writer.close(error))
+    {
+        std::fprintf(stderr, "%s\n", error.c_str());
+        return 1;
+    }
+    Game_Pack check;
+    if(!check.open(path, error))
+    {
+        std::fprintf(stderr, "%s\n", error.c_str());
+        return 1;
+    }
+    for(int s=0;s<PACK_SETS;s++)
+    if(check.marks(s)!=want[s])
+    {
+        std::fprintf(stderr, "%s: %llu %s marks, the files have %llu\n", path.c_str(), (unsigned long long)check.marks(s),
+                     PACK_SET_NAMES[s], (unsigned long long)want[s]);
+        return 1;
+    }
+    struct stat st;
+    stat(path.c_str(), &st);
+    std::printf("%s: %zu games (%zu more do not load), marks train %llu valid %llu test %llu chain %llu, %.1f MB, %.0f s\n",
+                path.c_str(), packed, unloaded, (unsigned long long)want[0], (unsigned long long)want[1],
+                (unsigned long long)want[2], (unsigned long long)want[3], st.st_size/1e6, secs());
+    return 0;
+}
+
 // ---------------------------------------------------------------- main
 
 std::string run_config(const Options& opt)
@@ -787,7 +1163,7 @@ int main(int argc, char** argv)
     Options opt;
     if(argc<2)
     {
-        std::fprintf(stderr, "usage: %s run|select|merge <ccrl.pgn> [out=] [jobs=] [seed=] [games=] [min_elo=] [min_plies=] [gap=] [per_game=] [chain=]\n", argv[0]);
+        std::fprintf(stderr, "usage: %s run|select|merge|chain|pack <ccrl.pgn> [out=] [jobs=] [seed=] [games=] [min_elo=] [min_plies=] [gap=] [per_game=] [chain=] [pack=]\n", argv[0]);
         return 2;
     }
     opt.command = argv[1];
@@ -806,6 +1182,7 @@ int main(int argc, char** argv)
         else if(k=="gap") opt.gap = std::atoi(v.c_str());
         else if(k=="per_game") opt.per_game = std::max(1, std::atoi(v.c_str()));
         else if(k=="chain") opt.chain = std::atoi(v.c_str())!=0;
+        else if(k=="pack") opt.pack = v;
         else { std::fprintf(stderr, "unknown option %s\n", k.c_str()); return 2; }
     }
 
@@ -820,6 +1197,7 @@ int main(int argc, char** argv)
     if(opt.pgn.empty()) { std::fprintf(stderr, "no PGN given\n"); return 2; }
     if(opt.command=="select") return select_games(opt);
     if(opt.command=="run") return run(opt);
+    if(opt.command=="pack") return pack(opt);
     std::fprintf(stderr, "unknown command %s\n", opt.command.c_str());
     return 2;
 }

@@ -7,8 +7,11 @@
 //                [method=adam] [epochs=1500] [lr=2]                      (Adam)
 //                [gauge=pin|pin104|free] [se=1] [compare=<set>] [spectrum=<file>]
 //                [td=0.97] [rounds=5] [td_tol=1e-4] [chain=auto|none|<file>]  (TD targets, gn only)
+//                [keep=auto|0|1]                                         (chain in memory)
 //
-// Reads #86's train/valid/test.tsv (fen and result columns only) and minimises the
+// Reads #86's train/valid/test.tsv (fen and result columns only), or data=<file>, a game
+// pack of the same positions (tools/tune_data pack, lib/game_pack.hpp, #116: the games'
+// moves, replayed here, no FEN parsing; the fit is the same to the bit), and minimises the
 // mean of (sigma(eval/K) - r)^2 over train, eval = basic_eval() (static, net off) in
 // centipawns from white's view, r in {1, 0.5, 0}, plus lambda * sum (w - w_from)^2.
 // K is fitted once, on the `from` set's real basic_eval() (k=0), or given, and then
@@ -69,7 +72,10 @@
 // 16 positions of every game) adds bootstrap points: a game's chain positions sit between
 // its fitted ones by ply and enter the targets with their eval, but are not fitted. The
 // file is streamed every round, so it costs time, not memory. The default since set 10
-// is td=0.97 with chain=auto, <data>/chain.tsv; chain=none fits without one.
+// is td=0.97 with chain=auto, <data>/chain.tsv or a pack's own chain marks; chain=none
+// fits without one. From a pack keep=auto holds the chain positions of the fitted games
+// in memory when they take less than half of MemAvailable (keep=1 always, keep=0 never:
+// streamed, the games replayed every round); with a chain file auto streams it.
 // The weights are rounded, and the report gives train/valid/test loss of both sets by
 // the real basic_eval(). It is printed and written as '#' lines at the end of the new set.
 //
@@ -102,6 +108,7 @@
 #include "../lib/uci.hpp"
 #include "../lib/king_safety.hpp"
 #include "../lib/weight_set.hpp"
+#include "../lib/game_pack.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -114,6 +121,7 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <sys/stat.h>
 #include <thread>
 #include <vector>
 
@@ -146,6 +154,7 @@ struct Options
     int rounds = 5;                     // td<1: at most this many fits, the targets recomputed before each
     double td_tol = 1e-4;               // td<1: stop when the targets move less than this on average
     std::string chain = "auto";         // td<1: bootstrap positions between the fitted ones (tools/tune_data chain=1); auto: <data>/chain.tsv
+    std::string keep = "auto";          // td<1: the chain's features in memory after the first round (0, 1, auto)
 };
 
 // ---- the parameters: every number of a weight set, flat, in weight_fields() order
@@ -312,13 +321,17 @@ struct Split
     std::vector<uint32_t> game; // the game column
     std::vector<int> ply;       // the ply column
     std::vector<uint32_t> order;   // the positions by game, then ply
-    std::string blob;           // every FEN, back to back
-    std::vector<uint32_t> fen_at{0};   // FEN i is blob[fen_at[i], fen_at[i+1])
-    size_t count() const { return fen_at.size()-1; }
-    std::string fen(size_t i) const { return blob.substr(fen_at[i], fen_at[i+1]-fen_at[i]); }
+    std::vector<Packed_Pos> packed;   // every position, until the features are made
+    size_t count() const { return game.size(); }
 };
 
 static const uint32_t NO_POS = UINT32_MAX;
+
+// The data: a directory of tools/tune_data's train/valid/test.tsv, or a game pack
+// (tools/tune_data pack, #116) whose marks are the same lines, in the same order.
+static Game_Pack PACK;
+static bool FROM_PACK = false;
+static const char* const SPLIT_NAMES[3] = {"train", "valid", "test"};
 
 static WEIGHTS W_FROM;
 static int TO_BASE, TE_BASE;            // flat index of the tables' [0][0]
@@ -582,19 +595,181 @@ static double model_loss(const Split& s, const double* th, double K, int jobs, d
     return sum/n;
 }
 
+// The chain positions of td_targets() (#115): bootstrap points between the fitted
+// positions, in game and ply order, from a chain file (tools/tune_data chain=1, columns
+// game ply fen) or a game pack's chain marks. Only the games in `wanted` (those of the
+// fitted splits) are read. Streamed a chunk of whole games at a time, every round; with
+// keep their features stay in memory after the first round instead (#116), so the later
+// rounds only evaluate them (about 250 bytes a position).
+struct Chain_Line { uint32_t game; int ply; double q; };
+static const size_t CHAIN_CHUNK = 1<<18;
+
+class Chain
+{
+    public:
+    std::string file;               // the chain file; "" for the pack's chain marks
+    bool keep = false;
+    std::vector<uint32_t> wanted;   // sorted
+
+    // consume(lines) for chunks of whole games in order, every line's q = sigma(model eval at th / K)
+    template<class F>
+    void chunks(const double* th, double K, int jobs, F&& consume)
+    {
+        std::vector<Chain_Line> lines;
+        if(built)
+        {
+            const size_t n = kept.pos.size();
+            lines.resize(n);
+            std::vector<std::thread> pool;
+            for(int t=0;t<jobs;t++)
+            pool.emplace_back([&, t]
+            {
+                for(size_t i=n*t/jobs;i<n*(t+1)/jobs;i++)
+                lines[i] = {kept.game[i], kept.ply[i], sigmoid(model_eval(kept.pos[i], th, nullptr, 0)/K)};
+            });
+            for(auto& x : pool) x.join();
+            consume((const std::vector<Chain_Line>&)lines);
+            return;
+        }
+        std::vector<std::vector<uint32_t>> words(jobs);
+        std::vector<size_t> used(jobs, BLOCK_WORDS);
+        std::vector<std::vector<std::unique_ptr<uint32_t[]>>> blocks(jobs);
+        size_t base = 0;
+        rewind();
+        while(read(lines, jobs, [&](int t, size_t k, const BB& b)
+        {
+            words[t].clear();
+            Pos p = make_pos(b, 0, words[t]);
+            p.w = words[t].data();
+            lines[k].q = sigmoid(model_eval(p, th, nullptr, 0)/K);
+            if(!keep) return;
+            if(used[t] + words[t].size() > BLOCK_WORDS)
+            {
+                blocks[t].emplace_back(new uint32_t[BLOCK_WORDS]);
+                used[t] = 0;
+            }
+            p.w = blocks[t].back().get() + used[t];
+            std::copy(words[t].begin(), words[t].end(), (uint32_t*)p.w);
+            used[t] += words[t].size();
+            kept.pos[base+k] = p;
+        }, base))
+        {
+            if(keep)
+            for(const Chain_Line& L : lines) { kept.game.push_back(L.game); kept.ply.push_back(L.ply); }
+            base += lines.size();
+            consume((const std::vector<Chain_Line>&)lines);
+        }
+        if(keep)
+        {
+            for(auto& v : blocks) for(auto& x : v) kept.blocks.push_back(std::move(x));
+            built = true;
+        }
+    }
+
+    private:
+    bool built = false;
+    Split kept;                     // with keep: pos, blocks, game and ply of every line
+    std::ifstream in;
+    std::string carry;              // a line of the next chunk
+    long long last_game = -1;
+    size_t next_game = 0;           // in the pack
+
+    bool is_wanted(uint32_t g) const { return std::binary_search(wanted.begin(), wanted.end(), g); }
+
+    void rewind()
+    {
+        carry.clear();
+        last_game = -1;
+        next_game = 0;
+        if(file.empty()) return;
+        in.close();
+        in.clear();
+        in.open(file);
+        if(!in) { std::fprintf(stderr, "no chain file %s\n", file.c_str()); std::exit(1); }
+    }
+
+    // The next chunk: lines gets its game and ply, then each(thread, line, position)
+    // runs for every line from jobs threads. With keep, kept.pos grows to base + lines.
+    template<class F>
+    bool read(std::vector<Chain_Line>& lines, int jobs, F&& each, size_t base)
+    {
+        lines.clear();
+        std::vector<size_t> games, first;   // the pack's games of the chunk, their first lines
+        std::vector<std::string> fens;      // the file's
+        std::vector<std::thread> pool;
+        if(file.empty())
+        {
+            // whole games of the pack, their chain marks
+            for(; next_game<PACK.size() && lines.size()<CHAIN_CHUNK; next_game++)
+            {
+                const Pack_Game g = PACK.game(next_game);
+                if(!is_wanted(g.number)) continue;
+                const size_t before = lines.size();
+                for(int k=0;k<g.n_marks;k++)
+                {
+                    const Pack_Mark m = g.mark(k);
+                    if(m.set==PACK_CHAIN) lines.push_back({g.number, m.ply, 0});
+                }
+                if(lines.size()>before) { games.push_back(next_game); first.push_back(before); }
+            }
+            if(keep) kept.pos.resize(base+lines.size());
+            const size_t n = games.size();
+            for(int t=0;t<jobs;t++)
+            pool.emplace_back([&, t]
+            {
+                std::string error;
+                for(size_t i=n*t/jobs;i<n*(t+1)/jobs;i++)
+                {
+                    size_t k = first[i];
+                    if(!replay(PACK.game(games[i]), 1u<<PACK_CHAIN, [&](const Pack_Mark&, const BB& b) { each(t, k++, b); }, error))
+                    { std::fprintf(stderr, "%s\n", error.c_str()); std::exit(1); }
+                }
+            });
+        }
+        else
+        {
+            std::string line;
+            while(!carry.empty() || std::getline(in, line))
+            {
+                if(!carry.empty()) { line.swap(carry); carry.clear(); }
+                if(line.empty() || line[0]=='#') continue;
+                const size_t a = line.find('\t'), b = line.find('\t', a+1);
+                if(b==std::string::npos) { std::fprintf(stderr, "%s: bad line %s\n", file.c_str(), line.c_str()); std::exit(1); }
+                const long long g = std::atoll(line.c_str());
+                if(g<last_game) { std::fprintf(stderr, "%s is not in game order at %s\n", file.c_str(), line.c_str()); std::exit(1); }
+                if(lines.size()>=CHAIN_CHUNK && g!=last_game) { carry.swap(line); break; }
+                last_game = g;
+                if(!is_wanted((uint32_t)g)) continue;
+                lines.push_back({(uint32_t)g, std::atoi(line.c_str()+a+1), 0});
+                fens.push_back(line.substr(b+1));
+            }
+            if(keep) kept.pos.resize(base+lines.size());
+            const size_t n = lines.size();
+            for(int t=0;t<jobs;t++)
+            pool.emplace_back([&, t]
+            {
+                for(size_t i=n*t/jobs;i<n*(t+1)/jobs;i++)
+                {
+                    BB b;
+                    if(!uci_parse_fen(fens[i], b)) { std::fprintf(stderr, "bad FEN %s\n", fens[i].c_str()); std::exit(1); }
+                    each(t, i, b);
+                }
+            });
+        }
+        for(auto& x : pool) x.join();
+        return !lines.empty();
+    }
+};
+
 // TD(td) targets of the splits at th (#115): back through every game, the last point's
 // target is the result, an earlier one's (1 - td) sigma(e_next/K) + td target_next, e_next
 // the model's eval of the game's next point. The points are the game's positions in the
-// split and, with a chain file (tools/tune_data chain=1, in game and ply order), its chain
-// positions: they bootstrap the targets and are not fitted. The file is streamed, a
-// chunk of whole games at a time. Returns the mean |change| of split 0's targets;
-// result_loss[k] gets split k's mean (sigma(e/K) - result)^2, chained[k] the chain
-// positions of its games.
+// split and, with a chain, its chain positions: they bootstrap the targets and are not
+// fitted. Returns the mean |change| of split 0's targets; result_loss[k] gets split k's
+// mean (sigma(e/K) - result)^2, chained[k] the chain positions of its games.
 struct TD_Point { int ply; double q; uint32_t i; };     // i: the split position, NO_POS for a chain one
-struct Chain_Line { uint32_t game; int ply; std::string fen; double q; };
-static const size_t CHAIN_CHUNK = 1<<18;
 
-static double td_targets(const std::vector<Split*>& s, const std::string& chain, const double* th, double K, double td,
+static double td_targets(const std::vector<Split*>& s, Chain* chain, const double* th, double K, double td,
                          int jobs, double* result_loss, size_t* chained)
 {
     const size_t ns = s.size();
@@ -646,51 +821,10 @@ static double td_targets(const std::vector<Split*>& s, const std::string& chain,
     {
         while(cur[k]<s[k]->order.size() && s[k]->game[s[k]->order[cur[k]]]<g) game(k, nullptr, nullptr);
     };
-    std::ifstream in;
-    if(!chain.empty())
+    if(chain)
+    chain->chunks(th, K, jobs, [&](const std::vector<Chain_Line>& buf)
     {
-        in.open(chain);
-        if(!in) { std::fprintf(stderr, "no chain file %s\n", chain.c_str()); std::exit(1); }
-    }
-    std::vector<Chain_Line> buf;
-    Chain_Line carry;
-    bool has_carry = false, more = !chain.empty();
-    std::string line;
-    long long last_game = -1;
-    while(more)
-    {
-        buf.clear();
-        if(has_carry) buf.push_back(std::move(carry));
-        has_carry = false;
-        for(;;)
-        {
-            if(!std::getline(in, line)) { more = false; break; }
-            if(line.empty() || line[0]=='#') continue;
-            const size_t a = line.find('\t'), b = line.find('\t', a+1);
-            if(b==std::string::npos) { std::fprintf(stderr, "%s: bad line %s\n", chain.c_str(), line.c_str()); std::exit(1); }
-            Chain_Line L{(uint32_t)std::atoll(line.c_str()), std::atoi(line.c_str()+a+1), line.substr(b+1), 0};
-            if((long long)L.game<last_game) { std::fprintf(stderr, "%s is not in game order at %s\n", chain.c_str(), line.c_str()); std::exit(1); }
-            last_game = L.game;
-            if(buf.size()>=CHAIN_CHUNK && L.game!=buf.back().game) { carry = std::move(L); has_carry = true; break; }
-            buf.push_back(std::move(L));
-        }
         const size_t n = buf.size();
-        std::vector<std::thread> pool;
-        for(int t=0;t<jobs;t++)
-        pool.emplace_back([&, t]
-        {
-            std::vector<uint32_t> words;
-            for(size_t i=n*t/jobs;i<n*(t+1)/jobs;i++)
-            {
-                BB b;
-                if(!uci_parse_fen(buf[i].fen, b)) { std::fprintf(stderr, "bad FEN %s\n", buf[i].fen.c_str()); std::exit(1); }
-                words.clear();
-                Pos p = make_pos(b, 0, words);
-                p.w = words.data();
-                buf[i].q = sigmoid(model_eval(p, th, nullptr, 0)/K);
-            }
-        });
-        for(auto& x : pool) x.join();
         for(size_t c0=0, c1; c0<n; c0=c1)
         {
             for(c1=c0+1; c1<n && buf[c1].game==buf[c0].game; c1++) {}
@@ -700,7 +834,7 @@ static double td_targets(const std::vector<Split*>& s, const std::string& chain,
                 if(cur[k]<s[k]->order.size() && s[k]->game[s[k]->order[cur[k]]]==buf[c0].game) game(k, &buf[c0], buf.data()+c1);
             }
         }
-    }
+    });
     for(size_t k=0;k<ns;k++) before(k, UINT64_MAX);
     return change[0]/s[0]->pos.size();
 }
@@ -1033,37 +1167,106 @@ static void expand(const double* z, std::vector<double>& step, int nt)
 
 // ---- the data
 
-static bool read_split(const std::string& path, Split& s)
+static long mem_available_kb()
 {
-    std::ifstream in(path);
-    if(!in) return false;
-    std::string line;
-    std::vector<double> results;
-    std::vector<std::pair<long long,int>> game_ply;
-    while(std::getline(in, line))
+    std::ifstream f("/proc/meminfo");
+    std::string key;
+    long value = 0;
+    while(f >> key)
+    if(key=="MemAvailable:" && f >> value) return value;
+    return 0;
+}
+
+static std::string split_source(const std::string& data, int set)
+{
+    return FROM_PACK ? data + " (" + SPLIT_NAMES[set] + ")" : data + "/" + SPLIT_NAMES[set] + ".tsv";
+}
+
+// game, ply and r2 of every position are in; the rest of s from them.
+static void finish_split(Split& s, const std::vector<uint8_t>& r2)
+{
+    const size_t n = s.count();
+    s.pos.assign(n, Pos{});
+    s.base.assign(n, 0);
+    s.target.resize(n);
+    for(size_t i=0;i<n;i++) { s.pos[i].r2 = r2[i]; s.target[i] = (float)(r2[i]*0.5); }
+    s.order.resize(n);
+    for(size_t i=0;i<n;i++) s.order[i] = (uint32_t)i;
+    std::sort(s.order.begin(), s.order.end(), [&](uint32_t x, uint32_t y) { return s.game[x]!=s.game[y] ? s.game[x]<s.game[y] : s.ply[x]<s.ply[y]; });
+}
+
+// Split `set` into s: game, ply, result and the position of every line.
+static bool read_split(const std::string& data, int set, Split& s, int jobs)
+{
+    std::vector<uint8_t> r2;
+    if(FROM_PACK)
     {
-        if(line.empty() || line[0]=='#') continue;
-        // game ply fen static qsearch result ...
-        size_t a = line.find('\t'), b = line.find('\t', a+1), c = line.find('\t', b+1);
-        size_t d = line.find('\t', c+1), e = line.find('\t', d+1), f = line.find('\t', e+1);
-        if(f==std::string::npos) { std::fprintf(stderr, "%s: bad line %s\n", path.c_str(), line.c_str()); return false; }
-        s.blob.append(line, b+1, c-b-1);
-        s.fen_at.push_back((uint32_t)s.blob.size());
-        results.push_back(std::atof(line.substr(e+1, f-e-1).c_str()));
-        game_ply.push_back({std::atoll(line.c_str()), std::atoi(line.c_str()+a+1)});
+        const size_t n = PACK.marks(set), G = PACK.size();
+        s.packed.resize(n);
+        s.game.resize(n);
+        s.ply.resize(n);
+        r2.resize(n);
+        std::vector<uint8_t> seen(n, 0);
+        std::vector<std::string> errors(jobs);
+        std::vector<std::thread> pool;
+        for(int t=0;t<jobs;t++)
+        pool.emplace_back([&, t]
+        {
+            for(size_t g=G*t/jobs; g<G*(t+1)/jobs && errors[t].empty(); g++)
+            {
+                const Pack_Game game = PACK.game(g);
+                replay(game, 1u<<set, [&](const Pack_Mark& m, const BB& pos)
+                {
+                    const size_t i = m.index;
+                    if(i>=n || seen[i] || !pack_position(pos, s.packed[i])) { errors[t] = "bad mark in game " + std::to_string(game.number); return; }
+                    seen[i] = 1;
+                    s.game[i] = game.number;
+                    s.ply[i] = m.ply;
+                    r2[i] = (uint8_t)game.result;
+                }, errors[t]);
+            }
+        });
+        for(auto& x : pool) x.join();
+        for(const std::string& e : errors)
+        if(!e.empty()) { std::fprintf(stderr, "%s: %s\n", data.c_str(), e.c_str()); return false; }
+        if(std::count(seen.begin(), seen.end(), 1)!=(long)n) { std::fprintf(stderr, "%s: the %s marks do not cover their lines\n", data.c_str(), SPLIT_NAMES[set]); return false; }
     }
-    s.blob.shrink_to_fit();
-    s.fen_at.shrink_to_fit();
-    s.pos.assign(s.count(), Pos{});
-    s.base.assign(s.count(), 0);
-    for(size_t i=0;i<results.size();i++) s.pos[i].r2 = (uint8_t)std::lround(2*results[i]);
-    s.target.assign(results.begin(), results.end());
-    s.order.resize(s.count());
-    for(size_t i=0;i<s.count();i++) s.order[i] = (uint32_t)i;
-    std::sort(s.order.begin(), s.order.end(), [&](uint32_t x, uint32_t y) { return game_ply[x]<game_ply[y]; });
-    s.game.resize(s.count());
-    s.ply.resize(s.count());
-    for(size_t i=0;i<s.count();i++) { s.game[i] = (uint32_t)game_ply[i].first; s.ply[i] = game_ply[i].second; }
+    else
+    {
+        const std::string path = split_source(data, set);
+        std::ifstream in(path);
+        if(!in) return false;
+        std::string line, blob;
+        std::vector<uint32_t> fen_at{0};
+        while(std::getline(in, line))
+        {
+            if(line.empty() || line[0]=='#') continue;
+            // game ply fen static qsearch result ...
+            size_t a = line.find('\t'), b = line.find('\t', a+1), c = line.find('\t', b+1);
+            size_t d = line.find('\t', c+1), e = line.find('\t', d+1), f = line.find('\t', e+1);
+            if(f==std::string::npos) { std::fprintf(stderr, "%s: bad line %s\n", path.c_str(), line.c_str()); return false; }
+            blob.append(line, b+1, c-b-1);
+            fen_at.push_back((uint32_t)blob.size());
+            r2.push_back((uint8_t)std::lround(2*std::atof(line.substr(e+1, f-e-1).c_str())));
+            s.game.push_back((uint32_t)std::atoll(line.c_str()));
+            s.ply.push_back(std::atoi(line.c_str()+a+1));
+        }
+        const size_t n = s.count();
+        s.packed.resize(n);
+        std::vector<std::thread> pool;
+        for(int t=0;t<jobs;t++)
+        pool.emplace_back([&, t]
+        {
+            for(size_t i=n*t/jobs;i<n*(t+1)/jobs;i++)
+            {
+                BB b;
+                const std::string fen = blob.substr(fen_at[i], fen_at[i+1]-fen_at[i]);
+                if(!uci_parse_fen(fen, b) || !pack_position(b, s.packed[i])) { std::fprintf(stderr, "bad FEN %s\n", fen.c_str()); std::exit(1); }
+            }
+        });
+        for(auto& x : pool) x.join();
+    }
+    finish_split(s, r2);
     return s.count()>0;
 }
 
@@ -1084,8 +1287,7 @@ static void make_features(Split& s, int jobs, bool features)
         for(size_t i=n*t/jobs;i<n*(t+1)/jobs;i++)
         {
             BB b;
-            const std::string fen = s.fen(i);
-            if(!uci_parse_fen(fen, b)) { std::fprintf(stderr, "bad FEN %s\n", fen.c_str()); std::exit(1); }
+            unpack_position(s.packed[i], b);
             s.base[i] = basic_eval(&b, W_FROM);
             if(W_CHECK)
             {
@@ -1124,12 +1326,11 @@ static void make_features(Split& s, int jobs, bool features)
     if(W_CHECK) check_n += n;
 }
 
-// Mean loss of the real basic_eval() with W over the split in `path`.
-static bool read_split(const std::string& path, Split& s);
-static double real_loss(const std::string& path, const WEIGHTS& W, double K, int jobs)
+// Mean loss of the real basic_eval() with W over split `set`.
+static double real_loss(const std::string& data, int set, const WEIGHTS& W, double K, int jobs)
 {
     Split s;
-    if(!read_split(path, s)) { std::fprintf(stderr, "cannot read %s again\n", path.c_str()); std::exit(1); }
+    if(!read_split(data, set, s, jobs)) { std::fprintf(stderr, "cannot read %s again\n", split_source(data, set).c_str()); std::exit(1); }
     const size_t n = s.count();
     std::vector<double> part(jobs, 0);
     std::vector<std::thread> pool;
@@ -1140,7 +1341,7 @@ static double real_loss(const std::string& path, const WEIGHTS& W, double K, int
         for(size_t i=n*t/jobs;i<n*(t+1)/jobs;i++)
         {
             BB b;
-            uci_parse_fen(s.fen(i), b);
+            unpack_position(s.packed[i], b);
             const double q = sigmoid(basic_eval(&b, W)/K), r = s.pos[i].r2*0.5;
             sum += (q-r)*(q-r);
         }
@@ -1205,6 +1406,7 @@ int main(int argc, char** argv)
         else if(k=="rounds") opt.rounds = std::max(1, std::atoi(v.c_str()));
         else if(k=="td_tol") opt.td_tol = std::atof(v.c_str());
         else if(k=="chain") opt.chain = v;
+        else if(k=="keep" && (v=="auto" || v=="0" || v=="1")) opt.keep = v;
         else if(k=="gauge" && (v=="pin" || v=="pin104" || v=="free")) { opt.pin = v!="free"; opt.pin3 = v=="pin"; }
         else { std::fprintf(stderr, "unknown option %s\n", k.c_str()); return 2; }
     }
@@ -1212,9 +1414,16 @@ int main(int argc, char** argv)
     if(opt.lambda<0) { std::fprintf(stderr, "lambda >= 0\n"); return 2; }
     if(opt.td<0 || opt.td>1) { std::fprintf(stderr, "td is in [0, 1]\n"); return 2; }
     if(opt.td<1 && opt.method!="gn") { std::fprintf(stderr, "td<1 needs method=gn\n"); return 2; }
-    if(opt.chain=="auto") opt.chain = opt.td<1 ? opt.data + "/chain.tsv" : "";
+    std::string error;
+    struct stat data_stat;
+    FROM_PACK = stat(opt.data.c_str(), &data_stat)==0 && S_ISREG(data_stat.st_mode);
+    if(FROM_PACK && !PACK.open(opt.data, error)) { std::fprintf(stderr, "%s\n", error.c_str()); return 1; }
+    // a pack's own chain marks: chain=<the pack>
+    if(opt.chain=="auto") opt.chain = opt.td<1 ? (FROM_PACK ? opt.data : opt.data + "/chain.tsv") : "";
     else if(opt.chain=="none") opt.chain.clear();
+    const bool pack_chain = FROM_PACK && opt.chain==opt.data;
     if(!opt.chain.empty() && opt.td==1) { std::fprintf(stderr, "chain= needs td<1\n"); return 2; }
+    if(pack_chain && !PACK.marks(PACK_CHAIN)) { std::fprintf(stderr, "%s has no chain marks: pack it with a chain.tsv, or pass chain=none\n", opt.data.c_str()); return 2; }
     if(!opt.chain.empty() && !std::ifstream(opt.chain)) { std::fprintf(stderr, "no chain file %s: make one with tools/tune_data run ... chain=1, or pass chain=none\n", opt.chain.c_str()); return 2; }
     const bool td = opt.td<1;
 
@@ -1228,7 +1437,6 @@ int main(int argc, char** argv)
     auto secs = [&]{ return std::chrono::duration<double>(std::chrono::steady_clock::now()-t0).count(); };
 
     Weight_Set_Info from_info;
-    std::string error;
     W_FROM = WEIGHTS_OG;
     if(!load_weight_set(opt.from, W_FROM, from_info, error)) { std::fprintf(stderr, "%s\n", error.c_str()); return 1; }
     if(opt.out.empty()) opt.out = "weights/w" + std::to_string(W_FROM.version+1) + ".txt";
@@ -1252,15 +1460,41 @@ int main(int argc, char** argv)
     TE_BASE = flat(W_FROM, &W_FROM.piece_table_value_endgame[0][0]);
 
     Split split[3];
-    const char* names[3] = {"train", "valid", "test"};
+    const char* const* names = SPLIT_NAMES;
     for(int s=0;s<3;s++)
     {
-        if(!read_split(opt.data + "/" + names[s] + ".tsv", split[s])) { std::fprintf(stderr, "cannot read %s/%s.tsv\n", opt.data.c_str(), names[s]); return 1; }
+        if(!read_split(opt.data, s, split[s], opt.jobs)) { std::fprintf(stderr, "cannot read %s\n", split_source(opt.data, s).c_str()); return 1; }
         make_features(split[s], opt.jobs, s<2);
-        std::string().swap(split[s].blob);   // fen() is gone from here on
+        std::vector<Packed_Pos>().swap(split[s].packed);   // the positions are gone from here on
         std::printf("%s: %zu positions, %.1f words each (%.1f s)\n", names[s], split[s].pos.size(),
                     (double)split[s].n_words/split[s].pos.size(), secs());
         std::fflush(stdout);
+    }
+
+    // the chain of the fitted games: kept in memory if asked, or (auto) if a pack's fits in half the free memory
+    Chain chain;
+    if(td && !opt.chain.empty())
+    {
+        chain.file = pack_chain ? "" : opt.chain;
+        for(int k=0;k<2;k++) chain.wanted.insert(chain.wanted.end(), split[k].game.begin(), split[k].game.end());
+        std::sort(chain.wanted.begin(), chain.wanted.end());
+        chain.wanted.erase(std::unique(chain.wanted.begin(), chain.wanted.end()), chain.wanted.end());
+        chain.keep = opt.keep=="1";
+        if(pack_chain)
+        {
+            size_t n = 0;
+            for(size_t g=0; g<PACK.size(); g++)
+            {
+                const Pack_Game G = PACK.game(g);
+                if(!std::binary_search(chain.wanted.begin(), chain.wanted.end(), G.number)) continue;
+                for(int k=0;k<G.n_marks;k++) n += G.mark(k).set==PACK_CHAIN;
+            }
+            const double mb = n*(sizeof(Pos) + 4.0*split[0].n_words/split[0].pos.size() + sizeof(Chain_Line) + 8)/1e6;
+            if(opt.keep=="auto") chain.keep = mb < 0.5*mem_available_kb()/1e3;
+            std::printf("chain: %zu positions of the fitted games, %s (~%.0f MB)\n", n, chain.keep ? "kept in memory" : "streamed every round", mb);
+        }
+        else
+        std::printf("chain: %s, %s\n", opt.chain.c_str(), chain.keep ? "kept in memory" : "streamed every round");
     }
 
     std::vector<double> th0(n_params);
@@ -1418,7 +1652,7 @@ int main(int argc, char** argv)
                 // the targets of the kept point, and a new fit to them from there
                 th = best;
                 double result_loss[2];
-                const double moved = td_targets({&split[0], &split[1]}, opt.chain, th.data(), K, opt.td, opt.jobs, result_loss, td_chained);
+                const double moved = td_targets({&split[0], &split[1]}, opt.chain.empty() ? nullptr : &chain, th.data(), K, opt.td, opt.jobs, result_loss, td_chained);
                 best_valid = model_loss(split[1], th.data(), K, opt.jobs, nullptr);
                 td_rounds = round;
                 td_moved = moved;
@@ -1620,7 +1854,7 @@ int main(int argc, char** argv)
     for(int s=0;s<3;s++)
     {
         loss[0][s] = base_loss(split[s], K);
-        loss[1][s] = real_loss(opt.data + "/" + names[s] + ".tsv", W_NEW, K, opt.jobs);
+        loss[1][s] = real_loss(opt.data, s, W_NEW, K, opt.jobs);
     }
 
     char line[512];
