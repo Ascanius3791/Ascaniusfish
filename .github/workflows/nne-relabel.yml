@@ -1,0 +1,161 @@
+# OWNERSHIP=Claude
+# The net's dataset labelled again on GitHub-hosted runners (#117,
+# docs/NNE_RELABEL.md): the FEN list (branch nne-fens) is split over parallel
+# jobs (tools/nne_data relabel slice=k/n, 4 workers each), and one last job
+# checks that every position got its line and uploads all part files as one
+# artifact, nne-labels. Merging and training stay local:
+# make nne-retrain FROM=run:<id>. The code that labels is the ref the run starts
+# on. Started by hand only; logs and artifacts of this public repository are
+# public.
+#
+#   gh workflow run nne-relabel [--ref <branch>] [-f jobs=10]
+name: nne-relabel
+
+on:
+  workflow_dispatch:
+    inputs:
+      jobs:
+        description: 'Parallel jobs (a free account runs up to 20 at once)'
+        required: true
+        type: string
+        default: '10'
+
+permissions:
+  contents: read
+
+env:
+  TABLES_KEY: syzygy-345-wdl-v1
+  WORKERS: 4  # per job; fixed, as a run's part files are tied to its worker count
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.m.outputs.matrix }}
+    steps:
+      # The input only reaches the script through the environment, and is checked here.
+      - id: m
+        env:
+          JOBS: ${{ inputs.jobs }}
+        run: |
+          python3 - <<'EOF'
+          import json, os, re, sys
+          jobs = os.environ["JOBS"]
+          if not re.fullmatch(r"[0-9]+", jobs) or not 1 <= int(jobs) <= 40:
+              print("::error::jobs must be 1..40"); sys.exit(1)
+          m = [{"k": k, "n": int(jobs)} for k in range(1, int(jobs) + 1)]
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write("matrix=" + json.dumps(m) + "\n")
+          print(json.dumps(m))
+          EOF
+
+  # The 3-4-5 WDL tables (what ~/syzygy-nr gives the labels locally; DTZ is not
+  # needed), downloaded from tablebase.lichess.ovh once and then kept in the cache.
+  tables:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - id: cache
+        uses: actions/cache@v4
+        with:
+          path: tables
+          key: ${{ env.TABLES_KEY }}
+      - if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          url=https://tablebase.lichess.ovh/tables/standard/3-4-5-wdl
+          mkdir -p tables
+          curl -fsS "$url/" | grep -o 'href="[^"]*\.rtbw"' | sed 's/href="//; s/"$//' \
+              | xargs -P 8 -I{} curl -fsS -o "tables/{}" "$url/{}"
+      - run: |
+          n=$(ls tables/*.rtbw | wc -l)
+          echo "tables: $n files, $(du -sh tables | cut -f1)"
+          test "$n" -eq 145
+
+  label:
+    needs: [plan, tables]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        slice: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    name: label ${{ matrix.slice.k }}/${{ matrix.slice.n }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          ref: nne-fens
+          path: fens
+          persist-credentials: false
+      - uses: actions/cache/restore@v4
+        with:
+          path: tables
+          key: ${{ env.TABLES_KEY }}
+          fail-on-cache-miss: true
+
+      - name: Build
+        run: make tools/nne_data
+
+      - name: Label
+        env:
+          K: ${{ matrix.slice.k }}
+          N: ${{ matrix.slice.n }}
+        run: |
+          echo "cpu: $(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | sed 's/^ *//'), $(nproc) threads"
+          ./tools/nne_data relabel fens/nne_fens.tsv.zst out=out jobs="$WORKERS" slice="$K/$N" syzygy=tables
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nne-parts-${{ matrix.slice.k }}
+          path: out/parts/
+          retention-days: 3
+
+  collect:
+    needs: label
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: nne-fens
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: nne-parts-*
+          path: labels/parts
+          merge-multiple: true
+
+      # Every worker's part file, and one line per position of the FEN list.
+      - name: Check
+        env:
+          N: ${{ inputs.jobs }}
+          COMMIT: ${{ github.sha }}
+          REF: ${{ github.ref_name }}
+        run: |
+          workers=$(( N * WORKERS ))
+          grep -q "^relabel jobs=$workers " labels/parts/config.txt
+          for w in $(seq 0 $(( workers - 1 ))); do
+            test -f labels/parts/part-$w.tsv || { echo "::error::part-$w.tsv is missing"; exit 1; }
+          done
+          have=$(cat labels/parts/part-*.tsv | wc -l)
+          want=$(zstdcat nne_fens.tsv.zst | tail -n +2 | wc -l)
+          if [ "$have" -ne "$want" ]; then
+            echo "::error::$have of $want positions labelled"; exit 1
+          fi
+          echo "$COMMIT" > labels/commit.txt
+          {
+            echo "### NNE labels: $have positions, labelled by \`$REF\` at $COMMIT, $workers workers"
+            echo '```'
+            cut -f2 labels/parts/part-*.tsv | sort | uniq -c | sort -rn
+            echo '```'
+            echo "Locally: \`make nne-retrain FROM=run:$GITHUB_RUN_ID\`"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nne-labels
+          path: labels/
+          retention-days: 30

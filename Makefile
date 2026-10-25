@@ -289,8 +289,9 @@ nne-test: diagnostics/nne_inference_test
 	./diagnostics/nne_inference_test
 
 # After a change to eval(): relabel the dataset's positions, retrain the net
-# and run nne-test's check on it (#56, docs/NNE_RELABEL.md). FROM=<branch>
-# takes a cloud session's labels; MINUTES=M stops the relabel after M minutes
+# and run nne-test's check on it (#56, docs/NNE_RELABEL.md). FROM=run:<id>
+# takes an nne-relabel workflow run's labels (#117), FROM=<branch> a cloud
+# session's; MINUTES=M stops the relabel after M minutes
 # (run again to carry on).
 nne-retrain:
 	tools/nne_retrain.sh $(if $(FROM),from=$(FROM)) $(if $(MINUTES),minutes=$(MINUTES)) $(if $(JOBS),jobs=$(JOBS))

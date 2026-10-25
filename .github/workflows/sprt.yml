@@ -7,6 +7,7 @@
 #
 #   gh workflow run sprt -f b=weights/w11.txt [-f a=weights/w10.txt] [-f net=on]
 #   gh workflow run sprt -f b=run:<tune run id>:<set k>
+#   gh workflow run sprt -f b=weights/w10.txt -f net=main:nets/nne_d6.bin -f net_b=<branch>:nets/nne_d6.bin
 name: sprt
 
 on:
@@ -22,11 +23,15 @@ on:
         required: true
         type: string
       net:
-        description: 'The net (UseNNE) for both sides'
+        description: 'The net: off, on (nets/nne_d6.bin), a path in the repository, or <branch, tag or commit>:<path>'
         required: true
-        type: choice
-        options: ['off', 'on']
+        type: string
         default: 'off'
+      net_b:
+        description: 'B''s net when it differs from A''s, same forms as net (empty: the same)'
+        required: false
+        type: string
+        default: ''
       tc:
         description: 'Time control, seconds+increment'
         required: true
@@ -64,6 +69,8 @@ jobs:
         env:
           A: ${{ inputs.a }}
           B: ${{ inputs.b }}
+          NET: ${{ inputs.net }}
+          NET_B: ${{ inputs.net_b }}
           TC: ${{ inputs.tc }}
           PAIRS: ${{ inputs.pairs }}
           JOBS: ${{ inputs.jobs }}
@@ -78,6 +85,12 @@ jobs:
               if not (w == "default" or re.fullmatch(r"run:[0-9]+:[0-9]+", w)
                       or (re.fullmatch(r"[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*", w) and ".." not in w)):
                   fail(f"{side} must be a path in the repository, default, or run:<id>:<k>")
+          path = r"[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*"
+          for name in ("NET", "NET_B"):
+              n = os.environ[name]
+              if not ((name == "NET_B" and n == "") or n in ("off", "on")
+                      or (re.fullmatch(f"({path}:)?{path}", n) and ".." not in n and not n.startswith("-"))):
+                  fail(f"{name.lower()} must be off, on, a path in the repository or <ref>:<path>")
           if not re.fullmatch(r"[0-9]+(\.[0-9]+)?\+[0-9]+(\.[0-9]+)?", os.environ["TC"]):
               fail("tc must be seconds+increment, e.g. 5+0.05")
           if not re.fullmatch(r"-?[0-9]+(\.[0-9]+)?,-?[0-9]+(\.[0-9]+)?", os.environ["BOUNDS"]):
@@ -113,10 +126,11 @@ jobs:
           A: ${{ inputs.a }}
           B: ${{ inputs.b }}
           NET: ${{ inputs.net }}
+          NET_B: ${{ inputs.net_b }}
         run: |
           # one option list per side: the set (none for "default") and the net
           options() {
-            local spec=$1 dir=w/$2 file=
+            local spec=$1 dir=w/$2 net=$3 file= netfile=
             case "$spec" in
               default) ;;
               run:*)
@@ -125,16 +139,29 @@ jobs:
                 file=$dir/set-$k.txt ;;
               *) file=$spec ;;
             esac
-            local o="UseNNE=$([ "$NET" = on ] && echo true || echo false)"
-            [ "$NET" = on ] && o="$o,NNEFile=$GITHUB_WORKSPACE/nets/nne_d6.bin"
+            case "$net" in
+              off) ;;
+              on) netfile=nets/nne_d6.bin ;;
+              *:*)  # another ref's file, e.g. a retrained net on a pushed branch
+                mkdir -p "$dir"
+                git fetch -q --depth=1 origin "${net%%:*}" >&2
+                git show "FETCH_HEAD:${net#*:}" > "$dir/net.bin"
+                netfile=$dir/net.bin ;;
+              *) netfile=$net ;;
+            esac
+            local o="UseNNE=$([ -n "$netfile" ] && echo true || echo false)"
+            if [ -n "$netfile" ]; then
+              test -s "$netfile" || { echo "::error::$net: no net file $netfile" >&2; exit 1; }
+              o="$o,NNEFile=$GITHUB_WORKSPACE/$netfile"
+            fi
             if [ -n "$file" ]; then
               test -f "$file" || { echo "::error::$spec: no weight set $file" >&2; exit 1; }
               o="$o,WeightsFile=$GITHUB_WORKSPACE/$file"
             fi
             echo "$o"
           }
-          OA=$(options "$A" A)
-          OB=$(options "$B" B)
+          OA=$(options "$A" A "$NET")
+          OB=$(options "$B" B "${NET_B:-$NET}")
           echo "A: $OA"; echo "B: $OB"
           { echo "OPTIONS_A=$OA"; echo "OPTIONS_B=$OB"; } >> "$GITHUB_ENV"
 
@@ -192,6 +219,7 @@ jobs:
           A: ${{ inputs.a }}
           B: ${{ inputs.b }}
           NET: ${{ inputs.net }}
+          NET_B: ${{ inputs.net_b }}
           TC: ${{ inputs.tc }}
           BOUNDS: ${{ inputs.bounds }}
         run: |
@@ -200,7 +228,7 @@ jobs:
           ./tools/match combine sprt="$BOUNDS" in/stats-*.txt | tee out/result.txt
           test "${PIPESTATUS[0]}" -eq 0
           {
-            echo "### SPRT [$BOUNDS]: B \`$B\` vs A \`$A\`, net $NET, tc $TC"
+            echo "### SPRT [$BOUNDS]: B \`$B\` vs A \`$A\`, net $NET${NET_B:+ (B: $NET_B)}, tc $TC"
             echo '```'
             cat out/result.txt
             echo '```'

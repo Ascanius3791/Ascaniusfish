@@ -5,14 +5,15 @@
 # NNE dataset's positions with the current engine, retrain the net on them and
 # check the engine's inference against the trainer (#56, docs/NNE_RELABEL.md).
 #
-#   tools/nne_retrain.sh [from=<branch>] [jobs=6] [minutes=M] [syzygy=~/syzygy-nr]
+#   tools/nne_retrain.sh [from=run:<id>|<branch>] [jobs=6] [minutes=M] [syzygy=~/syzygy-nr]
 #                        [fens=data/nne_fens.tsv.zst] [out=data/nne-relabel]
 #                        [net=nets/nne_d6.bin]
 #
 # 1. relabel: tools/nne_data relabel of the FEN list into out/. With minutes=
 #    it stops after M minutes (exit 3); the same command carries on. With
-#    from=, the labels are a cloud session's (tools/nne_cloud_relabel.sh): its
-#    pushed branch's nne-labels/parts are fetched into out/parts, merged here
+#    from=run:<id>, the labels are an nne-relabel workflow run's (#117, its
+#    artifact nne-labels); with from=<branch>, a cloud session's
+#    (tools/nne_cloud_relabel.sh). Either way they go into out/parts, merged here
 #    (game, ply, FEN and features come from the FEN list) and spot-checked
 #    against ~1000 positions labelled locally, all columns equal.
 # 2. tools/nne_train data=out/ with the log loss, then its last layer refitted
@@ -49,11 +50,25 @@ if [ ! -s "$fens" ]; then
 fi
 
 if [ -n "$from" ]; then
-    git fetch -q "$remote" "$from"
-    commit=$(git show FETCH_HEAD:nne-labels/commit.txt)
-    rm -rf "$out/parts"
+    rm -rf "$out/parts" "$out/commit.txt"
     mkdir -p "$out"
-    git archive FETCH_HEAD nne-labels/parts | tar -x --strip-components=1 -C "$out"
+    case "$from" in
+        run:*)
+            gh run download "${from#run:}" -n nne-labels -D "$out"
+            commit=$(cat "$out/commit.txt")
+            # The workflow uploads only complete labels; the rest labelled here
+            # by all its slices' workers at once would not fit in memory.
+            have=$(cat "$out"/parts/part-*.tsv | wc -l)
+            want=$(zstdcat -f "$fens" | tail -n +2 | wc -l)
+            if [ "$have" -ne "$want" ]; then
+                echo "$from has $have of $want positions labelled" >&2
+                exit 1
+            fi ;;
+        *)
+            git fetch -q "$remote" "$from"
+            commit=$(git show FETCH_HEAD:nne-labels/commit.txt)
+            git archive FETCH_HEAD nne-labels/parts | tar -x --strip-components=1 -C "$out" ;;
+    esac
     echo "labels of $from: $(cat "$out"/parts/part-*.tsv | wc -l) positions, labelled by $commit"
     if git diff --quiet "$commit" -- lib src ascaniusfish.hpp ascaniusfish_2.hpp; then
         echo "the engine code here is the same as $commit's"
@@ -61,7 +76,8 @@ if [ -n "$from" ]; then
         echo "the engine code here differs from $commit's; the spot check decides"
     fi
 fi
-# A run's parts are tied to its worker count (cloud runs use 4).
+# A run's parts are tied to its worker count (cloud sessions use 4; a workflow
+# run's config.txt counts the workers of all its slices).
 if [ -f "$out/parts/config.txt" ]; then
     jobs=$(sed -n 's/^relabel jobs=\([0-9]*\) .*/\1/p' "$out/parts/config.txt")
 fi
