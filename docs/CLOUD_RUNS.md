@@ -54,7 +54,8 @@ A newer data set is a new asset of the same release, e.g. `tune3.pack.zst`
 
 Locally, `data=data/tune2/games.pack` fits from the pack too. With `chain=auto` it uses the
 pack's chain marks. `keep=auto` keeps the chain positions of the fitted games in memory
-(~1 GB for tune2) when that is less than half of MemAvailable, and otherwise replays them
+(~3.5 GB for tune2, so on a runner but not on a small machine) when that is less than
+half of MemAvailable, and otherwise replays them
 every round. Both give the same set.
 
 ## tune: a matrix of fits
@@ -72,7 +73,10 @@ gh workflow run tune -f sets='td=0.97; td=0.9; td=0.97 lambda=0' -f from=weights
 Each job builds `tools/tune`, fits with `jobs=4` and uploads the artifact `tune-<k>`:
 `set-<k>.txt` (the new set, with its fit report as `#` lines at the end), `log-<k>.txt`
 (the whole output) and `command-<k>.txt`. The run's page shows every set's fit report as a
-step summary. A fit is the same as a local one with `jobs=4` and the same data.
+step summary. A fit is the same as a local one with `jobs=4` and the same data (checked
+2026-10-25: `td=1 iters=1` in run 40206225984 gave the local set to the bit). Runners are
+fast: that job took 1m42 with download and build, a `td=0.97 rounds=1 iters=1` job 2m22
+(the chain kept in memory). The default fit takes 29 min locally from the pack.
 
 ```bash
 gh run download <run id> -n tune-2 -D out/tune-2
