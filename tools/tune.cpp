@@ -6,7 +6,7 @@
 //                [method=gn] [iters=20] [mu=1e-3] [tol=1e-7] [check=0]   (Levenberg-Marquardt)
 //                [method=adam] [epochs=1500] [lr=2]                      (Adam)
 //                [gauge=pin|pin104|free] [se=1] [compare=<set>] [spectrum=<file>]
-//                [td=1] [rounds=5] [td_tol=1e-4] [chain=<file>]          (TD targets, gn only)
+//                [td=0.97] [rounds=5] [td_tol=1e-4] [chain=auto|none|<file>]  (TD targets, gn only)
 //
 // Reads #86's train/valid/test.tsv (fen and result columns only) and minimises the
 // mean of (sigma(eval/K) - r)^2 over train, eval = basic_eval() (static, net off) in
@@ -68,7 +68,8 @@
 // that round's targets. td=1 is the plain fit. chain=<file> (tools/tune_data chain=1, e.g.
 // 16 positions of every game) adds bootstrap points: a game's chain positions sit between
 // its fitted ones by ply and enter the targets with their eval, but are not fitted. The
-// file is streamed every round, so it costs time, not memory.
+// file is streamed every round, so it costs time, not memory. The default since set 10
+// is td=0.97 with chain=auto, <data>/chain.tsv; chain=none fits without one.
 // The weights are rounded, and the report gives train/valid/test loss of both sets by
 // the real basic_eval(). It is printed and written as '#' lines at the end of the new set.
 //
@@ -141,10 +142,10 @@ struct Options
     bool pin = true;                    // gauge=pin: table means and mobility constants in the piece values
     bool pin3 = true;                   // gauge=pin (not pin104): and the three degenerate directions (#106)
     std::string spectrum;               // se=1: every eigenvalue of A and its direction, to this file
-    double td = 1;                      // TD(td) targets (#115); 1: the game result
+    double td = 0.97;                   // TD(td) targets (#115); 1: the game result
     int rounds = 5;                     // td<1: at most this many fits, the targets recomputed before each
     double td_tol = 1e-4;               // td<1: stop when the targets move less than this on average
-    std::string chain;                  // td<1: bootstrap positions between the fitted ones (tools/tune_data chain=1)
+    std::string chain = "auto";         // td<1: bootstrap positions between the fitted ones (tools/tune_data chain=1); auto: <data>/chain.tsv
 };
 
 // ---- the parameters: every number of a weight set, flat, in weight_fields() order
@@ -1211,7 +1212,10 @@ int main(int argc, char** argv)
     if(opt.lambda<0) { std::fprintf(stderr, "lambda >= 0\n"); return 2; }
     if(opt.td<0 || opt.td>1) { std::fprintf(stderr, "td is in [0, 1]\n"); return 2; }
     if(opt.td<1 && opt.method!="gn") { std::fprintf(stderr, "td<1 needs method=gn\n"); return 2; }
+    if(opt.chain=="auto") opt.chain = opt.td<1 ? opt.data + "/chain.tsv" : "";
+    else if(opt.chain=="none") opt.chain.clear();
     if(!opt.chain.empty() && opt.td==1) { std::fprintf(stderr, "chain= needs td<1\n"); return 2; }
+    if(!opt.chain.empty() && !std::ifstream(opt.chain)) { std::fprintf(stderr, "no chain file %s: make one with tools/tune_data run ... chain=1, or pass chain=none\n", opt.chain.c_str()); return 2; }
     const bool td = opt.td<1;
 
     Zobrist zobrist_keys;

@@ -54,6 +54,13 @@ A game's chain positions sit between its fitted ones by ply and enter the target
 their eval, but are not fitted. The tuner streams the file every round, so it costs time
 (about 16M positions), not memory.
 
+**The default method since set 10 is `td=0.97` with a 16-position chain.** It gave
++40.1 ± 31.0 Elo against w8 (net off, 348 games, undecided at LLR +1.39, adopted by
+Ascanius) and w10; td 0.9 gave +38.4, td 0.8 +4.7, the short chains nothing
+(`docs/measurements/td_sweep_2026-10-25.md`). `chain=auto` (the default) reads
+`<data>/chain.tsv`, so `data/tune2/chain.tsv` sits next to the splits; `chain=none` fits
+without one, `td=1` is the plain fit to the results.
+
 ## Game source: CCRL 40/15
 
 The whole archive (`CCRL-4040.[2458744].pgn.7z`, 453 MB, 2.7 GB unpacked, downloaded
