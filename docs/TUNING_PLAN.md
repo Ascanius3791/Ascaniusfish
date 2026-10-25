@@ -47,6 +47,13 @@ is the plain fit, λ=0 fits each position to the eval of the next one. The targe
 the weights, so the fit runs in rounds: targets from the kept point, one LM fit to them,
 again (`rounds`, `td_tol`). The report's losses stay against the results.
 
+tune2 has at most 3 positions per game, so a chain is short. `chain=<file>` adds bootstrap
+points: `tools/tune_data run ... per_game=16 chain=1` writes `chain.tsv` (game, ply, FEN of
+up to 16 quiet positions of every selected game, in game and ply order, not merged or cut).
+A game's chain positions sit between its fitted ones by ply and enter the targets through
+their eval, but are not fitted. The tuner streams the file every round, so it costs time
+(about 16M positions), not memory.
+
 ## Game source: CCRL 40/15
 
 The whole archive (`CCRL-4040.[2458744].pgn.7z`, 453 MB, 2.7 GB unpacked, downloaded

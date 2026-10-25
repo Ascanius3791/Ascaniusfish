@@ -6,7 +6,7 @@
 //                [method=gn] [iters=20] [mu=1e-3] [tol=1e-7] [check=0]   (Levenberg-Marquardt)
 //                [method=adam] [epochs=1500] [lr=2]                      (Adam)
 //                [gauge=pin|pin104|free] [se=1] [compare=<set>] [spectrum=<file>]
-//                [td=1] [rounds=5] [td_tol=1e-4]                         (TD targets, gn only)
+//                [td=1] [rounds=5] [td_tol=1e-4] [chain=<file>]          (TD targets, gn only)
 //
 // Reads #86's train/valid/test.tsv (fen and result columns only) and minimises the
 // mean of (sigma(eval/K) - r)^2 over train, eval = basic_eval() (static, net off) in
@@ -65,7 +65,10 @@
 // depend on the weights, so the fit runs in rounds (semi-gradient TD): targets of train and
 // valid from the kept point, one LM fit to them, again, until they move less than td_tol
 // on average or after `rounds` fits. Each round's kept step is the best valid loss against
-// that round's targets. td=1 is the plain fit.
+// that round's targets. td=1 is the plain fit. chain=<file> (tools/tune_data chain=1, e.g.
+// 16 positions of every game) adds bootstrap points: a game's chain positions sit between
+// its fitted ones by ply and enter the targets with their eval, but are not fitted. The
+// file is streamed every round, so it costs time, not memory.
 // The weights are rounded, and the report gives train/valid/test loss of both sets by
 // the real basic_eval(). It is printed and written as '#' lines at the end of the new set.
 //
@@ -141,6 +144,7 @@ struct Options
     double td = 1;                      // TD(td) targets (#115); 1: the game result
     int rounds = 5;                     // td<1: at most this many fits, the targets recomputed before each
     double td_tol = 1e-4;               // td<1: stop when the targets move less than this on average
+    std::string chain;                  // td<1: bootstrap positions between the fitted ones (tools/tune_data chain=1)
 };
 
 // ---- the parameters: every number of a weight set, flat, in weight_fields() order
@@ -304,7 +308,8 @@ struct Split
     size_t n_words = 0;
     std::vector<int> base;      // basic_eval() with the from set
     std::vector<float> target;  // what the fit pulls sigma(e/K) towards: the result, or its lambda-return (td)
-    std::vector<uint32_t> next; // the game's next position in this split (by ply), NO_NEXT for its last
+    std::vector<uint32_t> game; // the game column
+    std::vector<int> ply;       // the ply column
     std::vector<uint32_t> order;   // the positions by game, then ply
     std::string blob;           // every FEN, back to back
     std::vector<uint32_t> fen_at{0};   // FEN i is blob[fen_at[i], fen_at[i+1])
@@ -312,7 +317,7 @@ struct Split
     std::string fen(size_t i) const { return blob.substr(fen_at[i], fen_at[i+1]-fen_at[i]); }
 };
 
-static const uint32_t NO_NEXT = UINT32_MAX;
+static const uint32_t NO_POS = UINT32_MAX;
 
 static WEIGHTS W_FROM;
 static int TO_BASE, TE_BASE;            // flat index of the tables' [0][0]
@@ -576,33 +581,127 @@ static double model_loss(const Split& s, const double* th, double K, int jobs, d
     return sum/n;
 }
 
-// TD(td) targets of s at th (#115): back through every game, the last position's target
-// is the result, an earlier one's (1 - td) sigma(e_next/K) + td target_next, e_next the
-// model's eval of the game's next position in s. Returns the mean |change| of the
-// targets; result_loss gets the model's mean (sigma(e/K) - result)^2.
-static double td_targets(Split& s, const double* th, double K, double td, int jobs, double& result_loss)
+// TD(td) targets of the splits at th (#115): back through every game, the last point's
+// target is the result, an earlier one's (1 - td) sigma(e_next/K) + td target_next, e_next
+// the model's eval of the game's next point. The points are the game's positions in the
+// split and, with a chain file (tools/tune_data chain=1, in game and ply order), its chain
+// positions: they bootstrap the targets and are not fitted. The file is streamed, a
+// chunk of whole games at a time. Returns the mean |change| of split 0's targets;
+// result_loss[k] gets split k's mean (sigma(e/K) - result)^2, chained[k] the chain
+// positions of its games.
+struct TD_Point { int ply; double q; uint32_t i; };     // i: the split position, NO_POS for a chain one
+struct Chain_Line { uint32_t game; int ply; std::string fen; double q; };
+static const size_t CHAIN_CHUNK = 1<<18;
+
+static double td_targets(const std::vector<Split*>& s, const std::string& chain, const double* th, double K, double td,
+                         int jobs, double* result_loss, size_t* chained)
 {
-    const size_t n = s.pos.size();
-    std::vector<double> q(n);
-    std::vector<std::thread> pool;
-    for(int t=0;t<jobs;t++)
-    pool.emplace_back([&, t]
+    const size_t ns = s.size();
+    std::vector<std::vector<double>> q(ns);
+    std::vector<double> change(ns, 0);
+    for(size_t k=0;k<ns;k++)
     {
-        for(size_t i=n*t/jobs;i<n*(t+1)/jobs;i++) q[i] = sigmoid(model_eval(s.pos[i], th, nullptr, 0)/K);
-    });
-    for(auto& x : pool) x.join();
-    double change = 0, loss = 0;
-    for(size_t k=n;k-->0;)
-    {
-        const uint32_t i = s.order[k], j = s.next[i];
-        const double r = s.pos[i].r2*0.5;
-        const double z = j==NO_NEXT ? r : (1-td)*q[j] + td*s.target[j];
-        change += std::fabs(z-s.target[i]);
-        s.target[i] = (float)z;
-        loss += (q[i]-r)*(q[i]-r);
+        const size_t n = s[k]->pos.size();
+        q[k].resize(n);
+        std::vector<std::thread> pool;
+        for(int t=0;t<jobs;t++)
+        pool.emplace_back([&, t]
+        {
+            for(size_t i=n*t/jobs;i<n*(t+1)/jobs;i++) q[k][i] = sigmoid(model_eval(s[k]->pos[i], th, nullptr, 0)/K);
+        });
+        for(auto& x : pool) x.join();
+        double loss = 0;
+        for(size_t i=0;i<n;i++) { const double r = s[k]->pos[i].r2*0.5; loss += (q[k][i]-r)*(q[k][i]-r); }
+        result_loss[k] = loss/n;
+        chained[k] = 0;
     }
-    result_loss = loss/n;
-    return change/n;
+    // one game of split k: its positions from cur[k] on, merged by ply with the chain lines [c0, c1)
+    std::vector<size_t> cur(ns, 0);
+    std::vector<TD_Point> pts;
+    auto game = [&](size_t k, const Chain_Line* c0, const Chain_Line* c1)
+    {
+        Split& S = *s[k];
+        const uint32_t g = S.game[S.order[cur[k]]];
+        pts.clear();
+        for(; cur[k]<S.order.size() && S.game[S.order[cur[k]]]==g; cur[k]++)
+        {
+            const uint32_t i = S.order[cur[k]];
+            for(; c0<c1 && c0->ply<S.ply[i]; c0++) pts.push_back({c0->ply, c0->q, NO_POS});
+            if(c0<c1 && c0->ply==S.ply[i]) c0++;
+            pts.push_back({S.ply[i], q[k][i], i});
+        }
+        for(; c0<c1; c0++) pts.push_back({c0->ply, c0->q, NO_POS});
+        double z = S.pos[S.order[cur[k]-1]].r2*0.5;
+        for(size_t m=pts.size(); m-->0;)
+        {
+            if(m+1<pts.size()) z = (1-td)*pts[m+1].q + td*z;
+            if(pts[m].i==NO_POS) { chained[k]++; continue; }
+            change[k] += std::fabs(z-S.target[pts[m].i]);
+            S.target[pts[m].i] = (float)z;
+        }
+    };
+    // the games of split k before game g, which have no chain lines
+    auto before = [&](size_t k, uint64_t g)
+    {
+        while(cur[k]<s[k]->order.size() && s[k]->game[s[k]->order[cur[k]]]<g) game(k, nullptr, nullptr);
+    };
+    std::ifstream in;
+    if(!chain.empty())
+    {
+        in.open(chain);
+        if(!in) { std::fprintf(stderr, "no chain file %s\n", chain.c_str()); std::exit(1); }
+    }
+    std::vector<Chain_Line> buf;
+    Chain_Line carry;
+    bool has_carry = false, more = !chain.empty();
+    std::string line;
+    long long last_game = -1;
+    while(more)
+    {
+        buf.clear();
+        if(has_carry) buf.push_back(std::move(carry));
+        has_carry = false;
+        for(;;)
+        {
+            if(!std::getline(in, line)) { more = false; break; }
+            if(line.empty() || line[0]=='#') continue;
+            const size_t a = line.find('\t'), b = line.find('\t', a+1);
+            if(b==std::string::npos) { std::fprintf(stderr, "%s: bad line %s\n", chain.c_str(), line.c_str()); std::exit(1); }
+            Chain_Line L{(uint32_t)std::atoll(line.c_str()), std::atoi(line.c_str()+a+1), line.substr(b+1), 0};
+            if((long long)L.game<last_game) { std::fprintf(stderr, "%s is not in game order at %s\n", chain.c_str(), line.c_str()); std::exit(1); }
+            last_game = L.game;
+            if(buf.size()>=CHAIN_CHUNK && L.game!=buf.back().game) { carry = std::move(L); has_carry = true; break; }
+            buf.push_back(std::move(L));
+        }
+        const size_t n = buf.size();
+        std::vector<std::thread> pool;
+        for(int t=0;t<jobs;t++)
+        pool.emplace_back([&, t]
+        {
+            std::vector<uint32_t> words;
+            for(size_t i=n*t/jobs;i<n*(t+1)/jobs;i++)
+            {
+                BB b;
+                if(!uci_parse_fen(buf[i].fen, b)) { std::fprintf(stderr, "bad FEN %s\n", buf[i].fen.c_str()); std::exit(1); }
+                words.clear();
+                Pos p = make_pos(b, 0, words);
+                p.w = words.data();
+                buf[i].q = sigmoid(model_eval(p, th, nullptr, 0)/K);
+            }
+        });
+        for(auto& x : pool) x.join();
+        for(size_t c0=0, c1; c0<n; c0=c1)
+        {
+            for(c1=c0+1; c1<n && buf[c1].game==buf[c0].game; c1++) {}
+            for(size_t k=0;k<ns;k++)
+            {
+                before(k, buf[c0].game);
+                if(cur[k]<s[k]->order.size() && s[k]->game[s[k]->order[cur[k]]]==buf[c0].game) game(k, &buf[c0], buf.data()+c1);
+            }
+        }
+    }
+    for(size_t k=0;k<ns;k++) before(k, UINT64_MAX);
+    return change[0]/s[0]->pos.size();
 }
 
 // ---- Gauss-Newton: the normal equations over the tuned weights
@@ -961,9 +1060,9 @@ static bool read_split(const std::string& path, Split& s)
     s.order.resize(s.count());
     for(size_t i=0;i<s.count();i++) s.order[i] = (uint32_t)i;
     std::sort(s.order.begin(), s.order.end(), [&](uint32_t x, uint32_t y) { return game_ply[x]<game_ply[y]; });
-    s.next.assign(s.count(), NO_NEXT);
-    for(size_t k=0;k+1<s.order.size();k++)
-    if(game_ply[s.order[k]].first==game_ply[s.order[k+1]].first) s.next[s.order[k]] = s.order[k+1];
+    s.game.resize(s.count());
+    s.ply.resize(s.count());
+    for(size_t i=0;i<s.count();i++) { s.game[i] = (uint32_t)game_ply[i].first; s.ply[i] = game_ply[i].second; }
     return s.count()>0;
 }
 
@@ -1104,6 +1203,7 @@ int main(int argc, char** argv)
         else if(k=="td") opt.td = std::atof(v.c_str());
         else if(k=="rounds") opt.rounds = std::max(1, std::atoi(v.c_str()));
         else if(k=="td_tol") opt.td_tol = std::atof(v.c_str());
+        else if(k=="chain") opt.chain = v;
         else if(k=="gauge" && (v=="pin" || v=="pin104" || v=="free")) { opt.pin = v!="free"; opt.pin3 = v=="pin"; }
         else { std::fprintf(stderr, "unknown option %s\n", k.c_str()); return 2; }
     }
@@ -1111,6 +1211,7 @@ int main(int argc, char** argv)
     if(opt.lambda<0) { std::fprintf(stderr, "lambda >= 0\n"); return 2; }
     if(opt.td<0 || opt.td>1) { std::fprintf(stderr, "td is in [0, 1]\n"); return 2; }
     if(opt.td<1 && opt.method!="gn") { std::fprintf(stderr, "td<1 needs method=gn\n"); return 2; }
+    if(!opt.chain.empty() && opt.td==1) { std::fprintf(stderr, "chain= needs td<1\n"); return 2; }
     const bool td = opt.td<1;
 
     Zobrist zobrist_keys;
@@ -1261,6 +1362,7 @@ int main(int argc, char** argv)
     double best_valid = model_loss(split[1], th.data(), K, opt.jobs, nullptr);
     int best_epoch = 0, steps = 0, td_rounds = 0;
     double td_moved = 0;
+    size_t td_chained[2] = {0, 0};
     std::printf("epoch 0: train %.6f valid %.6f\n", model_loss(split[0], th.data(), K, opt.jobs, nullptr), best_valid);
     if(opt.method=="adam")
     {
@@ -1312,13 +1414,13 @@ int main(int argc, char** argv)
                 // the targets of the kept point, and a new fit to them from there
                 th = best;
                 double result_loss[2];
-                const double moved = td_targets(split[0], th.data(), K, opt.td, opt.jobs, result_loss[0]);
-                td_targets(split[1], th.data(), K, opt.td, opt.jobs, result_loss[1]);
+                const double moved = td_targets({&split[0], &split[1]}, opt.chain, th.data(), K, opt.td, opt.jobs, result_loss, td_chained);
                 best_valid = model_loss(split[1], th.data(), K, opt.jobs, nullptr);
                 td_rounds = round;
                 td_moved = moved;
-                std::printf("round %d: targets moved %.6f on average; to the targets train %.6f valid %.6f, to the results train %.6f valid %.6f\n",
-                            round, moved, model_loss(split[0], th.data(), K, opt.jobs, nullptr), best_valid, result_loss[0], result_loss[1]);
+                std::printf("round %d: targets moved %.6f on average; to the targets train %.6f valid %.6f, to the results train %.6f valid %.6f; chain positions %zu / %zu, %.0f s\n",
+                            round, moved, model_loss(split[0], th.data(), K, opt.jobs, nullptr), best_valid, result_loss[0], result_loss[1],
+                            td_chained[0], td_chained[1], secs());
                 std::fflush(stdout);
                 if(round>1 && moved<opt.td_tol) break;
             }
@@ -1529,6 +1631,8 @@ int main(int argc, char** argv)
         K, W_FROM.version, opt.lambda, steps, best_epoch, best_valid, secs());
     if(td)
     say(report, "targets: TD(%g) lambda-returns of each game's positions (#115), %d rounds, last move of the targets %.6f", opt.td, td_rounds, td_moved);
+    if(td && !opt.chain.empty())
+    say(report, "chain: %s, %zu train / %zu valid bootstrap positions", opt.chain.c_str(), td_chained[0], td_chained[1]);
     say(report, "%s", gauge_line);
     say(report, "tuned: %d weights; %d no train position touches, held", nt, untouched);
     say(report, "loss (sigma(basic_eval/K) - result)^2, real eval:");

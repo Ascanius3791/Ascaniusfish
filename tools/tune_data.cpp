@@ -3,9 +3,10 @@
 // "Game source" and "Balanced sampling") from the CCRL 40/15 archive.
 //
 //   ./tools/tune_data run <ccrl.pgn> [out=data/tune] [jobs=6] [seed=86] [games=N]
-//                     [min_elo=3000] [min_plies=40] [gap=0] [per_game=3]
+//                     [min_elo=3000] [min_plies=40] [gap=0] [per_game=3] [chain=0]
 //   ./tools/tune_data select <ccrl.pgn> [out=data/tune] ...
 //   ./tools/tune_data merge [out=data/tune]
+//   ./tools/tune_data chain [out=data/tune] [jobs=6]
 //
 // The archive is bare PGN, 7-Zip-compressed: unpack it first (docs/TUNING_PLAN.md).
 // The label of a position is only the result of its game, r in {1, 0.5, 0}, white's
@@ -31,6 +32,11 @@
 // every band and file, cuts the three results to the same number of positions (the
 // lowest hashes stay). Writes out/{train,valid,test}.tsv and out/summary.txt: the
 // counts per band, file and result, which are exactly equal in the three results.
+//
+// chain (#115; run ... chain=1 ends with it instead of merge): every position of
+// every game, in game and ply order, to out/chain.tsv (columns game ply fen). No
+// repeats dropped, no split, no cut: `tools/tune td= chain=` takes a game's positions
+// as the bootstrap points between the positions it fits. jobs must be the run's.
 //
 // Output columns (tab separated, one header line starting with '#'):
 //   game  ply  fen  static  qsearch  result  band  white_elo  black_elo
@@ -75,6 +81,7 @@ struct Options
     int min_plies = 40;
     int gap = 0;                    // largest Elo gap (0: no limit)
     int per_game = 3;
+    bool chain = false;             // run: write out/chain.tsv instead of merging
 };
 
 struct Selected
@@ -651,6 +658,67 @@ int merge(const Options& opt)
     return 0;
 }
 
+// The parts hold every worker's games in selected order, and selected.tsv is in
+// archive order, so reading part k%jobs for game k gives game and ply order.
+int chain(const Options& opt)
+{
+    std::vector<Selected> chosen;
+    if(!read_selected(opt, chosen) || chosen.empty())
+    {
+        std::fprintf(stderr, "no %s: run select first\n", selected_path(opt).c_str());
+        return 1;
+    }
+    std::vector<std::ifstream> parts;
+    for(int w=0;w<opt.jobs;w++)
+    {
+        parts.emplace_back(part_path(opt, w));
+        if(!parts.back())
+        {
+            std::fprintf(stderr, "no %s\n", part_path(opt, w).c_str());
+            return 1;
+        }
+    }
+    const std::string path = opt.out + "/chain.tsv";
+    FILE* out = std::fopen(path.c_str(), "w");
+    if(!out)
+    {
+        std::perror(path.c_str());
+        return 1;
+    }
+    std::fputs("#game\tply\tfen\n", out);
+    long long positions = 0, games = 0;
+    std::string line;
+    for(size_t k=0;k<chosen.size();k++)
+    {
+        std::ifstream& in = parts[k%opt.jobs];
+        bool ended = false;
+        while(!ended && std::getline(in, line))
+        {
+            std::vector<std::string> f = split_tabs(line);
+            if(f.size()<2 || std::atoll(f[0].c_str())!=(long long)k)
+            {
+                std::fprintf(stderr, "%s: game %zu expected, got %s\n", part_path(opt, (int)(k%opt.jobs)).c_str(), k, line.c_str());
+                return 1;
+            }
+            ended = f[1]=="end";
+            if(f[1]=="pos" && f.size()==6)
+            {
+                std::fprintf(out, "%lld\t%s\t%s\n", chosen[k].game, f[2].c_str(), f[3].c_str());
+                positions++;
+            }
+        }
+        if(!ended)
+        {
+            std::fprintf(stderr, "game %zu has no end line: run again to finish it\n", k);
+            return 1;
+        }
+        games++;
+    }
+    std::fclose(out);
+    std::fprintf(stderr, "%s: %lld positions of %lld games\n", path.c_str(), positions, games);
+    return 0;
+}
+
 // ---------------------------------------------------------------- main
 
 std::string run_config(const Options& opt)
@@ -711,7 +779,7 @@ int run(const Options& opt)
         std::fprintf(stderr, "a worker failed; run again to carry on\n");
         return 1;
     }
-    return merge(opt);
+    return opt.chain ? chain(opt) : merge(opt);
 }
 
 int main(int argc, char** argv)
@@ -719,7 +787,7 @@ int main(int argc, char** argv)
     Options opt;
     if(argc<2)
     {
-        std::fprintf(stderr, "usage: %s run|select|merge <ccrl.pgn> [out=] [jobs=] [seed=] [games=] [min_elo=] [min_plies=] [gap=] [per_game=]\n", argv[0]);
+        std::fprintf(stderr, "usage: %s run|select|merge <ccrl.pgn> [out=] [jobs=] [seed=] [games=] [min_elo=] [min_plies=] [gap=] [per_game=] [chain=]\n", argv[0]);
         return 2;
     }
     opt.command = argv[1];
@@ -737,6 +805,7 @@ int main(int argc, char** argv)
         else if(k=="min_plies") opt.min_plies = std::atoi(v.c_str());
         else if(k=="gap") opt.gap = std::atoi(v.c_str());
         else if(k=="per_game") opt.per_game = std::max(1, std::atoi(v.c_str()));
+        else if(k=="chain") opt.chain = std::atoi(v.c_str())!=0;
         else { std::fprintf(stderr, "unknown option %s\n", k.c_str()); return 2; }
     }
 
@@ -747,6 +816,7 @@ int main(int argc, char** argv)
     init_sliders_attacks(0);//rook
 
     if(opt.command=="merge") return merge(opt);
+    if(opt.command=="chain") return chain(opt);
     if(opt.pgn.empty()) { std::fprintf(stderr, "no PGN given\n"); return 2; }
     if(opt.command=="select") return select_games(opt);
     if(opt.command=="run") return run(opt);
