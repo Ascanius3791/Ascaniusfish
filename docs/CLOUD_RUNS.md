@@ -1,15 +1,17 @@
 <!-- OWNERSHIP=Claude -->
-# Fits and SPRTs on GitHub Actions (#116)
+# Fits, SPRTs and net labels on GitHub Actions (#116, #117)
 
-Two workflows run the heavy tuning work on GitHub-hosted runners (4 vCPU, 16 GB, up to
+Three workflows run the heavy work on GitHub-hosted runners (4 vCPU, 16 GB, up to
 20 jobs at once on a free account, 6 h per job):
 
 - `tune` (`.github/workflows/tune.yml`): one `tools/tune` fit per option set, all in
   parallel.
-- `sprt` (`.github/workflows/sprt.yml`): one SPRT of two weight sets, its pairs split over
-  parallel jobs.
+- `sprt` (`.github/workflows/sprt.yml`): one SPRT of two weight sets (and nets), its pairs
+  split over parallel jobs.
+- `nne-relabel` (`.github/workflows/nne-relabel.yml`): the net's dataset labelled again,
+  split over parallel jobs; training stays local. See docs/NNE_RELABEL.md.
 
-Both start only by hand (`workflow_dispatch`), never on a push or a pull request. The
+All start only by hand (`workflow_dispatch`), never on a push or a pull request. The
 repository is public, so **logs, step summaries and artifacts are public**. A run shows
 the option sets, the weight files it fitted or played and every game.
 
@@ -99,7 +101,12 @@ gh workflow run sprt -f b=run:<tune run id>:2 -f net=on
   candidate. Each is a path in the repository, `default` (the compiled-in set), or
   `run:<id>:<k>`, the set of job k of a `tune` run (artifact `tune-<k>`, still within
   its 30 days).
-- `net`: `off` (default) or `on`, `UseNNE` for both sides.
+- `net`: the net of both sides. `off` (default), `on` (`nets/nne_d6.bin` of the run's
+  ref), another path in the repository, or `<branch, tag or commit>:<path>`, a file of
+  another ref (fetched by `git show`).
+- `net_b`: B's net, when it differs from A's; the same forms. So a retrained net, pushed
+  on a branch, plays the old one with the same weights:
+  `-f b=weights/w10.txt -f net=main:nets/nne_d6.bin -f net_b=<branch>:nets/nne_d6.bin`.
 - `tc` (default `5+0.05`), `bounds` (default `0,10`, α = β = 0.05).
 - `pairs`: **5000 game pairs in all** (default, Ascanius's cap), split as evenly as
   possible over `jobs` (default 20, i.e. 250 pairs per job).

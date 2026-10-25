@@ -45,7 +45,7 @@ make ptt-seed     # time to stored depth + 1, seeded with the stored line vs col
 make walkback     # Analyse along the 3.Bc2+ study, walks off/on/fwd/mixed, ~40 s each: when each step shows its mate (#100)
 make gui          # build + run the browser GUI server (GUI_PORT=8173 to pick the port)
 make gui NARROW=1 # the same, driving ./ascaniusfish_uci_narrow (-DTT_BOUNDS_NEVER_NARROW=0, #65)
-make nne-retrain  # after an eval() change: relabel the NNE dataset, retrain, check (docs/NNE_RELABEL.md; FROM=<branch> takes a cloud session's labels)
+make nne-retrain  # after an eval() change: relabel the NNE dataset, retrain, check (docs/NNE_RELABEL.md; FROM=run:<id> takes an nne-relabel run's labels)
 make rebuild      # clean + all
 make clean        # remove build artifacts
 ```
@@ -115,7 +115,7 @@ When editing engine internals, `lib/*.hpp` is the declaration/interface layer an
 ### The net (NNE)
 `lib/nne.hpp` / `src/nne.cpp` is the eval-correction net (`nets/nne_d6.bin`, UCI `UseNNE`/`NNEFile`; design in `docs/NNE_DESIGN.md`). Ascanius may call it "the net", "NNE" or "NNUE"; all mean this one.
 
-**Retraining it.** When Ascanius asks to retrain or relabel the net, "locally" or "in the cloud", read `docs/NNE_RELABEL.md` and tell Ascanius the steps for that route; don't start the run yourself. Locally it is `make nne-retrain` (~1.5–2 h, needs `data/nne/` and `tools/nne_train` built once, alone). In the cloud Ascanius pastes the prompt from that doc into a Claude cloud session, and afterwards runs `make nne-retrain FROM=<the session's branch>` here.
+**Retraining it.** When Ascanius asks to retrain or relabel the net, "locally" or "in the cloud", read `docs/NNE_RELABEL.md` and tell Ascanius the steps for that route; don't start the run yourself. Locally it is `make nne-retrain` (~1.5–2 h, needs `data/nne/` and `tools/nne_train` built once, alone). In the cloud (#117) the labels come from the `nne-relabel` workflow (`gh workflow run nne-relabel`), and afterwards `make nne-retrain FROM=run:<id>` trains here on the GPU; the older Claude cloud session route is in the same doc.
 
 ### Settings
 `lib/Settings.hpp` are compile-time `constexpr bool`/`int` toggles (print verbosity, per-category timing display, `DEBUG_MODE` for consistency checks like `saefty_checks`, `MAX_PV_Lenght`, `max_mating_seq`). Flip these instead of adding new runtime flags for engine-internal debugging output.

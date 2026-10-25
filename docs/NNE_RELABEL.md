@@ -34,7 +34,44 @@ make nne-retrain MINUTES=60      # stop the relabel after an hour; the same comm
 Do that before the first run if nothing else may be compiling at the same time. Then
 measure the new net as #53 did before relying on it.
 
+## Labels on GitHub Actions, training here (#117)
+
+The long part, the labels, runs on GitHub-hosted runners; the 4-minute training stays on
+the local GPU.
+
+```bash
+gh workflow run nne-relabel
+```
+
+```bash
+make nne-retrain FROM=run:<run id>
+```
+
+1. **`nne-relabel`** (`.github/workflows/nne-relabel.yml`) labels with the code of the ref it
+   runs on: `main` as pushed, or `--ref <branch>` for an eval change that has not landed
+   (the branch needs the workflow file too). `-f jobs=N` (default 10, up to 40) splits the
+   FEN list (branch `nne-fens`) over N jobs of 4 workers each:
+   `tools/nne_data relabel ... slice=k/N`. Job k is workers 4(k−1) … 4k−1 of one run with
+   4N workers, so all jobs' part files together are exactly that run's. The WDL tables come
+   from tablebase.lichess.ovh once and are kept in the Actions cache.
+2. The `collect` job checks that every worker's part file is there and that every
+   position got its line, then uploads them, with `commit.txt`, as the artifact
+   `nne-labels` (kept 30 days). The step summary counts the kept and dropped positions and
+   prints the `make` command with the run id.
+3. **Here**, `make nne-retrain FROM=run:<id>` downloads `nne-labels` (`gh run download`),
+   refuses it unless every position is labelled, and then goes on as with a cloud session's
+   branch (step 4 below): merge, spot check of ~1000 positions labelled here, training,
+   check.
+4. Then measure the new net against the old one. Commit it on a branch, push it, and run
+   the SPRT with a net per side (docs/CLOUD_RUNS.md):
+
+   ```bash
+   gh workflow run sprt -f b=weights/w10.txt -f net=main:nets/nne_d6.bin -f net_b=<branch>:nets/nne_d6.bin
+   ```
+
 ## In a Claude cloud session
+
+The route before #117; the workflow above does the same without a session.
 
 **Once.** The FEN list lives on the orphan branch `nne-fens`, as one file,
 `nne_fens.tsv.zst` (14.9 MB). It holds game, index, ply and FEN of every position, in
