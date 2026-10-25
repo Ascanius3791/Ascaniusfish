@@ -7,7 +7,7 @@
 //   ./tools/nne_data merge [out=data/nne]
 //   ./tools/nne_data count <dump.pgn.zst>...
 //   ./tools/nne_data relabel <data.tsv[.zst]>... [out=data/nne-relabel] [jobs=6]
-//                    [depth=6] [syzygy=~/syzygy-nr] [minutes=M]
+//                    [depth=6] [syzygy=~/syzygy-nr] [minutes=M] [slice=k/n]
 //
 // run: `jobs` forked workers each read every dump and take every jobs-th game
 // (games are numbered from 0 across all dumps, in order). A game is kept when
@@ -40,6 +40,13 @@
 // session, docs/NNE_RELABEL.md) are merged here by running the same command
 // with them in out/parts. Resuming works as in run, and the output is a
 // dataset like run's.
+//
+// slice=k/n (relabel, #117): this call is the k-th of n, each with `jobs`
+// workers, which together are the workers of one run with jobs*n of them:
+// here workers (k-1)*jobs .. k*jobs-1 of that run write their part files, and
+// nothing is merged. The n calls' parts in one out/parts, plus a config.txt,
+// are then merged by the same relabel command with jobs=jobs*n and no slice.
+// That splits a relabel over machines (.github/workflows/nne-relabel.yml).
 //
 // minutes=M (run and relabel): every worker stops after M minutes, and the
 // run exits with status 3 without merging; started again with the same
@@ -89,6 +96,8 @@ struct Options
     long long games = -1;           // stop after this many games (-1: all)
     std::string syzygy = std::string(getenv("HOME") ? getenv("HOME") : "") + "/syzygy-nr";
     double minutes = 0;             // stop every worker after this long (0: never)
+    int slice_k = 1, slice_n = 1;   // relabel's slice=k/n; jobs is then the whole run's
+    int first_worker = 0, workers = 6;  // the workers this call forks (all jobs without slice=)
     bool out_given = false;
 };
 
@@ -403,6 +412,14 @@ int worker(int w, const Options& opt, const std::vector<Source_Position>& positi
     {
         std::perror(path.c_str());
         return 1;
+    }
+    // A worker with nothing left to label (a split run's parts, merged here)
+    // returns before building a labeller and its table.
+    if(opt.command=="relabel" && (size_t)w<positions.size()
+       && positions[w + (positions.size()-1-w)/opt.jobs*opt.jobs].index<=done)
+    {
+        std::fclose(out);
+        return 0;
     }
     Labeller lab;
     Move_Tree* tree = new Move_Tree;
@@ -783,7 +800,7 @@ int run(const Options& opt)
 
     auto t0 = std::chrono::steady_clock::now();
     std::vector<pid_t> pids;
-    for(int w=0; w<opt.jobs; w++)
+    for(int w=opt.first_worker; w<opt.first_worker+opt.workers; w++)
     {
         pid_t pid = fork();
         if(pid==0)
@@ -818,6 +835,12 @@ int run(const Options& opt)
         std::fprintf(stderr, "stopped after %g minutes; run again with the same arguments to carry on\n", opt.minutes);
         return STOPPED;
     }
+    if(opt.slice_n>1)
+    {
+        std::fprintf(stderr, "slice %d/%d done: workers %d..%d of %d; merge all slices' parts with jobs=%d\n", opt.slice_k, opt.slice_n,
+                     opt.first_worker, opt.first_worker+opt.workers-1, opt.jobs, opt.jobs);
+        return 0;
+    }
     return merge(opt, positions);
 }
 
@@ -826,7 +849,7 @@ int main(int argc, char** argv)
     Options opt;
     if(argc<2)
     {
-        std::fprintf(stderr, "usage: %s run|merge|count|relabel <dump.pgn.zst or data.tsv>... [out=] [jobs=] [depth=] [seed=] [games=] [syzygy=] [minutes=]\n", argv[0]);
+        std::fprintf(stderr, "usage: %s run|merge|count|relabel <dump.pgn.zst or data.tsv>... [out=] [jobs=] [depth=] [seed=] [games=] [syzygy=] [minutes=] [slice=k/n]\n", argv[0]);
         return 2;
     }
     opt.command = argv[1];
@@ -843,6 +866,11 @@ int main(int argc, char** argv)
         else if(k=="games") opt.games = std::atoll(v.c_str());
         else if(k=="syzygy") opt.syzygy = v;
         else if(k=="minutes") opt.minutes = std::atof(v.c_str());
+        else if(k=="slice")
+        {
+            if(std::sscanf(v.c_str(), "%d/%d", &opt.slice_k, &opt.slice_n)!=2 || opt.slice_n<1 || opt.slice_k<1 || opt.slice_k>opt.slice_n)
+            { std::fprintf(stderr, "slice must be k/n with 1 <= k <= n\n"); return 2; }
+        }
         else { std::fprintf(stderr, "unknown option %s\n", k.c_str()); return 2; }
     }
 
@@ -854,6 +882,10 @@ int main(int argc, char** argv)
 
     if(opt.command=="relabel" && !opt.out_given)
     opt.out = "data/nne-relabel";
+    if(opt.slice_n>1 && opt.command!="relabel") { std::fprintf(stderr, "slice= is for relabel only\n"); return 2; }
+    opt.workers = opt.jobs;
+    opt.first_worker = (opt.slice_k-1)*opt.jobs;
+    opt.jobs *= opt.slice_n;
     if(opt.command=="merge") return merge(opt);
     if(opt.dumps.empty()) { std::fprintf(stderr, "no dump given\n"); return 2; }
     if(opt.command=="relabel") return run(opt);
