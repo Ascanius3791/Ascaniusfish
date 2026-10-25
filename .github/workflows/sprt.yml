@@ -1,0 +1,213 @@
+# OWNERSHIP=Claude
+# An SPRT of two weight sets on GitHub-hosted runners (#116, docs/CLOUD_RUNS.md):
+# the pairs are split over parallel jobs (tools/match slice=k/n, each its own
+# openings), and one last job sums their pentanomial counts and judges the SPRT
+# once, on the total. Started by hand only; logs and artifacts of this public
+# repository are public.
+#
+#   gh workflow run sprt -f b=weights/w11.txt [-f a=weights/w10.txt] [-f net=on]
+#   gh workflow run sprt -f b=run:<tune run id>:<set k>
+name: sprt
+
+on:
+  workflow_dispatch:
+    inputs:
+      a:
+        description: 'Weight set A: a path in the repository, "default" (compiled in), or run:<tune run id>:<set k>'
+        required: true
+        type: string
+        default: 'weights/w10.txt'
+      b:
+        description: 'Weight set B (the candidate), same forms as A'
+        required: true
+        type: string
+      net:
+        description: 'The net (UseNNE) for both sides'
+        required: true
+        type: choice
+        options: ['off', 'on']
+        default: 'off'
+      tc:
+        description: 'Time control, seconds+increment'
+        required: true
+        type: string
+        default: '5+0.05'
+      pairs:
+        description: 'Game pairs in all, split over the jobs'
+        required: true
+        type: string
+        default: '5000'
+      jobs:
+        description: 'Parallel jobs (a free account runs up to 20 at once)'
+        required: true
+        type: string
+        default: '20'
+      bounds:
+        description: 'SPRT elo0,elo1 (alpha = beta = 0.05)'
+        required: true
+        type: string
+        default: '0,10'
+
+permissions:
+  contents: read
+  actions: read  # gh run download of a tune run's set
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.m.outputs.matrix }}
+    steps:
+      # Inputs only reach scripts through the environment, and are checked here.
+      - id: m
+        env:
+          A: ${{ inputs.a }}
+          B: ${{ inputs.b }}
+          TC: ${{ inputs.tc }}
+          PAIRS: ${{ inputs.pairs }}
+          JOBS: ${{ inputs.jobs }}
+          BOUNDS: ${{ inputs.bounds }}
+        run: |
+          python3 - <<'EOF'
+          import json, os, re, sys
+          def fail(msg):
+              print(f"::error::{msg}"); sys.exit(1)
+          for side in ("A", "B"):
+              w = os.environ[side]
+              if not (w == "default" or re.fullmatch(r"run:[0-9]+:[0-9]+", w)
+                      or (re.fullmatch(r"[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*", w) and ".." not in w)):
+                  fail(f"{side} must be a path in the repository, default, or run:<id>:<k>")
+          if not re.fullmatch(r"[0-9]+(\.[0-9]+)?\+[0-9]+(\.[0-9]+)?", os.environ["TC"]):
+              fail("tc must be seconds+increment, e.g. 5+0.05")
+          if not re.fullmatch(r"-?[0-9]+(\.[0-9]+)?,-?[0-9]+(\.[0-9]+)?", os.environ["BOUNDS"]):
+              fail("bounds must be elo0,elo1, e.g. 0,10")
+          if not re.fullmatch(r"[0-9]+", os.environ["PAIRS"]) or not re.fullmatch(r"[0-9]+", os.environ["JOBS"]):
+              fail("pairs and jobs must be numbers")
+          pairs, jobs = int(os.environ["PAIRS"]), int(os.environ["JOBS"])
+          if not 1 <= jobs <= 40: fail("jobs must be 1..40")
+          if not jobs <= pairs <= 10000: fail("pairs must be jobs..10000 (the suite has 10681 openings)")
+          m = [{"k": k, "n": jobs, "pairs": pairs // jobs + (k <= pairs % jobs)} for k in range(1, jobs + 1)]
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write("matrix=" + json.dumps(m) + "\n")
+          print(json.dumps(m))
+          EOF
+
+  play:
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        slice: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    name: play ${{ matrix.slice.k }}/${{ matrix.slice.n }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Weights
+        env:
+          GH_TOKEN: ${{ github.token }}
+          A: ${{ inputs.a }}
+          B: ${{ inputs.b }}
+          NET: ${{ inputs.net }}
+        run: |
+          # one option list per side: the set (none for "default") and the net
+          options() {
+            local spec=$1 dir=w/$2 file=
+            case "$spec" in
+              default) ;;
+              run:*)
+                IFS=: read -r _ id k <<< "$spec"
+                gh run download "$id" --repo "$GITHUB_REPOSITORY" -n "tune-$k" -D "$dir" >&2
+                file=$dir/set-$k.txt ;;
+              *) file=$spec ;;
+            esac
+            local o="UseNNE=$([ "$NET" = on ] && echo true || echo false)"
+            [ "$NET" = on ] && o="$o,NNEFile=$GITHUB_WORKSPACE/nets/nne_d6.bin"
+            if [ -n "$file" ]; then
+              test -f "$file" || { echo "::error::$spec: no weight set $file" >&2; exit 1; }
+              o="$o,WeightsFile=$GITHUB_WORKSPACE/$file"
+            fi
+            echo "$o"
+          }
+          OA=$(options "$A" A)
+          OB=$(options "$B" B)
+          echo "A: $OA"; echo "B: $OB"
+          { echo "OPTIONS_A=$OA"; echo "OPTIONS_B=$OB"; } >> "$GITHUB_ENV"
+
+      - name: Build
+        run: |
+          # the engine once for both sides, as tools/match builds a ref (tt=17)
+          g++ -O3 -mpopcnt -fwhole-program -Wall -Wno-unknown-pragmas -Wno-parentheses -Wno-unused-variable -DNDEBUG -pthread \
+              -DTT_EXPONENT=17 -o engine ascaniusfish_uci.cpp &
+          make tools/match
+          wait $!
+
+      - name: Play
+        env:
+          TC: ${{ inputs.tc }}
+          BOUNDS: ${{ inputs.bounds }}
+          K: ${{ matrix.slice.k }}
+          N: ${{ matrix.slice.n }}
+          PAIRS: ${{ matrix.slice.pairs }}
+        run: |
+          mkdir -p out
+          ./tools/match ./engine ./engine tc="$TC" sprt="$BOUNDS" pairs="$PAIRS" slice="$K/$N" \
+              concurrency=$(( $(nproc) - 1 )) time=300 stats=out/stats-$K.txt pgn=out/games-$K.pgn \
+              optionsA="$OPTIONS_A" optionsB="$OPTIONS_B" | tee out/log-$K.txt
+          test "${PIPESTATUS[0]}" -eq 0
+
+      - name: Keep tools/match for combine
+        if: always() && matrix.slice.k == 1
+        run: test -x tools/match && cp tools/match out/ || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sprt-${{ matrix.slice.k }}
+          path: out/
+          retention-days: 30
+
+  combine:
+    needs: play
+    if: always() && needs.play.result != 'skipped'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: sprt-*
+          path: in
+          merge-multiple: true
+
+      - name: Combine
+        env:
+          A: ${{ inputs.a }}
+          B: ${{ inputs.b }}
+          NET: ${{ inputs.net }}
+          TC: ${{ inputs.tc }}
+          BOUNDS: ${{ inputs.bounds }}
+        run: |
+          if [ -f in/match ]; then cp in/match tools/match && chmod +x tools/match; else make tools/match; fi
+          mkdir -p out
+          ./tools/match combine sprt="$BOUNDS" in/stats-*.txt | tee out/result.txt
+          test "${PIPESTATUS[0]}" -eq 0
+          {
+            echo "### SPRT [$BOUNDS]: B \`$B\` vs A \`$A\`, net $NET, tc $TC"
+            echo '```'
+            cat out/result.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sprt-result
+          path: out/
+          retention-days: 90

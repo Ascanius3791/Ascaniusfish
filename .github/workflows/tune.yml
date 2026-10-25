@@ -1,0 +1,122 @@
+# OWNERSHIP=Claude
+# Weight fits on GitHub-hosted runners (#116, docs/CLOUD_RUNS.md): one tools/tune
+# run per option set, all in parallel. Started by hand only; logs and artifacts of
+# this public repository are public. The data is a game pack (tools/tune_data pack)
+# kept as a release asset.
+#
+#   gh workflow run tune -f sets='td=0.97; td=0.9; td=0.97 lambda=0' [-f from=weights/w10.txt]
+name: tune
+
+on:
+  workflow_dispatch:
+    inputs:
+      sets:
+        description: 'tools/tune option sets, separated by ";" (one job each, e.g. "td=0.97; td=0.9 lambda=0"; "-" = the defaults)'
+        required: true
+        type: string
+        default: '-'
+      from:
+        description: 'Weight set to fit from (a path in the repository)'
+        required: true
+        type: string
+        default: 'weights/w10.txt'
+      data:
+        description: 'Data: <release tag>/<asset>, a zstd-compressed game pack'
+        required: true
+        type: string
+        default: 'tune-data/tune2.pack.zst'
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.m.outputs.matrix }}
+    steps:
+      # Inputs only reach scripts through the environment, and are checked here.
+      - id: m
+        env:
+          SETS: ${{ inputs.sets }}
+          FROM: ${{ inputs.from }}
+          DATA: ${{ inputs.data }}
+        run: |
+          python3 - <<'EOF'
+          import json, os, re, sys
+          def fail(msg):
+              print(f"::error::{msg}"); sys.exit(1)
+          if not re.fullmatch(r"[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*", os.environ["FROM"]) or ".." in os.environ["FROM"]:
+              fail("from must be a path in the repository")
+          if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", os.environ["DATA"]):
+              fail("data must be <release tag>/<asset>")
+          sets = []
+          for k, text in enumerate(os.environ["SETS"].split(";"), 1):
+              words = text.split()
+              if words == ["-"]: words = []
+              for w in words:
+                  key, eq, value = w.partition("=")
+                  if not eq or not re.fullmatch(r"[a-z_0-9]+", key) or not re.fullmatch(r"[A-Za-z0-9_.+,-]*", value):
+                      fail(f"set {k}: '{w}' is not key=value")
+                  if key in ("data", "out", "jobs", "from", "compare", "spectrum"):
+                      fail(f"set {k}: {key}= is the workflow's")
+              sets.append({"k": k, "options": " ".join(words)})
+          if not sets: fail("no option sets")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write("matrix=" + json.dumps(sets) + "\n")
+          print(json.dumps(sets, indent=1))
+          EOF
+
+  fit:
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        set: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    name: fit ${{ matrix.set.k }} (${{ matrix.set.options || 'defaults' }})
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Data
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DATA: ${{ inputs.data }}
+        run: |
+          mkdir -p data
+          gh release download "${DATA%%/*}" --repo "$GITHUB_REPOSITORY" --pattern "${DATA#*/}" --dir data
+          zstd -d --rm "data/${DATA#*/}" -o data/games.pack
+          ls -l data
+
+      - name: Build
+        run: make tools/tune
+
+      - name: Fit
+        env:
+          FROM: ${{ inputs.from }}
+          OPTIONS: ${{ matrix.set.options }}
+          K: ${{ matrix.set.k }}
+        run: |
+          mkdir -p out
+          echo "tools/tune data=games.pack from=$FROM $OPTIONS" > out/command-$K.txt
+          # shellcheck disable=SC2086 # the options are words, checked by plan
+          ./tools/tune data=data/games.pack from="$FROM" out=out/set-$K.txt jobs="$(nproc)" $OPTIONS 2>&1 | tee out/log-$K.txt
+          test "${PIPESTATUS[0]}" -eq 0
+          {
+            echo "### Set $K: \`${OPTIONS:-defaults}\` from \`$FROM\`"
+            echo '```'
+            sed -n '/^# fit report/,$p' out/set-$K.txt | cut -c1-200 | head -40
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tune-${{ matrix.set.k }}
+          path: out/
+          retention-days: 30
+          if-no-files-found: error

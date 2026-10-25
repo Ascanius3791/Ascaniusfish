@@ -61,6 +61,12 @@ Ascanius as set 10); td 0.9 gave +38.4, td 0.8 +4.7, the short chains nothing
 `<data>/chain.tsv`, so `data/tune2/chain.tsv` sits next to the splits; `chain=none` fits
 without one, `td=1` is the plain fit to the results.
 
+**Fits and SPRTs on GitHub Actions (#116).** `data=<file>` reads a game pack, the same
+positions as the TSV files and the chain in 295 MB (138 MB compressed). It holds the games'
+moves, with no PGN or FEN. The `tune` and `sprt` workflows run fits in parallel and SPRTs
+split over jobs on GitHub-hosted runners, from the pack as a release asset:
+`docs/CLOUD_RUNS.md`.
+
 ## Game source: CCRL 40/15
 
 The whole archive (`CCRL-4040.[2458744].pgn.7z`, 453 MB, 2.7 GB unpacked, downloaded

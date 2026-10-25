@@ -126,6 +126,10 @@ standard strength test (`docs/WORKFLOW.md`, "Measuring strength").
   real gain mostly ends undecided, and the last line says so.
 - With `SPRT=` the suite is `tools/openings_ccrl.epd` (below), so a run never
   plays an opening twice; `OPENINGS=<file>` (`openings=`) picks another.
+- `slice=k/n` plays every n-th opening from the k-th and never stops at a bound;
+  `stats=<file>` keeps the counts, and `tools/match combine sprt=elo0,elo1 <files>`
+  judges the sum once. The `sprt` workflow splits a test over parallel GitHub
+  runners this way (docs/CLOUD_RUNS.md).
 
 At a fixed depth the engine is deterministic, so identical engines play
 identical games from both colours. Every pair then scores exactly 1 point
