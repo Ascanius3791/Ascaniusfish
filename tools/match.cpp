@@ -31,6 +31,13 @@
 //   optionsA=<n=v,...> UCI options for engine A (optionsB= for B), e.g.
 //                      optionsA="UCI_LimitStrength=true,UCI_Elo=1500" for a
 //                      Stockfish playing at a given CCRL rating
+//   slice=<k>/<n>      play only every n-th opening from the k-th (k = 1..n) and
+//                      never stop at an SPRT bound: one of n jobs of one test
+//                      (#116, .github/workflows/sprt.yml); pairs= counts this slice's
+//   stats=<file>       W/D/L and pair counts, rewritten after every pair
+//
+//   ./tools/match combine <stats file>... [sprt=elo0,elo1]
+// sums the stats files of a test's jobs and judges the SPRT once, on the total.
 #include "git_build.hpp"
 #include "game_rules.hpp"
 #include "uci_engine.hpp"
@@ -378,6 +385,102 @@ struct Stats
     }
 };
 
+// The stats= file: what combine reads back.
+static void write_stats(const std::string& path, const Stats& st, const std::string& a, const std::string& b)
+{
+    if(path.empty()) return;
+    const std::string tmp = path + ".tmp";
+    {
+        std::ofstream f(tmp);
+        f << "# tools/match stats, B's view\nA " << a << "\nB " << b << "\n";
+        f << "wdl " << st.wins << " " << st.draws << " " << st.losses << "\n";
+        f << "pairs " << st.penta[0] << " " << st.penta[1] << " " << st.penta[2] << " " << st.penta[3] << " " << st.penta[4] << "\n";
+    }
+    std::rename(tmp.c_str(), path.c_str());
+}
+
+static bool parse_sprt(const std::string& bounds, double& elo0, double& elo1)
+{
+    size_t comma = bounds.find(',');
+    if(comma==std::string::npos) die("expected sprt=elo0,elo1, got sprt=" + bounds);
+    elo0 = std::atof(bounds.substr(0, comma).c_str());
+    elo1 = std::atof(bounds.substr(comma+1).c_str());
+    if(!(elo1>elo0)) die("sprt needs elo0 < elo1, got sprt=" + bounds);
+    return true;
+}
+
+static int combine(int argc, char** argv)
+{
+    Stats total;
+    std::string a, b, bounds;
+    int files = 0;
+    for(int i=2;i<argc;i++)
+    {
+        std::string arg = argv[i];
+        if(arg.compare(0, 5, "sprt=")==0) { bounds = arg.substr(5); continue; }
+        std::ifstream f(arg);
+        if(!f) die("cannot read " + arg);
+        std::string line;
+        bool counted = false;
+        while(std::getline(f, line))
+        {
+            std::istringstream in(line);
+            std::string key;
+            in >> key;
+            std::string rest;
+            std::getline(in >> std::ws, rest);
+            if(key=="A" || key=="B")
+            {
+                std::string& label = key=="A" ? a : b;
+                if(!label.empty() && label!=rest) die(arg + " is a match of other engines: " + key + " " + rest + ", not " + label);
+                label = rest;
+            }
+            else if(key=="wdl")
+            {
+                int w, d, l;
+                std::istringstream v(rest);
+                if(!(v >> w >> d >> l)) die(arg + ": bad line " + line);
+                total.wins += w; total.draws += d; total.losses += l;
+            }
+            else if(key=="pairs")
+            {
+                std::istringstream v(rest);
+                for(int k=0;k<5;k++)
+                {
+                    int x;
+                    if(!(v >> x)) die(arg + ": bad line " + line);
+                    total.penta[k] += x;
+                }
+                counted = true;
+            }
+        }
+        if(!counted) die(arg + " has no pair counts");
+        files++;
+    }
+    if(!files) die("usage: match combine <stats file>... [sprt=elo0,elo1]");
+    double s, half;
+    total.score(s, half);
+    const double lo = Stats::elo(s-half), hi = Stats::elo(s+half);
+    std::printf("A: %s\nB: %s\n%d jobs, %d pairs, %d games\n", a.c_str(), b.c_str(), files, total.pairs(), total.wins+total.draws+total.losses);
+    std::printf("B vs A: W %d  D %d  L %d   score %.1f%%\n", total.wins, total.draws, total.losses, 100*s);
+    std::printf("pairs (B points 0/0.5/1/1.5/2): %d %d %d %d %d\n", total.penta[0], total.penta[1], total.penta[2], total.penta[3], total.penta[4]);
+    std::printf("Elo B-A: %s  (95%% CI [%+.1f, %+.1f]) -> %s\n", total.elo_string().c_str(), lo, hi,
+                s-half>0.5 ? "B is stronger" : s+half<0.5 ? "B is weaker" : "no significant difference");
+    if(!bounds.empty())
+    {
+        double elo0, elo1;
+        parse_sprt(bounds, elo0, elo1);
+        const double ALPHA = 0.05, BETA = 0.05;
+        const double llr_lower = std::log(BETA/(1-ALPHA)), llr_upper = std::log((1-BETA)/ALPHA);
+        const double llr = total.llr(elo0, elo1);
+        std::printf("SPRT [%g, %g]: LLR %+.2f (bounds %+.2f %+.2f), judged once on the total\n", elo0, elo1, llr, llr_lower, llr_upper);
+        if(llr>=llr_upper) std::printf("H1 accepted: B is stronger than A (B-A nearer %g than %g Elo)\n", elo1, elo0);
+        else if(llr<=llr_lower) std::printf("H0 accepted: B does not gain %g Elo over A (B-A nearer %g than %g)\n", elo1, elo0, elo1);
+        else std::printf("no decision: LLR %+.2f, Elo %s (the change is dropped, or Ascanius decides)\n", llr, total.elo_string().c_str());
+    }
+    return 0;
+}
+
 static Player make_player(const std::string& label, int depth, const Limits& clock)
 {
     Player p;
@@ -449,12 +552,15 @@ static void build(Side& s, int tt)
 
 int main(int argc, char** argv)
 {
+    if(argc>=2 && std::string(argv[1])=="combine")
+    return combine(argc, argv);
     if(argc<3)
     {
         std::fprintf(stderr, "usage: %s <A> <B> [depth=3] [depthA=n] [depthB=n] [tc=s+inc] [concurrency=n] [pairs=n]\n"
                              "       [openings=tools/openings.epd] [pgn=match.pgn] [tt=17] [optionsA=Name=Value,...] [optionsB=...]\n"
-                             "       [sprt=elo0,elo1] [time=10 (minutes)]\n"
-                             "  A, B: UCI engine binary, or git ref to build (\".\" = working tree)\n", argv[0]);
+                             "       [sprt=elo0,elo1] [time=10 (minutes)] [slice=k/n] [stats=file]\n"
+                             "       %s combine <stats file>... [sprt=elo0,elo1]\n"
+                             "  A, B: UCI engine binary, or git ref to build (\".\" = working tree)\n", argv[0], argv[0]);
         return 2;
     }
     std::map<std::string, std::string> opt;
@@ -469,7 +575,7 @@ int main(int argc, char** argv)
     }
     auto get = [&](const std::string& k, const std::string& def) { return opt.count(k) ? opt[k] : def; };
     for(auto& [k, v] : opt)
-    if(std::string(" depth depthA depthB tc concurrency pairs openings pgn tt optionsA optionsB sprt time ").find(" " + k + " ")==std::string::npos)
+    if(std::string(" depth depthA depthB tc concurrency pairs openings pgn tt optionsA optionsB sprt time slice stats ").find(" " + k + " ")==std::string::npos)
     die("unknown option " + k);
 
     Limits clock;
@@ -490,14 +596,11 @@ int main(int argc, char** argv)
     bool sprt = opt.count("sprt");
     double elo0 = 0, elo1 = 0;
     if(sprt)
-    {
-        std::string bounds = opt["sprt"];
-        size_t comma = bounds.find(',');
-        if(comma==std::string::npos) die("expected sprt=elo0,elo1, got sprt=" + bounds);
-        elo0 = std::atof(bounds.substr(0, comma).c_str());
-        elo1 = std::atof(bounds.substr(comma+1).c_str());
-        if(!(elo1>elo0)) die("sprt needs elo0 < elo1, got sprt=" + bounds);
-    }
+    parse_sprt(opt["sprt"], elo0, elo1);
+    int slice_k = 1, slice_n = 1;
+    if(opt.count("slice") && (std::sscanf(opt["slice"].c_str(), "%d/%d", &slice_k, &slice_n)!=2 || slice_n<1 || slice_k<1 || slice_k>slice_n))
+    die("expected slice=k/n with 1 <= k <= n, got slice=" + opt["slice"]);
+    const bool sliced = opt.count("slice");
     const double ALPHA = 0.05, BETA = 0.05;
     const double llr_lower = std::log(BETA/(1-ALPHA)), llr_upper = std::log((1-BETA)/ALPHA);  // -+2.94
     double minutes = std::atof(get("time", "10").c_str());
@@ -514,6 +617,12 @@ int main(int argc, char** argv)
     if(sprt && !opt.count("openings") && access((root.empty() ? suite : root + "/" + suite).c_str(), R_OK)!=0)
     die(suite + " is missing; build it with tools/make_ccrl_openings (docs/BENCHMARKS.md)");
     std::vector<Opening> openings = load_openings(get("openings", root.empty() ? suite : root + "/" + suite));
+    if(sliced)
+    {
+        std::vector<Opening> mine;
+        for(size_t i=slice_k-1; i<openings.size(); i+=slice_n) mine.push_back(openings[i]);
+        openings.swap(mine);
+    }
     int pairs = std::min((int)openings.size(), std::atoi(get("pairs", std::to_string(openings.size())).c_str()));
     if(pairs<1) die("no openings");
 
@@ -561,6 +670,9 @@ int main(int argc, char** argv)
     if(!pgn_file) die("cannot write " + pgn_path);
 
     std::printf("A: %s\nB: %s\n", pa.label.c_str(), pb.label.c_str());
+    if(sliced)
+    std::printf("slice %d/%d: every %d-th opening from the %d-th, no stop at an SPRT bound (tools/match combine judges the total)\n",
+                slice_k, slice_n, slice_n, slice_k);
     if(sprt)
     std::printf("SPRT elo0 %g elo1 %g (logistic, alpha = beta = %g, LLR bounds %+.2f %+.2f), %g min budget\n",
                 elo0, elo1, ALPHA, llr_lower, llr_upper, minutes);
@@ -571,7 +683,9 @@ int main(int argc, char** argv)
                 concurrency, pair_kb/1024);
     std::fflush(stdout);
 
-    std::mutex mutex;  // guards stats, reasons, pgn_file, stdout
+    const std::string stats_path = get("stats", "");
+    write_stats(stats_path, Stats(), pa.label, pb.label);
+    std::mutex mutex;  // guards stats, reasons, pgn_file, stdout, the stats file
     Stats stats;
     std::map<std::string, int> reasons;
     std::atomic<int> next_pair(0);
@@ -624,6 +738,7 @@ int main(int argc, char** argv)
             pgn_file.flush();
             stats.penta[g1.b_points2+g2.b_points2]++;
             done++;
+            write_stats(stats_path, stats, pa.label, pb.label);
             auto pts = [](int p2) { return p2==2 ? "1" : p2==1 ? "½" : "0"; };
             std::string llr_text;
             if(sprt)
@@ -632,7 +747,7 @@ int main(int argc, char** argv)
                 char buf[32];
                 std::snprintf(buf, sizeof buf, "  LLR %+.2f", llr);
                 llr_text = buf;
-                if(!decision && (llr>=llr_upper || llr<=llr_lower))
+                if(!decision && !sliced && (llr>=llr_upper || llr<=llr_lower))
                 {
                     decision = llr>=llr_upper ? 1 : -1;
                     decided_at = done;
@@ -667,7 +782,10 @@ int main(int argc, char** argv)
     std::printf("Elo B-A: %s  (95%% CI [%+.1f, %+.1f], LOS %.1f%%) -> %s\n", stats.elo_string().c_str(), lo, hi, 100*los,
                 s-half>0.5 ? "B is stronger" : s+half<0.5 ? "B is weaker" : "no significant difference");
     int played = stats.pairs();
-    if(sprt)
+    if(sliced)
+    std::printf("slice %d/%d: %d of %d pairs%s; tools/match combine judges the jobs' total\n", slice_k, slice_n, played, pairs,
+                time_up && played<pairs ? " (time budget used up)" : "");
+    else if(sprt)
     {
         std::printf("SPRT [%g, %g]: LLR %+.2f (bounds %+.2f %+.2f), %d pairs\n", elo0, elo1, stats.llr(elo0, elo1),
                     llr_lower, llr_upper, played);
