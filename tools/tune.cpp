@@ -6,6 +6,7 @@
 //                [method=gn] [iters=20] [mu=1e-3] [tol=1e-7] [check=0]   (Levenberg-Marquardt)
 //                [method=adam] [epochs=1500] [lr=2]                      (Adam)
 //                [gauge=pin|pin104|free] [se=1] [compare=<set>] [spectrum=<file>]
+//                [td=1] [rounds=5] [td_tol=1e-4]                         (TD targets, gn only)
 //
 // Reads #86's train/valid/test.tsv (fen and result columns only) and minimises the
 // mean of (sigma(eval/K) - r)^2 over train, eval = basic_eval() (static, net off) in
@@ -56,6 +57,15 @@
 //   steps); Adam takes each step's mean off every pinned table. lambda=0 works (LM's
 //   damping keeps every step defined). check=1 prints g
 //   against Adam's gradient once (2 g = Adam's to rounding).
+//
+// td<1 (#115) fits to TD(td) targets instead of the bare result: positions of one game in a
+// split (the `game` column, by `ply`) form a chain, the last one's target is the result
+// and an earlier one's (1 - td) sigma(e_next/K) + td target_next, the lambda-return over
+// the game's sampled positions with e_next the model's eval of the next one. The targets
+// depend on the weights, so the fit runs in rounds (semi-gradient TD): targets of train and
+// valid from the kept point, one LM fit to them, again, until they move less than td_tol
+// on average or after `rounds` fits. Each round's kept step is the best valid loss against
+// that round's targets. td=1 is the plain fit.
 // The weights are rounded, and the report gives train/valid/test loss of both sets by
 // the real basic_eval(). It is printed and written as '#' lines at the end of the new set.
 //
@@ -128,6 +138,9 @@ struct Options
     bool pin = true;                    // gauge=pin: table means and mobility constants in the piece values
     bool pin3 = true;                   // gauge=pin (not pin104): and the three degenerate directions (#106)
     std::string spectrum;               // se=1: every eigenvalue of A and its direction, to this file
+    double td = 1;                      // TD(td) targets (#115); 1: the game result
+    int rounds = 5;                     // td<1: at most this many fits, the targets recomputed before each
+    double td_tol = 1e-4;               // td<1: stop when the targets move less than this on average
 };
 
 // ---- the parameters: every number of a weight set, flat, in weight_fields() order
@@ -290,11 +303,16 @@ struct Split
     std::vector<std::unique_ptr<uint32_t[]>> blocks;   // the words; a position's never straddle two
     size_t n_words = 0;
     std::vector<int> base;      // basic_eval() with the from set
+    std::vector<float> target;  // what the fit pulls sigma(e/K) towards: the result, or its lambda-return (td)
+    std::vector<uint32_t> next; // the game's next position in this split (by ply), NO_NEXT for its last
+    std::vector<uint32_t> order;   // the positions by game, then ply
     std::string blob;           // every FEN, back to back
     std::vector<uint32_t> fen_at{0};   // FEN i is blob[fen_at[i], fen_at[i+1])
     size_t count() const { return fen_at.size()-1; }
     std::string fen(size_t i) const { return blob.substr(fen_at[i], fen_at[i+1]-fen_at[i]); }
 };
+
+static const uint32_t NO_NEXT = UINT32_MAX;
 
 static WEIGHTS W_FROM;
 static int TO_BASE, TE_BASE;            // flat index of the tables' [0][0]
@@ -522,7 +540,7 @@ static inline double model_eval(const Pos& p, const double* th, double* grad, do
 
 static inline double sigmoid(double x) { return 1/(1+std::exp(-x)); }
 
-// Mean (sigma(e/K) - r)^2 of the model over s; with grad, the mean gradient.
+// Mean (sigma(e/K) - target)^2 of the model over s; with grad, the mean gradient.
 static double model_loss(const Split& s, const double* th, double K, int jobs, double* grad)
 {
     const size_t n = s.pos.size();
@@ -537,7 +555,7 @@ static double model_loss(const Split& s, const double* th, double K, int jobs, d
         for(size_t i=n*t/jobs;i<n*(t+1)/jobs;i++)
         {
             const Pos& p = s.pos[i];
-            const double r = p.r2*0.5;
+            const double r = s.target[i];
             const double e = model_eval(p, th, nullptr, 0);
             const double q = sigmoid(e/K);
             sum += (q-r)*(q-r);
@@ -558,6 +576,35 @@ static double model_loss(const Split& s, const double* th, double K, int jobs, d
     return sum/n;
 }
 
+// TD(td) targets of s at th (#115): back through every game, the last position's target
+// is the result, an earlier one's (1 - td) sigma(e_next/K) + td target_next, e_next the
+// model's eval of the game's next position in s. Returns the mean |change| of the
+// targets; result_loss gets the model's mean (sigma(e/K) - result)^2.
+static double td_targets(Split& s, const double* th, double K, double td, int jobs, double& result_loss)
+{
+    const size_t n = s.pos.size();
+    std::vector<double> q(n);
+    std::vector<std::thread> pool;
+    for(int t=0;t<jobs;t++)
+    pool.emplace_back([&, t]
+    {
+        for(size_t i=n*t/jobs;i<n*(t+1)/jobs;i++) q[i] = sigmoid(model_eval(s.pos[i], th, nullptr, 0)/K);
+    });
+    for(auto& x : pool) x.join();
+    double change = 0, loss = 0;
+    for(size_t k=n;k-->0;)
+    {
+        const uint32_t i = s.order[k], j = s.next[i];
+        const double r = s.pos[i].r2*0.5;
+        const double z = j==NO_NEXT ? r : (1-td)*q[j] + td*s.target[j];
+        change += std::fabs(z-s.target[i]);
+        s.target[i] = (float)z;
+        loss += (q[i]-r)*(q[i]-r);
+    }
+    result_loss = loss/n;
+    return change/n;
+}
+
 // ---- Gauss-Newton: the normal equations over the tuned weights
 
 static int n_tuned = 0;
@@ -565,7 +612,7 @@ static int tix[MAX_PARAMS];             // flat -> tuned index, -1 if held fixed
 static int jof[MAX_PARAMS];             // tuned index -> flat
 
 // A = J'J/n + lambda I (upper triangle, row-major, n_tuned^2) and g = J'r/n + lambda (th - th0),
-// J_i = sigma'(e_i/K)/K de_i/dth, r_i = sigma(e_i/K) - result: half the objective's gradient
+// J_i = sigma'(e_i/K)/K de_i/dth, r_i = sigma(e_i/K) - target_i: half the objective's gradient
 // and Gauss-Newton Hessian. Returns the mean squared residual.
 static double normal_eqs(const Split& s, const double* th, const double* th0, double K, double lambda, int jobs,
                          std::vector<double>& A, std::vector<double>& g)
@@ -590,7 +637,7 @@ static double normal_eqs(const Split& s, const double* th, const double* th0, do
         {
             const Pos& p = s.pos[i];
             const double e = model_eval(p, th, d.data(), 1);
-            const double q = sigmoid(e/K), r = q - p.r2*0.5, sp = q*(1-q)/K;
+            const double q = sigmoid(e/K), r = q - s.target[i], sp = q*(1-q)/K;
             sum += r*r;
             // the weights the position touches, as model_eval() reads them
             int nj = 0;
@@ -892,6 +939,7 @@ static bool read_split(const std::string& path, Split& s)
     if(!in) return false;
     std::string line;
     std::vector<double> results;
+    std::vector<std::pair<long long,int>> game_ply;
     while(std::getline(in, line))
     {
         if(line.empty() || line[0]=='#') continue;
@@ -902,12 +950,20 @@ static bool read_split(const std::string& path, Split& s)
         s.blob.append(line, b+1, c-b-1);
         s.fen_at.push_back((uint32_t)s.blob.size());
         results.push_back(std::atof(line.substr(e+1, f-e-1).c_str()));
+        game_ply.push_back({std::atoll(line.c_str()), std::atoi(line.c_str()+a+1)});
     }
     s.blob.shrink_to_fit();
     s.fen_at.shrink_to_fit();
     s.pos.assign(s.count(), Pos{});
     s.base.assign(s.count(), 0);
     for(size_t i=0;i<results.size();i++) s.pos[i].r2 = (uint8_t)std::lround(2*results[i]);
+    s.target.assign(results.begin(), results.end());
+    s.order.resize(s.count());
+    for(size_t i=0;i<s.count();i++) s.order[i] = (uint32_t)i;
+    std::sort(s.order.begin(), s.order.end(), [&](uint32_t x, uint32_t y) { return game_ply[x]<game_ply[y]; });
+    s.next.assign(s.count(), NO_NEXT);
+    for(size_t k=0;k+1<s.order.size();k++)
+    if(game_ply[s.order[k]].first==game_ply[s.order[k+1]].first) s.next[s.order[k]] = s.order[k+1];
     return s.count()>0;
 }
 
@@ -1045,11 +1101,17 @@ int main(int argc, char** argv)
         else if(k=="check") opt.check = std::atoi(v.c_str())!=0;
         else if(k=="compare") opt.compare = v;
         else if(k=="spectrum") opt.spectrum = v;
+        else if(k=="td") opt.td = std::atof(v.c_str());
+        else if(k=="rounds") opt.rounds = std::max(1, std::atoi(v.c_str()));
+        else if(k=="td_tol") opt.td_tol = std::atof(v.c_str());
         else if(k=="gauge" && (v=="pin" || v=="pin104" || v=="free")) { opt.pin = v!="free"; opt.pin3 = v=="pin"; }
         else { std::fprintf(stderr, "unknown option %s\n", k.c_str()); return 2; }
     }
     if(opt.method!="adam" && opt.method!="gn") { std::fprintf(stderr, "method is adam or gn\n"); return 2; }
     if(opt.lambda<0) { std::fprintf(stderr, "lambda >= 0\n"); return 2; }
+    if(opt.td<0 || opt.td>1) { std::fprintf(stderr, "td is in [0, 1]\n"); return 2; }
+    if(opt.td<1 && opt.method!="gn") { std::fprintf(stderr, "td<1 needs method=gn\n"); return 2; }
+    const bool td = opt.td<1;
 
     Zobrist zobrist_keys;
     initialize_rand();
@@ -1197,7 +1259,8 @@ int main(int argc, char** argv)
 
     std::vector<double> th = th0, best = th0;
     double best_valid = model_loss(split[1], th.data(), K, opt.jobs, nullptr);
-    int best_epoch = 0, steps = 0;
+    int best_epoch = 0, steps = 0, td_rounds = 0;
+    double td_moved = 0;
     std::printf("epoch 0: train %.6f valid %.6f\n", model_loss(split[0], th.data(), K, opt.jobs, nullptr), best_valid);
     if(opt.method=="adam")
     {
@@ -1241,58 +1304,76 @@ int main(int argc, char** argv)
     {
         // Levenberg-Marquardt: (A + mu diag A) step = -g in reduced coordinates, kept if the objective falls
         std::vector<double> A, g, Ar, gr, U, z(n_red), step, tn;
-        double F = model_loss(split[0], th.data(), K, opt.jobs, nullptr) + regular(th.data());
         double mu = opt.mu;
-        for(int it=1; it<=opt.iters; it++)
+        for(int round=1; round<=(td ? opt.rounds : 1); round++)
         {
-            normal_eqs(split[0], th.data(), th0.data(), K, opt.lambda, opt.jobs, A, g);
-            reduce(A, g, nt, Ar, gr);
-            if(opt.check && it==1)
+            if(td)
             {
-                // Adam's gradient is twice g
-                std::vector<double> grad(n_params);
-                model_loss(split[0], th.data(), K, opt.jobs, grad.data());
-                double worst = 0, big = 0;
-                for(int t=0;t<nt;t++)
+                // the targets of the kept point, and a new fit to them from there
+                th = best;
+                double result_loss[2];
+                const double moved = td_targets(split[0], th.data(), K, opt.td, opt.jobs, result_loss[0]);
+                td_targets(split[1], th.data(), K, opt.td, opt.jobs, result_loss[1]);
+                best_valid = model_loss(split[1], th.data(), K, opt.jobs, nullptr);
+                td_rounds = round;
+                td_moved = moved;
+                std::printf("round %d: targets moved %.6f on average; to the targets train %.6f valid %.6f, to the results train %.6f valid %.6f\n",
+                            round, moved, model_loss(split[0], th.data(), K, opt.jobs, nullptr), best_valid, result_loss[0], result_loss[1]);
+                std::fflush(stdout);
+                if(round>1 && moved<opt.td_tol) break;
+            }
+            double F = model_loss(split[0], th.data(), K, opt.jobs, nullptr) + regular(th.data());
+            for(int it=1; it<=opt.iters; it++)
+            {
+                normal_eqs(split[0], th.data(), th0.data(), K, opt.lambda, opt.jobs, A, g);
+                reduce(A, g, nt, Ar, gr);
+                if(opt.check && it==1)
                 {
-                    const int j = jof[t];
-                    const double ga = grad[j] + 2*opt.lambda*(th[j]-th0[j]);
-                    worst = std::max(worst, std::fabs(2*g[t]-ga));
-                    big = std::max(big, std::fabs(ga));
+                    // Adam's gradient is twice g
+                    std::vector<double> grad(n_params);
+                    model_loss(split[0], th.data(), K, opt.jobs, grad.data());
+                    double worst = 0, big = 0;
+                    for(int t=0;t<nt;t++)
+                    {
+                        const int j = jof[t];
+                        const double ga = grad[j] + 2*opt.lambda*(th[j]-th0[j]);
+                        worst = std::max(worst, std::fabs(2*g[t]-ga));
+                        big = std::max(big, std::fabs(ga));
+                    }
+                    std::printf("check: max |2 g - Adam's gradient| %.3g, max |gradient| %.3g\n", worst, big);
+                    for(int j : {flat(W_FROM, &W_FROM.piece_value[1]), TO_BASE+64+27, flat(W_FROM, &W_FROM.ks_hit), flat(W_FROM, &W_FROM.threat_hanging)})
+                    std::printf("  %-34s gn %.6e  adam %.6e\n", param_name[j].c_str(), 2*g[tix[j]], grad[j] + 2*opt.lambda*(th[j]-th0[j]));
                 }
-                std::printf("check: max |2 g - Adam's gradient| %.3g, max |gradient| %.3g\n", worst, big);
-                for(int j : {flat(W_FROM, &W_FROM.piece_value[1]), TO_BASE+64+27, flat(W_FROM, &W_FROM.ks_hit), flat(W_FROM, &W_FROM.threat_hanging)})
-                std::printf("  %-34s gn %.6e  adam %.6e\n", param_name[j].c_str(), 2*g[tix[j]], grad[j] + 2*opt.lambda*(th[j]-th0[j]));
+                bool taken = false;
+                double Fn = F;
+                for(int tries=0; tries<20 && !taken; tries++)
+                {
+                    U = Ar;
+                    for(int i=0;i<n_red;i++) U[(size_t)i*n_red+i] *= 1+mu;
+                    if(!cholesky(U, n_red)) { mu *= 10; continue; }
+                    for(int i=0;i<n_red;i++) z[i] = -gr[i];
+                    cholesky_solve(U, n_red, z.data());
+                    expand(z.data(), step, nt);
+                    tn = th;
+                    for(int t=0;t<nt;t++) tn[jof[t]] += step[t];
+                    Fn = model_loss(split[0], tn.data(), K, opt.jobs, nullptr) + regular(tn.data());
+                    if(Fn<F) taken = true;
+                    else mu *= 5;
+                }
+                if(!taken) { std::printf("iteration %d: no step lowers the loss (mu %.1e)\n", it, mu); break; }
+                double biggest = 0;
+                for(int t=0;t<nt;t++) biggest = std::max(biggest, std::fabs(step[t]));
+                const double gain = F-Fn;
+                th = tn;
+                F = Fn;
+                steps = it;
+                mu = std::max(mu/5, 1e-12);
+                const double valid = model_loss(split[1], th.data(), K, opt.jobs, nullptr);
+                if(valid<best_valid) { best_valid = valid; best = th; best_epoch = it; }
+                std::printf("iteration %d: train %.6f valid %.6f mu %.1e largest step %.1f (%.0f s)\n", it, F-regular(th.data()), valid, mu, biggest, secs());
+                std::fflush(stdout);
+                if(gain < opt.tol*F) break;
             }
-            bool taken = false;
-            double Fn = F;
-            for(int tries=0; tries<20 && !taken; tries++)
-            {
-                U = Ar;
-                for(int i=0;i<n_red;i++) U[(size_t)i*n_red+i] *= 1+mu;
-                if(!cholesky(U, n_red)) { mu *= 10; continue; }
-                for(int i=0;i<n_red;i++) z[i] = -gr[i];
-                cholesky_solve(U, n_red, z.data());
-                expand(z.data(), step, nt);
-                tn = th;
-                for(int t=0;t<nt;t++) tn[jof[t]] += step[t];
-                Fn = model_loss(split[0], tn.data(), K, opt.jobs, nullptr) + regular(tn.data());
-                if(Fn<F) taken = true;
-                else mu *= 5;
-            }
-            if(!taken) { std::printf("iteration %d: no step lowers the loss (mu %.1e)\n", it, mu); break; }
-            double biggest = 0;
-            for(int t=0;t<nt;t++) biggest = std::max(biggest, std::fabs(step[t]));
-            const double gain = F-Fn;
-            th = tn;
-            F = Fn;
-            steps = it;
-            mu = std::max(mu/5, 1e-12);
-            const double valid = model_loss(split[1], th.data(), K, opt.jobs, nullptr);
-            if(valid<best_valid) { best_valid = valid; best = th; best_epoch = it; }
-            std::printf("iteration %d: train %.6f valid %.6f mu %.1e largest step %.1f (%.0f s)\n", it, F-regular(th.data()), valid, mu, biggest, secs());
-            std::fflush(stdout);
-            if(gain < opt.tol*F) break;
         }
     }
 
@@ -1446,6 +1527,8 @@ int main(int argc, char** argv)
     else
     say(report, "K %.2f (fitted on set %d), lambda %g, gn (Levenberg-Marquardt), %d steps, best step %d (valid, model %.6f), %.0f s",
         K, W_FROM.version, opt.lambda, steps, best_epoch, best_valid, secs());
+    if(td)
+    say(report, "targets: TD(%g) lambda-returns of each game's positions (#115), %d rounds, last move of the targets %.6f", opt.td, td_rounds, td_moved);
     say(report, "%s", gauge_line);
     say(report, "tuned: %d weights; %d no train position touches, held", nt, untouched);
     say(report, "loss (sigma(basic_eval/K) - result)^2, real eval:");

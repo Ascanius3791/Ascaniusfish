@@ -38,6 +38,15 @@ means and mobility constants are 0, so a piece value is the piece's whole value)
 lambda=0. Three directions are still held by lambda alone: rank-7 pawns against
 `passed_pawn_value[6]`, the knight's mobility slope, and the shelter constant against material.
 
+**TD targets (#115): `tools/tune td=λ`.** The result is a noisy target for a position 20
+plies after the book. With td<1 the target is the λ-return instead (TD(λ), as in
+KnightCap's TD-Leaf): the game's sampled positions, in ply order, form a chain worked
+backwards. The last one's target is the result, and each earlier one's is
+`z_t = (1−λ)·σ(e_{t+1}/K) + λ·z_{t+1}`, with e the eval by the weights being fitted. λ=1
+is the plain fit, λ=0 fits each position to the eval of the next one. The targets depend on
+the weights, so the fit runs in rounds: targets from the kept point, one LM fit to them,
+again (`rounds`, `td_tol`). The report's losses stay against the results.
+
 ## Game source: CCRL 40/15
 
 The whole archive (`CCRL-4040.[2458744].pgn.7z`, 453 MB, 2.7 GB unpacked, downloaded
