@@ -78,7 +78,7 @@ enum Named
     ATTACKS,             // every square the side attacks
     NAMED_FEATURES
 };
-// The most bits a feature's board can hold, for the quantization's bound.
+// The most bits a feature's board can hold, for the int32 bound of quantize().
 constexpr int NAMED_CAP[NAMED_FEATURES] = {8, 8, 8, 8, 8, 8, 8, 8, 10, 10, 15, 15, 15, 10, 10, 8, 64};
 
 constexpr int named_word(int feature, int side) { return PIECE_WORDS + 2*feature + side; }
@@ -198,6 +198,7 @@ struct Quantized_Net
 {
     alignas(64) int16_t w1[N_INPUTS*HIDDEN_1];
     alignas(64) int16_t b1[HIDDEN_1];
+    alignas(64) int32_t b1_wide[HIDDEN_1];  // a named net's b1: its sums are int32
     alignas(64) int16_t scale[HIDDEN_1];
     alignas(64) int16_t wm[HIDDEN_1*HIDDEN_1];  // [j/2][k][j%2]
     float wm_scale;

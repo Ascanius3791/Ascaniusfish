@@ -144,25 +144,43 @@ static void quantize_pairs(const float* W, int in, int out, const int16_t* in_sc
 }
 
 // The scales of Quantized_Net, each as large as it can be without an overflow.
-// Layer 1: |b1| plus the largest |W1| of the unit over as many inputs as can be
-// on at once, all rounded, stay inside int16: of the piece inputs at most
-// MAX_ACTIVE, of a named feature's word NAMED_CAP, of the global word GLOBAL_CAP.
+// Layer 1 of a piece net: |b1| plus the largest |W1| of the unit over the
+// MAX_ACTIVE piece inputs that can be on at once, all rounded, stay inside
+// int16. A named net has up to ~490 inputs on, which would leave W1 a few
+// steps per weight (2.6 cp off the float net), so its sums are int32 and
+// each W1 only has to fit int16, and |b1| at most 2^30: see the static_assert.
 // Later layers: see quantize_pairs(). So no position can overflow, whatever
 // the net.
+constexpr int max_active_named()
+{
+    int n = MAX_ACTIVE + GLOBAL_CAP;
+    for(int f=0;f<NAMED_FEATURES;f++) n += 2*NAMED_CAP[f];
+    return n;
+}
+constexpr double WIDE_BIAS_ROOM = 1 << 30;  // the most |b1|*scale of a named net
+static_assert(max_active_named()*32768.0 + WIDE_BIAS_ROOM < 2147483647.0, "a named net's sums fit int32");
+
 static void quantize(const Net& net, int n_inputs, bool middle, Quantized_Net& q)
 {
     std::memset(q.w1, 0, sizeof(q.w1));
-    int caps = MAX_ACTIVE;
-    if(n_inputs > N_INPUTS_PIECES)
-    {
-        for(int f=0;f<NAMED_FEATURES;f++) caps += 2*NAMED_CAP[f];
-        caps += GLOBAL_CAP;
-    }
+    std::memset(q.b1, 0, sizeof(q.b1));
+    std::memset(q.b1_wide, 0, sizeof(q.b1_wide));
     for(int j=0;j<HIDDEN_1;j++)
     {
         float column[N_INPUTS];
         for(int i=0;i<n_inputs;i++)
         column[i] = std::fabs(net.w1[i*HIDDEN_1 + j]);
+        if(n_inputs > N_INPUTS_PIECES)
+        {
+            const float largest = *std::max_element(column, column + n_inputs);
+            double scale = largest > 0 ? std::min(32767.0, std::floor(32767.0 / largest)) : 32767.0;
+            if(net.b1[j] != 0) scale = std::min(scale, std::floor(WIDE_BIAS_ROOM / std::fabs(net.b1[j])));
+            q.scale[j] = int16_t(std::max(1.0, scale));
+            for(int i=0;i<n_inputs;i++)
+            q.w1[i*HIDDEN_1 + j] = int16_t(std::lround(net.w1[i*HIDDEN_1 + j] * q.scale[j]));
+            q.b1_wide[j] = int32_t(std::lround(net.b1[j] * q.scale[j]));
+            continue;
+        }
         double bound = std::fabs(net.b1[j]);
         auto add_largest = [&](int from, int to, int k)
         {
@@ -170,14 +188,7 @@ static void quantize(const Net& net, int n_inputs, bool middle, Quantized_Net& q
             for(int i=0;i<k;i++) bound += column[from + i];
         };
         add_largest(0, N_INPUTS_PIECES, MAX_ACTIVE);
-        if(n_inputs > N_INPUTS_PIECES)
-        {
-            for(int f=0;f<NAMED_FEATURES;f++)
-            for(int s=0;s<2;s++)
-            add_largest(64*named_word(f, s), 64*named_word(f, s) + 64, NAMED_CAP[f]);
-            add_largest(64*GLOBAL_WORD, 64*GLOBAL_WORD + 64, GLOBAL_CAP);
-        }
-        const double room = 32767 - (caps + 1)*0.5;  // what rounding each term may add
+        const double room = 32767 - (MAX_ACTIVE + 1)*0.5;  // what rounding each term may add
         const double scale = bound > 0 ? std::min(32767.0, std::floor(room / bound)) : 32767.0;
         q.scale[j] = int16_t(std::max(1.0, scale));
         for(int i=0;i<n_inputs;i++)
@@ -250,13 +261,21 @@ bool load(const std::string& path, std::string& error)
 // ones. The later layers need pmaddwd, so they are written twice with intrinsics.
 typedef uint16_t U16x16 __attribute__((vector_size(32), __may_alias__));  // unsigned: the sums wrap, see update()
 typedef int16_t I16x16 __attribute__((vector_size(32), __may_alias__));
+typedef uint32_t U32x8 __attribute__((vector_size(32), __may_alias__));   // a named net's sums, see quantize()
+typedef int32_t I32x8 __attribute__((vector_size(32), __may_alias__));
+typedef int16_t I16x8 __attribute__((vector_size(16), __may_alias__));
 constexpr int ACC_VECTORS = HIDDEN_1/16;
+constexpr int WIDE_VECTORS = HIDDEN_1/8;
+template<int nw> constexpr bool WIDE = nw > PIECE_WORDS;  // the net reads the named features: int32 sums
+template<bool wide> struct Sum_Vector { typedef U16x16 T; };
+template<> struct Sum_Vector<true> { typedef U32x8 T; };
 
 // The first layer's sums for one position: the bias plus the W1 row of every
-// active input, int16 per unit.
+// active input, per unit int16 (a piece net, the first half of `sum`) or int32
+// (a named net).
 struct Accumulator
 {
-    alignas(64) uint16_t sum[HIDDEN_1];
+    alignas(64) uint32_t sum[HIDDEN_1];
     uint64_t words[FEATURE_WORDS];  // the inputs it was summed for (the first n_words)
     uint32_t generation = 0;        // net_generation then; 0 = never filled
 };
@@ -282,10 +301,27 @@ void subtract_row(U16x16* acc, int input)
     acc[q] -= row[q];
 }
 
+static inline __attribute__((always_inline))
+void add_row(U32x8* acc, int input)
+{
+    const I16x8* row = (const I16x8*)(qnet.w1 + input*HIDDEN_1);
+    for(int q=0;q<WIDE_VECTORS;q++)
+    acc[q] += (U32x8)__builtin_convertvector(row[q], I32x8);
+}
+
+static inline __attribute__((always_inline))
+void subtract_row(U32x8* acc, int input)
+{
+    const I16x8* row = (const I16x8*)(qnet.w1 + input*HIDDEN_1);
+    for(int q=0;q<WIDE_VECTORS;q++)
+    acc[q] -= (U32x8)__builtin_convertvector(row[q], I32x8);
+}
+
 // Brings `a` to the inputs `words`: from the sums it holds when fewer rows
 // differ than there are active inputs, else from the bias. Integer sums are
-// exact, so both give the same result. They are added modulo 2^16 (unsigned),
-// so an intermediate sum may leave int16 on the way; the final one cannot.
+// exact, so both give the same result. They are added modulo 2^16 or 2^32
+// (unsigned), so an intermediate sum may leave the range on the way; the final
+// one cannot.
 template<int nw> static inline __attribute__((always_inline))
 void update(Accumulator& a, const uint64_t* words)
 {
@@ -300,19 +336,22 @@ void update(Accumulator& a, const uint64_t* words)
         }
         from_bias = changed >= active;
     }
-    U16x16 acc[ACC_VECTORS];
+    typedef typename Sum_Vector<WIDE<nw>>::T Vector;
+    constexpr int VECTORS = WIDE<nw> ? WIDE_VECTORS : ACC_VECTORS;
+    const void* bias = WIDE<nw> ? (const void*)qnet.b1_wide : (const void*)qnet.b1;
+    Vector acc[VECTORS];
     if(from_bias)
     {
-        for(int q=0;q<ACC_VECTORS;q++)
-        acc[q] = ((const U16x16*)qnet.b1)[q];
+        for(int q=0;q<VECTORS;q++)
+        acc[q] = ((const Vector*)bias)[q];
         for(int w=0;w<nw;w++)
         for(uint64_t b = words[w]; b; b &= b-1)
         add_row(acc, 64*w + __builtin_ctzll(b));
     }
     else
     {
-        for(int q=0;q<ACC_VECTORS;q++)
-        acc[q] = ((const U16x16*)a.sum)[q];
+        for(int q=0;q<VECTORS;q++)
+        acc[q] = ((const Vector*)a.sum)[q];
         for(int w=0;w<nw;w++)
         {
             for(uint64_t b = words[w] & ~a.words[w]; b; b &= b-1)
@@ -321,16 +360,28 @@ void update(Accumulator& a, const uint64_t* words)
             subtract_row(acc, 64*w + __builtin_ctzll(b));
         }
     }
-    for(int q=0;q<ACC_VECTORS;q++)
-    ((U16x16*)a.sum)[q] = acc[q];
+    for(int q=0;q<VECTORS;q++)
+    ((Vector*)a.sum)[q] = acc[q];
     std::memcpy(a.words, words, sizeof(uint64_t)*nw);
     a.generation = net_generation;
 }
 
 // Layer 1's clipped ReLU, clamp(sum, 0, scale[j]), into h1.
-static inline __attribute__((always_inline))
+template<int nw> static inline __attribute__((always_inline))
 void clip(const Accumulator& a, int16_t* h1)
 {
+    if constexpr(WIDE<nw>)
+    {
+        const I32x8 zero = {};
+        for(int q=0;q<WIDE_VECTORS;q++)
+        {
+            I32x8 s = ((const I32x8*)a.sum)[q];
+            const I32x8 top = __builtin_convertvector(((const I16x8*)qnet.scale)[q], I32x8);
+            s = s < zero ? zero : s;
+            ((I16x8*)h1)[q] = __builtin_convertvector(s > top ? top : s, I16x8);
+        }
+        return;
+    }
     const I16x16 zero = {};
     for(int q=0;q<ACC_VECTORS;q++)
     {
@@ -472,7 +523,7 @@ template<int nw, bool middle> __attribute__((target("avx2"))) static float evalu
     Accumulator fresh;
     alignas(64) int16_t h1[HIDDEN_1];
     alignas(64) int32_t sums[HIDDEN_1];
-    clip(first_layer<nw>(pos, from_scratch, fresh), h1);
+    clip<nw>(first_layer<nw>(pos, from_scratch, fresh), h1);
     if(middle)
     {
         dense_avx2<HIDDEN_1>(h1, qnet.wm, sums);
@@ -487,7 +538,7 @@ template<int nw, bool middle> static float evaluate_generic(const BB& pos, bool 
     Accumulator fresh;
     alignas(64) int16_t h1[HIDDEN_1];
     alignas(64) int32_t sums[HIDDEN_1];
-    clip(first_layer<nw>(pos, from_scratch, fresh), h1);
+    clip<nw>(first_layer<nw>(pos, from_scratch, fresh), h1);
     if(middle)
     {
         dense_sse2<HIDDEN_1>(h1, qnet.wm, sums);
